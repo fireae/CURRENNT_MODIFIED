@@ -208,7 +208,7 @@ namespace {
 
             // store the gradients
             unitDeltas[outputIdx] = helpers::limitedError(unitDeltaData);
-	    //unitDeltas[outputIdx] = unitDeltaData;
+	    // unitDeltas[outputIdx] = unitDeltaData;
         }
     };
 
@@ -762,6 +762,18 @@ namespace layers {
 		}
 		int h2hMatrixIdx = 0;
 		for (int t=0; t < this->curMaxSeqLength(); t++){
+		    // Note:
+		    // w1 w2 | w3 w4
+		    //
+		    //       ^
+		    //       |
+		    //       boundary here notify the next time step (w3) to update
+		    // it works for the -> computation step of bi-drectional RNN
+		    // but, it should notify w2 to update in <- computation of bi-RNN
+		    // Thus, bidirection case, clockTime[t+1] should be used
+
+		    // 1212: Modify the assignment of clock schedule
+		    
 		    // assign h2hIdx
 		    h2hMatrixIdx = (int)clockTime[t] - 1;
 		    m_fw.timestepMatrices[t].h2hIdx = h2hMatrixIdx;
@@ -780,6 +792,36 @@ namespace layers {
 		    m_fw.timestepMatrices[t].skipCRPos = t * rows;
 		    if(m_isBidirectional) {m_bw.timestepMatrices[t].skipCRPos = 
 			    m_fw.timestepMatrices[t].skipCRPos;}
+		    
+		    
+		    /*
+		    h2hMatrixIdx = (int)clockTime[t] - 1;
+		    m_fw.timestepMatrices[t].h2hIdx = h2hMatrixIdx;
+
+		    h2hMatrixIdx = h2hMatrixIdx * rows * rows;
+		    m_fw.timestepMatrices[t].h2hWrap = 
+			helpers::Matrix<TDevice>(&m_h2hClockRNN, rows, rows, h2hMatrixIdx);
+		    
+		    m_fw.timestepMatrices[t].skipCRPos = t * rows;
+
+		    if(m_isBidirectional) {
+			if (t == (this->curMaxSeqLength()-1)){
+			    h2hMatrixIdx = (int)clockTime[0]   - 1;
+			    m_bw.timestepMatrices[t].skipCRPos = 
+				m_fw.timestepMatrices[0].skipCRPos;
+			}else{
+			    h2hMatrixIdx = (int)clockTime[t+1] - 1;
+			    m_bw.timestepMatrices[t].skipCRPos = 
+				m_fw.timestepMatrices[t+1].skipCRPos;
+			}
+			// 
+			m_bw.timestepMatrices[t].h2hIdx = h2hMatrixIdx;
+			// pointer to the matrix
+			h2hMatrixIdx = h2hMatrixIdx * rows * rows + m_h2hClockRNN.size()/2;
+			m_bw.timestepMatrices[t].h2hWrap = 
+			    helpers::Matrix<TDevice>(&m_h2hClockRNN, rows, rows, h2hMatrixIdx);
+			    }*/
+		    
 		}
 
 		// Create the skipCR for every time step based on the boundary information
@@ -829,6 +871,16 @@ namespace layers {
 	    // For debug
 	    // Show all the H2H matrices
 	    if (DEBUG_CLOCKRNN){
+		
+		Cpu::bool_vector tmpFlagCR = m_fw.skipCR;
+		for (int timestep=0; timestep < this->curMaxSeqLength(); timestep++){
+		    printf("%d:\n", timestep);
+		    for (int i = 0; i < rows; i++){
+			printf("%d ", tmpFlagCR[i+timestep*rows]);
+		    }
+		    printf("\n");
+		}
+
 		Cpu::real_vector h2hMatrix_debug = m_h2hClockRNN;
 		int biasPos_debug = 0;
 		for (int i = 0; i < m_numH2Hmat; i++){

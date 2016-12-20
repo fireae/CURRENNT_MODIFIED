@@ -42,9 +42,10 @@
 #include "layers/SkipAddLayer.hpp"
 #include "layers/SkipParaLayer.hpp"
 #include "layers/MDNLayer.hpp"
-#include "layers/CNNLayer.hpp"
-#include "layers/LstmLayerCharW.hpp"
+#include "layers/CNNLayer.hpp"        // obsolete
+#include "layers/LstmLayerCharW.hpp"  // obsolete
 #include "layers/RnnLayer.hpp"
+#include "layers/ParaLayer.hpp"
 
 #include <stdexcept>
 
@@ -72,6 +73,8 @@ layers::Layer<TDevice>* LayerFactory<TDevice>::createLayer(
     	return new FeedForwardLayer<TDevice, Identity>(layerChild, weightsSection, *precedingLayer);
     else if (layerType == "feedforward_relu")
     	return new FeedForwardLayer<TDevice, Relu>(layerChild, weightsSection, *precedingLayer);
+    else if (layerType == "paralayer")
+    	return new ParaLayer<TDevice, Identity>(layerChild, weightsSection, *precedingLayer);    
     else if (layerType == "softmax")
     	return new SoftmaxLayer<TDevice, Identity>(layerChild, weightsSection, *precedingLayer);
     else if (layerType == "lstm")

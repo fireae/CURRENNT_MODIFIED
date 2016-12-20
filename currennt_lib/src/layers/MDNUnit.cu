@@ -93,12 +93,14 @@ namespace {
     {
 	real_t *Output;           // output address to store data
 	const char *patTypes;     // sentence termination check
+	int paraDim;
 
         __host__ __device__ void operator() (const thrust::tuple<real_t&, int> &t) const
         {
             // unpack the tuple
             int outputIdx = t.get<1>();
-	    if (patTypes[outputIdx] == PATTYPE_NONE)
+	    int timeIdx   = outputIdx / paraDim;
+	    if (patTypes[timeIdx] == PATTYPE_NONE)
                 return;
 
             // store the result
@@ -1790,7 +1792,29 @@ namespace {
 	    }
         }
     };
-    
+
+    struct GetParameterSoftmax
+    {
+	int NNOutputSize;
+	int paraDim;
+	int startD;
+	int endD;
+	const char *patTypes;
+	real_t *NNOutput;
+
+        __host__ __device__ void operator() (const thrust::tuple<real_t&, int> &t) const
+        {
+	    int outputIdx  = t.get<1>();
+	    real_t prob    = t.get<0>();
+	    
+	    int timestep   = outputIdx / paraDim;
+	    int dimIdx     = outputIdx % paraDim;
+
+	    real_t *data = NNOutput + (timestep * NNOutputSize + dimIdx) + startD;
+	    *data = prob;
+        }
+    };
+
     struct SamplingMixture
     {
 	int featureDim;
@@ -2772,9 +2796,16 @@ namespace layers {
     {
 	// copy directly
 	{{
-		internal::CopySimple fn;
-		fn.Output   = targets;
-		fn.patTypes  = helpers::getRawPointer(this->m_precedingLayer.patTypes());
+		// 
+		internal::GetParameterSoftmax fn;
+		fn.NNOutputSize = this->m_precedingLayer.size();
+		fn.paraDim      = this->m_paraDim;
+		fn.startD       = this->m_startDim;
+		fn.endD         = this->m_endDim;
+		fn.patTypes     = helpers::getRawPointer(this->m_precedingLayer.patTypes());
+		fn.NNOutput     = targets;
+
+
 		int n =this->m_precedingLayer.curMaxSeqLength();
 		n = n*this->m_precedingLayer.parallelSequences();
 		n = n*this->m_paraDim;

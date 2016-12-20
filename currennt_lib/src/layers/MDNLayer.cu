@@ -547,11 +547,16 @@ namespace layers {
 	real_t temp = 0.0;
 	real_t temp2= 0.0;
 	int i=0;
+	
 	BOOST_FOREACH (boost::shared_ptr<MDNUnit<TDevice> > &mdnUnit, m_mdnUnits){
-	    temp2 = mdnUnit->calculateError(this->_targets());
-	    if (temp2 != temp2)
-		printf("NaN: %d-th unit\t", i);
-	    temp += temp2;
+	    if (this->flagMseWeight() && this->_mseWeightCPU()[i] < 0.0){
+		
+	    }else{
+		temp2 = mdnUnit->calculateError(this->_targets());
+		if (temp2 != temp2)
+		    printf("NaN: %d-th unit\t", i);
+		temp += temp2;
+	    }
 	    ++i;
 	}
 	return temp;
@@ -583,8 +588,14 @@ namespace layers {
 	thrust::fill(this->_outputErrors().begin(),
 		     this->_outputErrors().end(),
 		     (real_t)0.0);
+	int i = 0;
 	BOOST_FOREACH (boost::shared_ptr<MDNUnit<TDevice> > &mdnUnit, m_mdnUnits){
-	    mdnUnit->computeBackward(this->_targets());
+	    if (this->flagMseWeight() && this->_mseWeightCPU()[i] < 0.0){
+		//continue; // skip this unit if specified by the mseWeight
+	    }else{
+		mdnUnit->computeBackward(this->_targets());
+	    }
+	    i++;
 	}
     }
     

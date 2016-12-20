@@ -93,12 +93,14 @@ namespace {
     {
 	real_t *Output;           // output address to store data
 	const char *patTypes;     // sentence termination check
+	int paraDim;
 
         __host__ __device__ void operator() (const thrust::tuple<real_t&, int> &t) const
         {
             // unpack the tuple
             int outputIdx = t.get<1>();
-	    if (patTypes[outputIdx] == PATTYPE_NONE)
+	    int timeIdx   = outputIdx / paraDim;
+	    if (patTypes[timeIdx] == PATTYPE_NONE)
                 return;
 
             // store the result
@@ -1113,6 +1115,7 @@ namespace {
 	    // if casOrder == 0 in back-propagation stage (2nd order AR)
 	    //    only need to multiply the (1-tanh(alpha)^2)
 	    //    
+	    
 	    if (casOrder>0){
 		
 		// for k == 1, the first filter
@@ -1345,10 +1348,8 @@ namespace {
 	int     featDim;
 	int     filterNum;
 	bool    withRealPole;
-	real_t *paraBuf;        // 
-	real_t *paraBufBK;      // here, the weight in weightPtr is changed to tanh() or sig()
-	                        // but in parameter updating, we need the original value before
-	                        // tanh() and sig()
+	real_t *paraMem;        // ptr to the original parameter
+	real_t *paraBuf;        // to store the transformed parameter
 	__host__ __device__ void operator() (const int idx) const
 	{
 	    int paraIdx    = idx     / featDim;
@@ -1358,14 +1359,12 @@ namespace {
 	    if (filterIdx == 0 && withRealPole){
 		// for the first filter with only one real pole
 		*(paraBuf + idx) = ((paraIdx == 0) ? 
-				    (activation_functions::Tanh::fn(*(paraBuf + idx))) :
+				    (activation_functions::Tanh::fn(*(paraMem + idx))) :
 				    (0.0));
-		*(paraBufBK+idx) = ((paraIdx == 0) ? (*(paraBuf + idx)) : 0.0);
 	    }else{
 		*(paraBuf + idx) = ((paraIdx == 0) ? 
-				    (activation_functions::Tanh::fn(*(paraBuf + idx))) :
-				    (activation_functions::Logistic::fn(*(paraBuf + idx))));
-		*(paraBufBK+idx) = (*(paraBuf + idx));
+				    (activation_functions::Tanh::fn(*(paraMem + idx))) :
+				    (activation_functions::Logistic::fn(*(paraMem + idx))));
 	    }
 	}
 
@@ -2777,7 +2776,8 @@ namespace layers {
 	{{
 		internal::CopySimple fn;
 		fn.Output   = targets;
-		fn.patTypes  = helpers::getRawPointer(this->m_precedingLayer.patTypes());
+		fn.patTypes = helpers::getRawPointer(this->m_precedingLayer.patTypes());
+		fn.paraDim  = this->m_paraDim;
 		int n =this->m_precedingLayer.curMaxSeqLength();
 		n = n*this->m_precedingLayer.parallelSequences();
 		n = n*this->m_paraDim;
@@ -4014,10 +4014,9 @@ namespace layers {
 	    // m_weightShiftToDim points to the position for convolution in backward computation 
 	    // used to store the filter coefficients with one filter left
 	    m_weightShiftToDim     = this->m_featureDim * (m_backOrder + 1) * (m_casOrder+1) * 2;
-
 	    
-	    // pointer to the memory for storing the original weightes
-	    m_wTransBuffParaBK     = this->m_featureDim * (m_backOrder + 1) * (m_casOrder * 3 + 2);
+	    // to temporary store the transformed parameter
+	    m_wTransBuffParaBK     = this->m_featureDim * (m_backOrder + 1) * (m_casOrder*3 + 2);
 	    
 	}else{
 	    // Block 1025x02:
@@ -4082,8 +4081,6 @@ namespace layers {
 	m_weightUpdates    = &weightsUpdate;
 	m_weightUpdatesPtr = helpers::getRawPointer(weightsUpdate) + m_weightStart;
 	
-	Cpu::real_vector temp1 = weights;
-	temp1[0] =temp1[0];
     }
     
     template <typename TDevice>
@@ -4138,14 +4135,15 @@ namespace layers {
 
 		// step1. transform the parameter to the coefficients of 2nd order filter
 		{{
+			
 		    // alpha = tanh(alpha), beta = sigmoid(beta)
 		    // except the first filter when the AR order is an odd number
 		    internal::ARComplexPolesParameterTransform fn;
 		    fn.featDim      = this->m_featureDim;
 		    fn.filterNum    = this->m_casOrder;
 		    fn.withRealPole = this->m_casRealPole;
-		    fn.paraBuf      = this->m_weightsPtr;
-		    fn.paraBufBK    = helpers::getRawPointer(this->m_wTransBuff) 
+		    fn.paraMem      = this->m_weightsPtr;
+		    fn.paraBuf      = helpers::getRawPointer(this->m_wTransBuff) 
 			              + m_wTransBuffParaBK;
 		    int n = this->m_featureDim * this->m_backOrder;
 		    thrust::for_each(
@@ -4159,7 +4157,8 @@ namespace layers {
 		    internal::TanhAutoRegConvolutionARComplex fn;
 		    fn.casOrder    = this->m_casOrder;
 		    fn.featureDim  = this->m_featureDim;
-		    fn.weightPoles = this->m_weightsPtr;
+		    fn.weightPoles = helpers::getRawPointer(this->m_wTransBuff) 
+			              + m_wTransBuffParaBK;
 
 		    // the coefficient buffer
 		    fn.weightCoef1 = helpers::getRawPointer(this->m_wTransBuff);
@@ -4362,37 +4361,36 @@ namespace layers {
 		// step3 
 		// calculate the gradients w.r.t the poles of casecade AR
 		if (this->m_tanhReg && this->m_backOrder >= 1){
-
-		    //   step1. prepare the weights, copy the poles to buffer
-		    //   The same procedure can be used for AR complex/real
-		    {{
-			// for AR real pole, each filter has only one coefficients
-			// for AR complex pole, it is two
-			    
-			int temp      = ((this->m_backOrder==this->m_casOrder)?1:2);
-			
-			internal::TanhAutoRegGradientPre fn;
-			fn.featureDim = this->m_featureDim;
-			fn.backOrder  = this->m_backOrder;
-			fn.weightPtr  = this->m_weightsPtr;
-			fn.weightBuff = helpers::getRawPointer(this->m_wTransBuff) +
-			                m_weightShiftToDim;
-			fn.coefNum    = temp;
-
-			int n = this->m_featureDim * (this->m_backOrder-temp) * this->m_casOrder;
-			
-			// if backOrder > 1
-			if (n > 0){
-			    thrust::for_each(thrust::counting_iterator<int>(0),
-					     thrust::counting_iterator<int>(0)+n,
-					     fn);
-			}
-		    }}
-		    
-
+   
 		    // for AR with real poles
 		    if (this->m_tanhReg == MDNARRMDN_CASECADEREAL){
+			//   step1. prepare the weights, copy the poles to buffer
+			//   The same procedure can be used for AR complex/real
+			{{
+			     // for AR real pole, each filter has only one coefficients
+			     // for AR complex pole, it is two
+			    
+			    int temp      = ((this->m_backOrder==this->m_casOrder)?1:2);
 			
+			    internal::TanhAutoRegGradientPre fn;
+			    fn.featureDim = this->m_featureDim;
+			    fn.backOrder  = this->m_backOrder;
+			    fn.weightPtr  = this->m_weightsPtr;
+			    fn.weightBuff = helpers::getRawPointer(this->m_wTransBuff) +
+				m_weightShiftToDim;
+			    fn.coefNum    = temp;
+			    
+			    int n = this->m_featureDim*(this->m_backOrder-temp)*this->m_casOrder;
+			    
+			    // if backOrder > 1
+			    if (n > 0){
+				thrust::for_each(thrust::counting_iterator<int>(0),
+						 thrust::counting_iterator<int>(0)+n,
+						 fn);
+			    }
+
+			}}
+
 			//   step2. convolution, get the gradients of classical coefficents
 			//          to the poles
 			{{
@@ -4449,6 +4447,35 @@ namespace layers {
 		    // AR with complex poles
 		    }else if (this->m_tanhReg == MDNARRMDN_CASECADECOMPLEX){
 			
+			//   step1. prepare the weights, copy the poles to buffer
+			//   The same procedure can be used for AR complex/real
+			{{
+			     // for AR real pole, each filter has only one coefficients
+			     // for AR complex pole, it is two
+			    
+			    int temp      = ((this->m_backOrder==this->m_casOrder)?1:2);
+			
+			    internal::TanhAutoRegGradientPre fn;
+			    fn.featureDim = this->m_featureDim;
+			    fn.backOrder  = this->m_backOrder;
+			    fn.weightPtr  = helpers::getRawPointer(this->m_wTransBuff) +
+				            m_wTransBuffParaBK;
+			    fn.weightBuff = helpers::getRawPointer(this->m_wTransBuff) +
+				            m_weightShiftToDim;
+			    fn.coefNum    = temp;
+			    
+			    int n = this->m_featureDim*(this->m_backOrder-temp)*this->m_casOrder;
+			    
+			    // if backOrder > 1
+			    if (n > 0){
+				thrust::for_each(thrust::counting_iterator<int>(0),
+						 thrust::counting_iterator<int>(0)+n,
+						 fn);
+			    }
+
+			}}
+
+			
 			//   step2. convolution, get the gradients of classical coefficents
 			//          to the poles
 			{{
@@ -4489,7 +4516,8 @@ namespace layers {
 			    fn.weightBuff  = helpers::getRawPointer(this->m_wTransBuff) + 
 				m_wTransBuffShiftToDim * 2; 
 			    
-			    fn.alphabeta   = this->m_weightsPtr;
+			    fn.alphabeta   = helpers::getRawPointer(this->m_wTransBuff) +
+				             m_wTransBuffParaBK;
 
 			    fn.tempResult  = helpers::getRawPointer(this->m_wTransBuff);
 			    
@@ -4508,11 +4536,7 @@ namespace layers {
 					     thrust::counting_iterator<int>(0) +
 					     this->m_featureDim * this->m_backOrder,
 					     fn2);
-			    			    
-			    Cpu::real_vector temp1 = *this->m_weightUpdates;
-			    Cpu::real_vector temp2 = *this->m_weights;
-			    temp1[0] = temp1[0];
-			    
+			    			    			    
 			}}
 		    }
 		    
