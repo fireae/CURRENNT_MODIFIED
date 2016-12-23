@@ -65,7 +65,7 @@ public:
      */
     NeuralNetwork(const helpers::JsonDocument &jsonDoc, int parallelSequences, 
 		  int maxSeqLength, int chaDim, int maxTxtLength,
-                  int inputSizeOverride, int outputSizeOverride);
+                  int inputSizeOverride=-1, int outputSizeOverride=-1);
 
     /**
      * Destructs the neural network
