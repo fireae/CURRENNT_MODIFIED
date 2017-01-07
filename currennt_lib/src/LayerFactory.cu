@@ -42,10 +42,11 @@
 #include "layers/SkipAddLayer.hpp"
 #include "layers/SkipParaLayer.hpp"
 #include "layers/MDNLayer.hpp"
-#include "layers/CNNLayer.hpp"        // obsolete
-#include "layers/LstmLayerCharW.hpp"  // obsolete
+//#include "layers/CNNLayer.hpp"        // obsolete
+//#include "layers/LstmLayerCharW.hpp"  // obsolete
 #include "layers/RnnLayer.hpp"
 #include "layers/ParaLayer.hpp"
+#include "layers/FeedBackLayer.hpp"
 
 #include <stdexcept>
 
@@ -85,7 +86,10 @@ layers::Layer<TDevice>* LayerFactory<TDevice>::createLayer(
     	return new RnnLayer<TDevice>(layerChild, weightsSection, *precedingLayer, false);
     else if (layerType == "brnn")
     	return new RnnLayer<TDevice>(layerChild, weightsSection, *precedingLayer, true);
+    else if (layerType == "feedback")
+    	return new FeedBackLayer<TDevice>(layerChild, weightsSection, *precedingLayer);
     
+    /*
     // not implemented yet
     else if (layerType == "lstmw")
     	return new LstmLayerCharW<TDevice>(layerChild, weightsSection, *precedingLayer, 
@@ -94,7 +98,8 @@ layers::Layer<TDevice>* LayerFactory<TDevice>::createLayer(
     	return new LstmLayerCharW<TDevice>(layerChild, weightsSection, *precedingLayer, 
 					   chaDim, maxTxtLength, true);
     else if (layerType == "cnn")
-	return new CNNLayer<TDevice>(layerChild, weightsSection, *precedingLayer);
+        return new CNNLayer<TDevice>(layerChild, weightsSection, *precedingLayer);
+    */
     
     // 
     else if (layerType == "sse"                       || layerType == "weightedsse"  || 
@@ -128,7 +133,8 @@ layers::Layer<TDevice>* LayerFactory<TDevice>::createLayer(
     	    return new MulticlassClassificationLayer<TDevice>(layerChild, *precedingLayer);
     }
     else
-        throw std::runtime_error(std::string("Unknown layer type '") + layerType + "'");
+        throw std::runtime_error(std::string("Error in network.jsn: unknown type'") +
+				 layerType + "'");
 }
 
 template <typename TDevice>
@@ -146,6 +152,7 @@ layers::Layer<TDevice>* LayerFactory<TDevice>::createSkipAddLayer(
     /* Add 0405 Add skip ini */
     //if (layerType != "skipadd"){
     if (layerType != "skipadd" && layerType != "skipini"){
+	printf("Impossible bug\n");
 	throw std::runtime_error(std::string("The layer is not skipadd"));
     }else{
 	return new SkipAddLayer<TDevice>(layerChild, weightsSection, precedingLayers);
@@ -166,7 +173,9 @@ layers::Layer<TDevice>* LayerFactory<TDevice>::createSkipParaLayer(
     using namespace activation_functions;
 
     if (precedingLayers.size()!=2){
-	throw std::runtime_error(std::string("SkipParaLayer only allows two input paths"));
+	printf("Error in network.jsn: SkipParaLayer requires two input paths\n");
+	printf("Please check whether skipini/skipadd is avaiable before skippara\n");
+	throw std::runtime_error(std::string("Error in network.jsn"));
     }else{
 	if (layerType == "skippara_tanh"){
 	    return new SkipParaLayer<TDevice, Tanh>(layerChild, weightsSection, precedingLayers);
@@ -177,7 +186,9 @@ layers::Layer<TDevice>* LayerFactory<TDevice>::createSkipParaLayer(
 	}else if(layerType == "skippara_relu"){
 	    return new SkipParaLayer<TDevice, Relu>(layerChild, weightsSection, precedingLayers);
 	}else{
-	    throw std::runtime_error(std::string("Unknown SkipPara type:")+layerType);
+	    printf("Type of Skippara can only be: skippara_tanh, skippara_logistic,");
+	    printf("skippara_identity, skippara_relu\n");
+	    throw std::runtime_error(std::string("Error in network.jsn: unknown type:")+layerType);
 	}
     }
 }

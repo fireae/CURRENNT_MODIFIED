@@ -660,6 +660,12 @@ namespace layers {
     }
 
     template <typename TDevice, typename TActFn>
+    void ParaLayer<TDevice, TActFn>::computeForwardPass(const int timeStep)
+    {
+	
+    }
+
+    template <typename TDevice, typename TActFn>
     void ParaLayer<TDevice, TActFn>::computeBackwardPass()
     {
 	// normal backward computation

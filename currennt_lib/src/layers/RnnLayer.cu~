@@ -207,8 +207,8 @@ namespace {
             real_t unitDeltaData   = outputErr * unitActOutput;
 
             // store the gradients
-            // unitDeltas[outputIdx] = helpers::limitedError(unitDeltaData);
-	    unitDeltas[outputIdx] = unitDeltaData;
+            unitDeltas[outputIdx] = helpers::limitedError(unitDeltaData);
+	    // unitDeltas[outputIdx] = unitDeltaData;
         }
     };
 
@@ -926,6 +926,20 @@ namespace layers {
     }
 
     template <typename TDevice>
+    void RnnLayer<TDevice>::prepareStepGeneration(const int timeStep)
+    {
+	m_precLayerOutputsWrapA = helpers::Matrix<TDevice>(
+		&this->precedingLayer().outputs(), 
+		this->precedingLayer().size(), this->parallelSequences(),
+		timeStep * this->parallelSequences() * this->precedingLayer().size());
+	
+	int rows = this->size() / (m_isBidirectional ? 2 : 1);
+	m_fw.unitActsWrapA   = helpers::Matrix<TDevice>(
+		&m_fw.unitActs, rows, this->parallelSequences(),
+		timeStep * this->parallelSequences() * rows);
+    }
+
+    template <typename TDevice>
     void RnnLayer<TDevice>::computeForwardPass()
     {
 	// for unidirectional LSTM, we can write the outputs directly in the layer output vector
@@ -1059,6 +1073,84 @@ namespace layers {
 	    );
         }
         else {
+            this->_outputs().swap(m_fw.tmpOutputs);
+        }
+
+    }
+
+    template <typename TDevice>
+    void RnnLayer<TDevice>::computeForwardPass(const int timeStep)
+    {
+	// for unidirectional LSTM, we can write the outputs directly in the layer output vector
+        if (!m_isBidirectional) {
+            m_fw.tmpOutputs.swap(this->_outputs());
+        }
+
+	// step1. from precedingLayer to this layer
+	//        matrix multiplication, save to the m_fw and m_bw buffers
+	{{
+	     // forward
+	     m_fw.unitActsWrapA.assignProduct(m_fw.weightMatrices.InputToHiddenWrap, true, 
+					      m_precLayerOutputsWrapA, false);
+	}}
+
+	// step2. from time 0 to T-1, compute and transform
+	{{
+	    // effective layer size (bi-directional half)
+	    int els = this->size() / (m_isBidirectional ? 2 : 1);
+	    // shift to the data of the next time step
+	    // (one time step may contain multiple parallel utterances)
+            int n   = this->parallelSequences() * els;             
+	    
+	    // forward states
+            internal::ComputeBlockOutputFn fn;
+            fn.effLayerSize       = els;
+            fn.prevOutputDistance = -n;
+            fn.bias               = this->bias();
+            fn.patTypes           = helpers::getRawPointer(this->patTypes());
+            fn.biasWeights        = _rawBiasWeights;
+            fn.unitActs           = helpers::getRawPointer(m_fw.unitActs);
+	    fn.unitActsBuf        = helpers::getRawPointer(m_fw.unitActsBuf);
+	    
+	    //for (int timestep = 0; timestep < this->curMaxSeqLength(); ++timestep) {
+				
+	    if (timeStep != 0) {
+		// Add W*H_t-1 to output
+		if (m_clockRNN){
+		    m_fw.timestepMatrices[timeStep].unitActsBufWrapT.assignProduct(
+			 m_fw.timestepMatrices[timeStep].h2hWrap,           true, 
+			 m_fw.timestepMatrices[timeStep-1].tmpOutputsWrapT, false);
+		}else{
+		    m_fw.timestepMatrices[timeStep].unitActsBufWrapT.assignProduct(
+			 m_fw.weightMatrices.HiddenToHiddenWrap,            true, 
+			 m_fw.timestepMatrices[timeStep-1].tmpOutputsWrapT, false);
+		}
+	    }
+
+	    // for ClockRNN
+	    if (m_clockRNN)
+		fn.skipCRNN  = (helpers::getRawPointer(m_fw.skipCR) + 
+				m_fw.timestepMatrices[timeStep].skipCRPos);
+	    else
+		fn.skipCRNN  = NULL;
+		
+	    thrust::transform(
+		  thrust::counting_iterator<int>(n*timeStep),
+		  thrust::counting_iterator<int>(n*timeStep) + n,
+		  thrust::make_zip_iterator(
+		    thrust::make_tuple(
+		      thrust::constant_iterator<bool>(!timeStep), 
+		      thrust::constant_iterator<bool>(timeStep >= this->curMinSeqLength()))),
+		  m_fw.tmpOutputs.begin() + n*timeStep,
+		  fn
+		);
+	}}
+
+	// step3. get results from m_fw, m_bw to this->outputs()
+        // resort outputs
+        if (m_isBidirectional) {
+	    
+        }else {
             this->_outputs().swap(m_fw.tmpOutputs);
         }
 

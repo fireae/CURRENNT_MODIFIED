@@ -146,6 +146,7 @@ namespace layers{
 	int_vector               m_crStepDevice;    //
 	real_vector              m_h2hClockRNN;     // for hidden to hidden link
 	int                      m_numH2Hmat;       
+	
 	// wrappers over the error buffer of preceding layer
 	// This wrap is not prepared, because we need to know whether the previous layer
 	// is trainable or not
@@ -204,6 +205,18 @@ namespace layers{
          * @see Layer::computeBackwardPass()
          */
         virtual void computeBackwardPass();
+
+
+        /**
+         * @see Layer::loadSequences
+         */
+        virtual void prepareStepGeneration(const int timeStep);
+
+        /**
+         * @see Layer::computeForwardPass()
+         */
+        virtual void computeForwardPass(const int timeStep);
+
     };
 
 } // namespace layers

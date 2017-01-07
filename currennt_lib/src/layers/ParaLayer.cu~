@@ -26,12 +26,13 @@
 
 #include <typeinfo>
 
-#define PARALAYERDEBUG    1
+#define PARALAYERDEBUG    0
 
 #define PARAFUNCTION_TYPE_0 0          // f(t) = b
 #define PARAFUNCTION_TYPE_1 1          // f(t) = at+b
 #define PARAFUNCTION_TYPE_0_NUMPARA 1  // f(t) = b, only one parameter
 #define PARAFUNCTION_TYPE_1_NUMPARA 2  // f(t) = at+b, has two parameters
+
 namespace internal {
 namespace {
 
@@ -74,7 +75,7 @@ namespace {
 	__host__ __device__ void operator() (const int &Idx) const
 	{
 	    int bias  = 2;                        // point to the first NumberOfElements
-	    for (int i = 1; i<Idx; i++){
+	    for (int i = 0; i<Idx; i++){
 		bias += 3 * paraConfig[bias] + 2; // jump to the next NumberOfElements
 	    }
 	    
@@ -110,19 +111,20 @@ namespace {
 	// Dispatch T * NumberOfPara
 	int     numPara;              // how many dimensions in output to be parameterized ?
 	real_t *dataMatrix;           // output of preceding layer, size: dimension * T
-	int    *relativeTimeMatrix;   // timing matrix, size: dimension * T
+	real_t *relativeTimeMatrix;   // timing matrix, size: dimension * T
 	int     dataDim;              // #. rows of dataMatrix (dimension of previous layer)
 	int    *paraConfig;           
 	//      configuration, given by ReadParaOptions
 	//
+	bool    brnn;
 	
 	__host__ __device__ void operator() (const int &Idx) const
 	{
 	    int timeIdx = Idx / numPara;
 	    int paraIdx = Idx % numPara;
 	    
-	    int startDim = paraConfig[paraIdx];
-	    int paraType = paraConfig[paraIdx+1];
+	    int startDim = paraConfig[2*paraIdx];
+	    int paraType = paraConfig[2*paraIdx+1];
 	    
 	    int dataIdx = timeIdx * dataDim + startDim;
 	    
@@ -134,6 +136,15 @@ namespace {
 					   (*(dataMatrix + dataIdx + 1)));
 		// set the remaining part to 0
 		*(dataMatrix + dataIdx + 1) = 0;
+		if (brnn){
+		    dataIdx = dataIdx + dataDim/2;
+		    // compute at+b
+		    *(dataMatrix + dataIdx) = ((*(dataMatrix + dataIdx)) * 
+					       (*(relativeTimeMatrix + dataIdx)) + 
+					       (*(dataMatrix + dataIdx + 1)));
+		    // set the remaining part to 0
+		    *(dataMatrix + dataIdx + 1) = 0;
+		}
 	    }
 	    // other parametrix representation can be written here
 	}
@@ -148,17 +159,18 @@ namespace {
 	int     numPara;            // how many dimensions in output to be parameterized ?
 	real_t *dataMatrix;         // not used now, reserved for more complex parametric funciton
 	real_t *preGradMatrix;      // gradient propagated to the output of the previous layer
-	int    *relativeTimeMatrix; // timing matrix
+	real_t *relativeTimeMatrix; // timing matrix
 	int    *paraConfig;         // configuration of paraConfig
 	int     dataDim;            // #. rows of dataMatrix (dimension of previous layer)
-	
+	bool    brnn;
+
 	__host__ __device__ void operator() (const int &Idx) const
 	{
 	    int timeIdx  = Idx / numPara;
 	    int paraIdx  = Idx % numPara;
 	    
-	    int startDim = paraConfig[paraIdx];
-	    int paraType = paraConfig[paraIdx+1];
+	    int startDim = paraConfig[2*paraIdx];
+	    int paraType = paraConfig[2*paraIdx+1];
 	    
 	    int dataIdx  = timeIdx * dataDim + startDim;
 	    
@@ -167,6 +179,13 @@ namespace {
 		real_t grad                    = *(preGradMatrix + dataIdx);
 		*(preGradMatrix + dataIdx)     = grad * (*(relativeTimeMatrix + dataIdx));
 		*(preGradMatrix + dataIdx + 1) = grad;
+		if (brnn){
+		    dataIdx = dataIdx + dataDim / 2;
+		    grad                           = *(preGradMatrix + dataIdx);
+		    *(preGradMatrix + dataIdx)     = grad * (*(relativeTimeMatrix + dataIdx));
+		    *(preGradMatrix + dataIdx + 1) = grad;
+
+		}
 	    }
 	}
     };
@@ -186,9 +205,9 @@ namespace {
 	//
 	// Dispatched over the dimensions of the output of the previous layer (Clock RNN layer)
 	// 
-	int*   bandConfig;     // configuration of the Clock RNN (previous layer)
-	int*   timeMatrixPtr;  // output timing matrix
-	char*  timeStep;       // schedule of previous Clock RNN layer
+	int*    bandConfig;     // configuration of the Clock RNN (previous layer)
+	real_t* timeMatrixPtr;  // output timing matrix
+	char*   timeStep;       // schedule of previous Clock RNN layer
 	// Note, timeStep specify the begining of a segment for left-to-right case
 	// for the right-to-left direction in brnn, the timeStep should be shifted by 1 frame
 	// For example, for left-to-right case
@@ -226,21 +245,36 @@ namespace {
 	    
 	    // 
 	    if (Idx < effectiveDim){
-		for (int t = 0, count =0; t<totalTime; t++, count++){
-		    if (timeStep[t] & (tmp<<band)) // boundary, set a new time starting point
-			count = 0;
-		    *(timeMatrixPtr + layerDim * t + Idx) = count;
-		}
-	    }else{
-		// for back-direction
-		for (int t = totalTime-1, count=0; t>=0; t--, count++){
-		    if (t== (totalTime-1) && (timeStep[0] & (tmp<<band))){
-			count = 0;
-		    }else if(timeStep[t+1] & (tmp<<band)){
+		int count = 0;
+		for (int t = 0; t<totalTime; t++, count++){
+		    if (timeStep[t] & (tmp<<band)){ 
+			// normalize the time
+			for (int i = 1; i<count; i++)
+			    *(timeMatrixPtr + layerDim * (t-i) + Idx) /= (count-1);
+			// boundary, set a new time starting point
 			count = 0;
 		    }
 		    *(timeMatrixPtr + layerDim * t + Idx) = count;
 		}
+		for (int i = 1; i < count; i++)
+		    *(timeMatrixPtr + layerDim * (totalTime-i) + Idx) /= (count-1);
+		
+	    }else{
+		// for back-direction
+		int count = 0;
+		for (int t = totalTime-1; t>=0; t--, count++){
+		    if (t== (totalTime-1) && (timeStep[0] & (tmp<<band))){
+			count = 0;
+		    }else if(timeStep[t+1] & (tmp<<band)){
+			for (int i = 1; i<count; i++)
+			    *(timeMatrixPtr + layerDim * (t+i) + Idx) /= (count-1);
+			count = 0;
+		    }
+		    *(timeMatrixPtr + layerDim * t + Idx) = count;
+		}
+		for (int i = 1; i<count; i++)
+		    *(timeMatrixPtr + layerDim * (-1+i) + Idx) /= (count-1);
+		    
 	    }
 	}
 	
@@ -369,7 +403,7 @@ namespace layers {
 	paraConfig.push_back(tempArgs.size()/2);
 	
 	paraConfig2.clear();
-	for (int i=0; i < tempArgs.size()/2; i=i+2){
+	for (int i=0; i < tempArgs.size(); i=i+2){
 	    paraConfig.push_back(boost::lexical_cast<int>(tempArgs[i]));
 	    boost::split(tempArgsSub, tempArgs[i+1], boost::is_any_of(","));
 	    if ((tempArgsSub.size() % 3) != 0){
@@ -470,7 +504,7 @@ namespace layers {
 	
 	
 	// create buffer for the relative time
-	Cpu::int_vector tempTime(precedingLayer.maxSeqLength() * this->precedingLayer().size(), -1);
+	Cpu::real_vector tempTime(precedingLayer.maxSeqLength()*this->precedingLayer().size(), -1);
 	m_relativeTime = tempTime;
 	
 
@@ -541,6 +575,7 @@ namespace layers {
 	    m_timeStep = clockTime;
 	}else{
 	    printf("ParaLayer requires Context-dependent clock schedule\n");
+	    printf("Please check that Auxillary path, ext, type, dim are provided\n");
 	    throw std::runtime_error("To be implemented for other cases");
 	}
 
@@ -576,7 +611,16 @@ namespace layers {
 
 	    // debug 
 	    if (PARALAYERDEBUG){
-		Cpu::int_vector tempTime = m_relativeTime;
+		Cpu::real_vector tempTime = m_relativeTime;
+		int row,col;
+		col = this->precedingLayer().size();
+		row = this->curMaxSeqLength();
+		for (int i = 0; i < row; i++){
+		    for (int j=0; j< col; j++){
+			printf("%3d ", (int)(100*tempTime[i*col + j]));
+		    }
+		    printf("\n");
+		}
 		printf("\n");
 	    }
 	}}
@@ -587,17 +631,28 @@ namespace layers {
     {
 	// transform the predicted parameters into feature trajectories
 	{{
+	    if (PARALAYERDEBUG){
+		Cpu::real_vector temp = this->precedingLayer().outputs();
+		printf("\n");
+	    }
+		
 	    internal::paraTransform fn;
 	    fn.numPara    = m_paraConfig2.size()/2;
 	    fn.dataMatrix = helpers::getRawPointer(this->precedingLayer().outputs());
 	    fn.paraConfig = helpers::getRawPointer(m_paraConfig2);
 	    fn.dataDim    = this->precedingLayer().size();
 	    fn.relativeTimeMatrix = helpers::getRawPointer(m_relativeTime);
+	    fn.brnn       = this->m_brnn;
 	    thrust::for_each(
 	       thrust::counting_iterator<int>(0),
 	       thrust::counting_iterator<int>(0) + this->curMaxSeqLength() * m_paraConfig2.size()/2,
 	       fn);
-	       
+	    
+	    if (PARALAYERDEBUG){
+		Cpu::real_vector temp = this->precedingLayer().outputs();
+		printf("\n");
+	    }   
+	    
 	}}
 	
 	// normal feedforward transformation
@@ -630,6 +685,7 @@ namespace layers {
 	    fn.paraConfig    = helpers::getRawPointer(m_paraConfig2);
 	    fn.dataDim       = this->precedingLayer().size();
 	    fn.relativeTimeMatrix = helpers::getRawPointer(m_relativeTime);
+	    fn.brnn          = this->m_brnn;
 	    thrust::for_each(
 	       thrust::counting_iterator<int>(0),
 	       thrust::counting_iterator<int>(0) + this->curMaxSeqLength() * m_paraConfig2.size()/2,

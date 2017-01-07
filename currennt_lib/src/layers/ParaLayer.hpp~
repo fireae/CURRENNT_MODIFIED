@@ -51,7 +51,7 @@ namespace layers {
 	std::string              m_crStepStr;     // the same as in Clock Rnn Layer
 	Cpu::int_vector          m_crStep;        // a vector of [start1,...,endN]
 	int_vector               m_crStepDevice;
-	int_vector               m_relativeTime;  // the relative time from the boundary
+	real_vector               m_relativeTime;  // the relative time from the boundary
 	real_vector              m_weightMask;    // the weight mask for parameter function
 	bool                     m_brnn;          // is the preceding layer a bidirecitonal RNN?
 	
