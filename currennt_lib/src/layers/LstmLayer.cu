@@ -848,6 +848,12 @@ namespace layers {
             // cell states, niags, deltas, ...
             Cpu::real_vector tmp(this->outputs().size() / (m_isBidirectional ? 2 : 1), 0);
 
+	    // for the CLLSTM
+	    if (m_clockRNN){
+		Cpu::bool_vector tmp2(this->outputs().size()/(m_isBidirectional ? 2 : 1), false);
+		fwbw->skipCR      = tmp2;
+	    }
+	    
             if (m_isBidirectional) {
                 fwbw->tmpOutputs      = tmp;
                 fwbw->tmpOutputErrors = tmp;
@@ -868,12 +874,6 @@ namespace layers {
             fwbw->fgDeltas        = tmp;
             fwbw->ogDeltas        = tmp;
 
-	    // for the CLLSTM
-	    if (m_clockRNN){
-		Cpu::bool_vector tmp2(this->outputs().size()/(m_isBidirectional ? 2 : 1), false);
-		fwbw->skipCR      = tmp2;
-	    }
-	    
             // weight matrices
             weight_matrices_t* wmArr [] = { &fwbw->weightMatrices, &fwbw->weightUpdateMatrices };
             real_vector*       wtsArr[] = { &this->weights(),      &this->_weightUpdates() };

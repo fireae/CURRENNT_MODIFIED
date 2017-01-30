@@ -490,15 +490,19 @@ namespace {
 	real_t *buffer;
 	int bufDim;
 	int bufS;
-	
+
+	int paraDim;
 	// from 1 to timesteps
         __host__ __device__ void operator() (const thrust::tuple<real_t&, const int&> &values) const
         {
-	    const int outputIdx = values.get<1>();
+	    const int outputIdx = values.get<1>() / paraDim;
+	    const int dimIdx    = values.get<1>() % paraDim;
 	    
-	    int dimIdx = bufS + (int)(source[(outputIdx * srcDim + srcS)]);
-	    if (dimIdx < bufDim)
-		buffer[outputIdx * bufDim + dimIdx] = 1.0;
+	    int targetDimIdx = (int)(source[(outputIdx * srcDim + srcS)]);
+	    if (dimIdx== targetDimIdx)
+		buffer[outputIdx * bufDim + bufS + dimIdx] = 1.0;
+	    else
+		buffer[outputIdx * bufDim + bufS + dimIdx] = 0.0;
         }
     };
 
@@ -3271,15 +3275,19 @@ namespace layers {
 	
 	if (this->m_feedBackType == MDNUNIT_FEEDBACK_OPT_0 ||
 	    this->m_feedBackType == MDNUNIT_FEEDBACK_OPT_1){
+	    /* Fatal error:
+	       setOneHotVectorSoftmax forgets to set other dimensions to zero
+	     */
 	    internal::setOneHotVectorSoftmax fn;
-	    fn.source = helpers::getRawPointer(targets);
-	    fn.srcDim = this->m_layerSizeTar;
-	    fn.srcS   = this->m_startDimOut;
-	    fn.buffer = helpers::getRawPointer(fillBuffer);
-	    fn.bufDim = bufferDim;
-	    fn.bufS   = dimStart;
+	    fn.source  = helpers::getRawPointer(targets);
+	    fn.srcDim  = this->m_layerSizeTar;
+	    fn.srcS    = this->m_startDimOut;
+	    fn.buffer  = helpers::getRawPointer(fillBuffer);
+	    fn.bufDim  = bufferDim;
+	    fn.bufS    = dimStart;
+	    fn.paraDim = this->m_paraDim;
 	    int n = this->m_precedingLayer.curMaxSeqLength();
-	    n = n * this->m_precedingLayer.parallelSequences();
+	    n = n * this->m_precedingLayer.parallelSequences() * this->m_paraDim;
 	    thrust::for_each(
 		thrust::make_zip_iterator(
 			thrust::make_tuple(this->m_paraVec.begin(), 
@@ -3344,14 +3352,14 @@ namespace layers {
 	    fn.buffer = helpers::getRawPointer(fillBuffer);
 	    fn.bufDim = bufferDim;
 	    fn.bufS   = dimStart;
-	    
+	    fn.paraDim= this->m_paraDim;
 	    thrust::for_each(
 		thrust::make_zip_iterator(
-			thrust::make_tuple(this->m_paraVec.begin() + ts, 
-					   thrust::counting_iterator<int>(0) + ts)),
+			thrust::make_tuple(this->m_paraVec.begin() + ts * this->m_paraDim, 
+					   thrust::counting_iterator<int>(0)+ ts*this->m_paraDim)),
 		thrust::make_zip_iterator(
-			thrust::make_tuple(this->m_paraVec.begin() + te, 
-					   thrust::counting_iterator<int>(0) + te)),
+			thrust::make_tuple(this->m_paraVec.begin() + te * this->m_paraDim, 
+					   thrust::counting_iterator<int>(0)+ te*this->m_paraDim)),
 		fn);
 	}
     }

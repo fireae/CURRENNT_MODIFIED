@@ -148,11 +148,20 @@ private:
     int         m_auxDataTyp;
     int         m_auxDataDim;
 
+    std::string m_probDataDir;
+    int         m_probDataDim;
+    
     /* Add 1226 for feedback connection */
     std::string m_secondOutputOpt;     // for MDN to control second output
 
     /* Add 20170107 option for NN training */
     real_t   m_lstmForgetIni;          // bias to the output of LSTM forget gate in initial stage
+
+    /* Add 20170124 options for feedback aggregation*/
+    int      m_flagAggregateSyn;       //
+
+    /* Add 20170129 options for reading weight mask*/
+    int      m_weightMaskOpt;          // option to read and use the weight mask
     
     unsigned m_truncSeqLength;
     unsigned m_parallelSequences;
@@ -559,6 +568,8 @@ public:
     const std::string& mseWeightPath() const;
 
     const std::string& weightMaskPath() const;
+
+    const int& weightMaskOpt() const;
     
     const std::string& trainedParameterPath() const;
     
@@ -637,6 +648,13 @@ public:
     const std::string& secondOutputOpt() const;
 
     const real_t& lstmForgetIni() const;
+
+    const int& probDataDim() const;
+
+    const std::string& probDataDir() const;
+
+    const int& aggregateOpt() const;
+    
 };
 
 

@@ -184,7 +184,10 @@ namespace layers{
 				      const int dimStart, real_vector &targets, const int timeStep);
 
 	virtual int feedBackDim();
-	
+
+
+	virtual void biasProb(real_vector &secondOutput,  const int bufferDim,  const int dimStart,
+			      real_vector &biasDataVec,   const int timeStep);
     };
 
 
@@ -296,7 +299,10 @@ namespace layers{
 				      const int dimStart, real_vector &targets, const int timeStep);
 
 	virtual int  feedBackDim();
-	
+
+	virtual void biasProb(real_vector &secondOutput,  const int bufferDim,  const int dimStart,
+			      real_vector &biasDataVec,   const int timeStep);
+
     };
 
     /********************************************************

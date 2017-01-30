@@ -255,7 +255,7 @@ int trainerMain(const Configuration &config)
 	
 	/* Add 0413 Wang: for weight mask */
 	if (config.weightMaskPath().size()>0){
-	    neuralNetwork.initWeightMask(config.weightMaskPath());
+	    neuralNetwork.initWeightMask(config.weightMaskPath(), config.weightMaskOpt());
 	}
 	
 	/* Add 0514 Wang: read the data mean and variance (MV), and initialize MDN */

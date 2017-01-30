@@ -25,8 +25,8 @@
  * along with CURRENNT.  If not, see <http://www.gnu.org/licenses/>.
  *****************************************************************************/
 
-#ifndef LAYERS_FEEDBACKLAYER_HPP
-#define LAYERS_FEEDBACKLAYER_HPP
+#ifndef LAYERS_AMALGAMATE_HPP
+#define LAYERS_AMALGAMATE_HPP
 
 #include "Layer.hpp"
 #include "TrainableLayer.hpp"
@@ -36,41 +36,30 @@
 
 namespace layers {
     template <typename TDevice>
-    class FeedBackLayer : public TrainableLayer<TDevice>
+    class AmalgamateLayer : public TrainableLayer<TDevice>
     {
 	typedef typename TDevice::real_vector     real_vector;
 	typedef typename TDevice::int_vector      int_vector;
 	typedef typename TDevice::pattype_vector  pattype_vector;
 	typedef typename Cpu::int_vector          cpu_int_vector;
+	
     private:
-	int             m_targetDim;      // dimension of the target data
-	int             m_targetDimStart; // the 1st dimension of the target vector to be fed back
-	int             m_targetDimEnd;   // the last dim of the target vector to be fed back
-	real_vector     m_targetBuffer;   // buffer for the target data
-	Layer<TDevice> *m_targetLayer;    // target layer to be fed back
-
-	// look back configuration
-	std::string     m_lookBackStr;    // configuration string for look back
-	int_vector      m_lookBack;       // configuration vector for look back
-
-	// look back and aggregation
+	bool            m_biDirectional;  // 
 	std::string     m_aggStr;         //
 	int_vector      m_aggOpt;         //
 	pattype_vector  m_boundaryInfo;   // buffer to store the boundary information
 	real_vector     m_aggBuffer;
-	int             m_crossBoundary;  // 
+	
     public:
 	
-	FeedBackLayer(
+	AmalgamateLayer(
 	    const helpers::JsonValue &layerChild,
 	    const helpers::JsonValue &weightsSection,
             Layer<TDevice>           &precedingLayer
 	);
 
-	virtual ~FeedBackLayer();
+	virtual ~AmalgamateLayer();
 	
-	// load the target data from the target layer
-	void linkTargetLayer(Layer<TDevice> &targetLayer);
 	
 	virtual const std::string& type() const;
 	
@@ -86,7 +75,9 @@ namespace layers {
 	// export
 	virtual void exportLayer(const helpers::JsonValue &layersArray, 
 				 const helpers::JsonAllocator &allocator) const;
-
+	
+	virtual void setDirection(const bool direction);
+	
 	// load sequences
 	virtual void loadSequences(const data_sets::DataSetFraction &fraction);
     };

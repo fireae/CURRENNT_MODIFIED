@@ -256,6 +256,13 @@ Configuration::Configuration(int argc, const char *argv[])
 	 std::string(
 	      std::string("path to the network transformation matrix mask. The number of data") + 
 	      std::string(" in this file should be equal to the network parameters")).c_str())
+	("weight_mask_opt",         
+	 po::value(&m_weightMaskOpt)   ->default_value(0),                      
+	 std::string(
+	      std::string("Option to read and use the weight mask\n") + 
+	      std::string("\t0: the weight mask for normal NN weight (default)") +
+	      std::string("\t1: the weight mask for embedded vectors") +
+	      std::string("\t2: the weight mask for embedded vectors and NN weight")).c_str())
 	
 	/* Add 0504 Wang: for MDN flag*/
 	("mdn_config",          
@@ -341,7 +348,6 @@ Configuration::Configuration(int argc, const char *argv[])
 	("OptimizerSecondLR",    
 	 po::value(&m_secondLearningRate)  ->default_value(0.01), 
 	 "Optimizer==3, it requirs additional learning rate for AdaGrad (0.01 default)")
-	
         ;
 
     po::options_description autosaveOptions("Autosave options");
@@ -464,6 +470,12 @@ Configuration::Configuration(int argc, const char *argv[])
 	("AuxDataDim",                   
 	 po::value(&m_auxDataDim)       ->default_value(-1),
 	 "Auxillary data dimension")
+	("probDataDir",                   
+	 po::value(&m_probDataDir)       ->default_value(""),
+	 "Probabilistic file directory")
+	("probDataDim",                   
+	 po::value(&m_probDataDim)       ->default_value(-1),
+	 "Probabilistic data dimension")
         ;
 
     po::options_description weightsInitializationOptions("Weight initialization options");
@@ -490,6 +502,12 @@ Configuration::Configuration(int argc, const char *argv[])
 	("lstm_forget_gate_bias",    
 	 po::value(&m_lstmForgetIni) -> default_value((real_t)0.0, "0.0"),    
 	 "The bias to the output of forget gate in LSTM during initialization (default 0.0)")
+	("aggregate_syn_opt",
+	 po::value(&m_flagAggregateSyn) ->default_value(0),
+	 std::string(
+	      std::string("Option for generation using aggregation in feedback layer") +
+	      std::string("\n 0: no aggregation for generation (even it is used in training)") + 
+	      std::string("\n 1: use aggregation if it is used. (default is 0)")).c_str())
         ;
 
     po::positional_options_description positionalOptions;
@@ -1221,4 +1239,24 @@ const int& Configuration::printWeightOpt() const
 const real_t& Configuration::lstmForgetIni() const
 {
     return m_lstmForgetIni;
+}
+
+const int& Configuration::probDataDim() const
+{
+    return m_probDataDim;
+}
+
+const std::string& Configuration::probDataDir() const
+{
+    return m_probDataDir;
+}
+
+const int& Configuration::aggregateOpt() const
+{
+    return m_flagAggregateSyn;
+}
+
+const int& Configuration::weightMaskOpt() const
+{
+    return m_weightMaskOpt;
 }

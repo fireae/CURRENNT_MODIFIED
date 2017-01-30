@@ -47,6 +47,9 @@ namespace layers {
 	unsigned int      m_weDim;
 	unsigned int      m_weIDDim;
 	bool              m_flagWeUpdate;
+	/* Add 17/01/29 */
+	Cpu::real_vector  m_weMask;
+	bool              m_weMaskFlag;
 	
 	/* Add 20160902 Wang: add noise to the WE */
 	// Because input_noise_sigma must be turned off when reading the WE index,
@@ -70,6 +73,10 @@ namespace layers {
 	bool readWeBank(const std::string weBankPath, const unsigned dim, 
 			const unsigned dimidx, const unsigned maxLength);
 	
+	int  readWeMask(std::vector<real_t>::iterator b);
+
+	void maskWe();
+	
 	Cpu::real_vector& _weBank();
 	
 	Cpu::real_vector& _weIdx();
@@ -84,6 +91,10 @@ namespace layers {
 
 	bool initWeNoiseOpt(const int weNoiseStartDim, const int weNoiseEndDim,
 			    const real_t weNoiseDev);
+
+	Cpu::real_vector& _weMask();
+	
+	bool              flagWeMask();
 	
         /**
          * Destructs the Layer

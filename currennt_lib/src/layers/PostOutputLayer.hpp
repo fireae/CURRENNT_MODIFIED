@@ -113,7 +113,13 @@ namespace layers {
 	 */
 	// Whether this layer is trainable (default false)
 	virtual bool flagTrainable() const;
-	
+
+	/**
+	 * Functions to retrieve the feedback data
+	 */
+	virtual real_vector& secondOutputs(const bool flagTrain);
+
+
     };
 
 } // namespace layers

@@ -87,6 +87,7 @@ namespace layers {
 	m_outputErrorsCopy = Cpu::real_vector(this->_outputs().size(), (real_t)0);
     }
 
+    /* Not fully implemented */
     // overload for CNN
     template <typename TDevice>
     Layer<TDevice>::Layer(const helpers::JsonValue &layerChild, 
@@ -261,7 +262,7 @@ namespace layers {
     }
 
     template <typename TDevice>
-    typename Layer<TDevice>::real_vector& Layer<TDevice>::secondOutputs()
+    typename Layer<TDevice>::real_vector& Layer<TDevice>::secondOutputs(const bool flagTrain)
     {
         return m_outputs;
     }

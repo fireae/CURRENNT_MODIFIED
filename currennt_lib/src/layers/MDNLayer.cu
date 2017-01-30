@@ -120,7 +120,6 @@ namespace layers {
 	flagTieVariance.clear();
 	flagTrainable.clear();
 	optTanhAutoReg.clear();
-
 	
 	/******************* Read config ********************/
 	// read in the configuration from .autosave 
@@ -170,7 +169,7 @@ namespace layers {
 
 	    // read in the secondOutputOpt
 	    if (weightsChild.HasMember("feedbackOpt") &&
-		weightsChild["feedbackOpt"].IsArray()){
+		weightsChild["feedbackOpt"].IsArray() && m_secondOutputOpt.size()==0){
 		m_secondOutputOpt.clear();
 		const rapidjson::Value &BuftieVarianceFlag = weightsChild["feedbackOpt"];
 		for (rapidjson::Value::ConstValueIterator it = BuftieVarianceFlag.Begin(); 
@@ -566,6 +565,19 @@ namespace layers {
 	if (m_secondOutputDim > 0){
 	    Cpu::real_vector tmp(this->outputs().size()/this->size() * m_secondOutputDim, 0.0);
 	    m_secondOutput = tmp;
+
+	    // if probabilistic bias is used (currently only consider feedback case)
+	    m_probBiasDir = config.probDataDir();
+	    m_probBiasDim = config.probDataDim();
+	    if (m_probBiasDim > 0 && m_probBiasDim == m_secondOutputDim){
+		printf("[Probablistic bias used]");
+		m_probBiasVec = tmp;	    
+	    }else if (m_probBiasDim > 0){
+		printf("\tWARNING: the prob bias must be %d in dimension\n", m_secondOutputDim);
+		printf("\tWARNING: prob bias data will not used\n");
+		m_probBiasDim = -1;
+	    }
+	    
 	}else{
 	    m_secondOutput.clear();
 	}
@@ -739,7 +751,7 @@ namespace layers {
     {
 	Cpu::real_vector weights;
 	if (weightsSection.isValid() && weightsSection->HasMember(this->name().c_str())){
-	    printf("read wight for layer %s", this->name().c_str());
+	    printf("read weight for layer %s", this->name().c_str());
 	    const rapidjson::Value &weightsChild = (*weightsSection)[this->name().c_str()];
             if (!weightsChild.IsObject())
                 throw std::runtime_error(std::string("Weights section for layer '") + 
@@ -776,7 +788,7 @@ namespace layers {
 	    m_sharedWeightUpdates = weights;
 	    
 	}else{
-	    printf("not read wight for layer %s", this->name().c_str());
+	    printf("not read weight for layer %s", this->name().c_str());
 	}
     }
 
@@ -839,16 +851,15 @@ namespace layers {
     void MDNLayer<TDevice>::getOutput(const int timeStep, const real_t para)
     {
 	// for frame by frame, we always assume that parameter and output should be generated
-	if (para < -3.0){
-	    throw std::runtime_error("mdn_samplePara can't be less than -2.0");
-	}else if (para > -1.50){
+	if (para > -1.50 || para < -3.0){
+	    // sampling, get parameter, or anything else
 	    if (timeStep == 0)
 		this->m_mdnParaVec.resize(this->m_mdnParaDim *
 					  this->precedingLayer().curMaxSeqLength() *
 					  this->precedingLayer().parallelSequences(), 0.0);
 
 	    BOOST_FOREACH (boost::shared_ptr<MDNUnit<TDevice> > &mdnUnit, m_mdnUnits){
-		mdnUnit->getOutput(timeStep, ((para>0)?(para):(1.0)), (this->_targets()));
+		mdnUnit->getOutput(timeStep, ((para>0)?(para):(0.0001)), (this->_targets()));
 		mdnUnit->getParameter(timeStep, helpers::getRawPointer(this->m_mdnParaVec));
 	    }
 	}else{
@@ -937,7 +948,7 @@ namespace layers {
     }
 
     template <typename TDevice>
-    MDNLayer<TDevice>::real_vector& MDNLayer<TDevice>::secondOutputs()
+    MDNLayer<TDevice>::real_vector& MDNLayer<TDevice>::secondOutputs(const bool flagTrain)
     {
 	return this->m_secondOutput;
     }
@@ -967,6 +978,52 @@ namespace layers {
 	    dimStart += mdnUnit->feedBackDim();
 	    cnt++;
 	}
+	dimStart     = 0;
+	if (m_probBiasDim > 0){
+	    BOOST_FOREACH (boost::shared_ptr<MDNUnit<TDevice> > &mdnUnit, m_mdnUnits){
+		mdnUnit->biasProb(this->m_secondOutput,  m_secondOutputDim,  dimStart,
+				  this->m_probBiasVec,   timeStep);
+		dimStart += mdnUnit->feedBackDim();
+		cnt++;
+	    }
+	}
+    }
+    
+    template <typename TDevice>
+    void MDNLayer<TDevice>::loadSequences(const data_sets::DataSetFraction &fraction)
+    {
+	PostOutputLayer<TDevice>::loadSequences(fraction);
+
+	// if additional probabilistic data should be loaded
+	// this part should be moved to DataSet.cpp
+	if (m_probBiasDim > 0){
+	    int bias = 0;
+	    for (int i = 0; i < fraction.numSequences(); i++){
+		std::string fileName = m_probBiasDir + "/" + fraction.seqInfo(i).seqTag + ".bin";
+		
+		std::ifstream ifs(fileName.c_str(), std::ifstream::binary | std::ifstream::in);
+		if (!ifs.good()){
+		    throw std::runtime_error(std::string("Fail to open ")+fileName);
+		}
+		std::streampos numEleS, numEleE;
+		long int numEle;
+		real_t tempVal;
+		numEleS = ifs.tellg();
+		ifs.seekg(0, std::ios::end);
+		numEleE = ifs.tellg();
+		numEle  = (numEleE-numEleS)/sizeof(real_t);
+		ifs.seekg(0, std::ios::beg);
+		std::vector<real_t> tempVec;
+		for (unsigned int i = 0; i<numEle; i++){
+		    ifs.read ((char *)&tempVal, sizeof(real_t));
+		    tempVec.push_back(tempVal);
+		}
+		thrust::copy(tempVec.begin(), tempVec.end(), m_probBiasVec.begin() + bias);
+		bias += numEle;
+		ifs.close();
+	    }
+	}
+	
     }
     
     template class MDNLayer<Cpu>;

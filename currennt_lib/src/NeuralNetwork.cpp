@@ -213,7 +213,7 @@ NeuralNetwork<TDevice>::NeuralNetwork(
             for (size_t j = 0; j < m_layers.size(); ++j) {
                 if (i != j && m_layers[i]->name() == m_layers[j]->name())
                     throw std::runtime_error(
-			std::string("Error in network.jsn: different layers have the same name '") + 
+			std::string("Error in network.jsn: different layers have the name '") + 
 			m_layers[i]->name() + "'");
             }
         }
@@ -221,12 +221,7 @@ NeuralNetwork<TDevice>::NeuralNetwork(
 	// 
 	if (!feedBacklayerId.empty()){
 	    for (size_t i = 0; i<feedBacklayerId.size(); i++){
-		// if MDN is the output, the target layer is the MDN
-		// otherwise, it is the layer before the postoutput
-		if (flagMDNOutput)
-		    m_layers[feedBacklayerId[i]]->linkTargetLayer(*(m_layers.back().get()));
-		else
-		    m_layers[feedBacklayerId[i]]->linkTargetLayer(*(m_layers[cnt-2].get()));
+		m_layers[feedBacklayerId[i]]->linkTargetLayer(*(m_layers.back().get()));
 	    }
 	    for (size_t i = m_firstFeedBackLayer; i < m_layers.size()-1; i++){
 		if (m_layers[i]->type()==std::string("brnn") ||
@@ -623,7 +618,8 @@ bool NeuralNetwork<TDevice>::initMseWeight(const std::string mseWeightPath)
 
 /* Add 0413 Wang: for weight mask */
 template <typename TDevice>
-bool NeuralNetwork<TDevice>::initWeightMask(const std::string weightMaskPath)
+bool NeuralNetwork<TDevice>::initWeightMask(const std::string weightMaskPath,
+					    const int         weightMaskOpt)
 {
     std::ifstream ifs(weightMaskPath.c_str(), std::ifstream::binary | std::ifstream::in);
     if (!ifs.good())
@@ -644,30 +640,49 @@ bool NeuralNetwork<TDevice>::initWeightMask(const std::string weightMaskPath)
 	ifs.read ((char *)&tempVal, sizeof(real_t));
 	tempVec.push_back(tempVal);
     }
-    std::cout << "Read " << numEle << " weight mask elements" << std::endl;
-    std::cout << "Note:" << "No mask is not used for the trainable MDN output Layer" << std::endl;
+    
+    printf("Initialize weight mask: %d mask elements in total, ", (int)numEle);
+    printf("under the mode %d", weightMaskOpt);
+    
     int pos = 0;
-    BOOST_FOREACH (boost::shared_ptr<layers::Layer<TDevice> > &layer, m_layers){
-	layers::TrainableLayer<TDevice>* weightLayer = 
-	    dynamic_cast<layers::TrainableLayer<TDevice>*>(layer.get());
-	if (weightLayer){
-	    if (weightLayer->weightNum()+pos > numEle){
-		throw std::runtime_error(std::string("Weight mask input is not long enough"));
-	    }else{
-		weightLayer->readWeightMask(tempVec.begin()+pos, 
-					    tempVec.begin()+pos+weightLayer->weightNum());
-		pos = pos+weightLayer->weightNum();
+    if (weightMaskOpt > 0){
+	printf("\n\tRead mask for embedded vectors ");
+	layers::InputLayer<TDevice>* inputLayer = 
+	    dynamic_cast<layers::InputLayer<TDevice>*>((m_layers[0]).get());
+	pos = inputLayer->readWeMask(tempVec.begin());
+	printf("(%d elements)", pos);
+    }
+
+    if (weightMaskOpt == 0 || weightMaskOpt==2){
+	printf("\n\tRead mask for NN weights (");
+	BOOST_FOREACH (boost::shared_ptr<layers::Layer<TDevice> > &layer, m_layers){
+	    layers::TrainableLayer<TDevice>* weightLayer = 
+		dynamic_cast<layers::TrainableLayer<TDevice>*>(layer.get());
+	    if (weightLayer){
+		if (weightLayer->weightNum()+pos > numEle){
+		    throw std::runtime_error(std::string("Weight mask input is not long enough"));
+		}else{
+		    weightLayer->readWeightMask(tempVec.begin()+pos, 
+						tempVec.begin()+pos+weightLayer->weightNum());
+		    pos = pos+weightLayer->weightNum();
+		}
+		printf("%d ", weightLayer->weightNum());
 	    }
 	}
-	// for MDN trainable, multiple MDNUnits can be used, instead of using mask to separate
-	// streams
+	printf("elements)");
     }
-    
+    printf("\n");
 }
 
 template <typename TDevice>
 void NeuralNetwork<TDevice>::maskWeight()
 {
+    // mask the embedded vectors (if applicable)
+    layers::InputLayer<TDevice>* inputLayer = 
+	dynamic_cast<layers::InputLayer<TDevice>*>((m_layers[0]).get());
+    inputLayer->maskWe();
+
+    // mask the weight (always do, as the default mask value is 1.0)
     BOOST_FOREACH (boost::shared_ptr<layers::Layer<TDevice> > &layer, m_layers){
 	layers::TrainableLayer<TDevice>* weightLayer = 
 	    dynamic_cast<layers::TrainableLayer<TDevice>*>(layer.get());
@@ -783,7 +798,7 @@ void NeuralNetwork<TDevice>::importWeights(const helpers::JsonDocument &jsonDoc,
 		    mdnlayer->reReadWeight(weightsSection, tempctrStr[cnt]);
 		}
 	    }else if(Layer){
-		printf("\n\t(%d) not read wight for layer %s", cnt, Layer->name().c_str());
+		printf("\n\t(%d) not read weight for layer %s", cnt, Layer->name().c_str());
 	    }else{
 		// skip
 	    }

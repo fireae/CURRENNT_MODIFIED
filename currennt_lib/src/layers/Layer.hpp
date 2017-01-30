@@ -238,7 +238,7 @@ namespace layers {
 	
 	virtual void computeForwardPass(const int timeStep)=0;
 
-	virtual real_vector& secondOutputs();
+	virtual real_vector& secondOutputs(const bool flagTrain);
 
     };
 

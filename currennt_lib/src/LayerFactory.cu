@@ -34,6 +34,7 @@
 #include "layers/WeightedSsePostOutputLayer.hpp"
 #include "layers/BinaryClassificationLayer.hpp"
 #include "layers/MulticlassClassificationLayer.hpp"
+#include "layers/Amalgamate.hpp"
 #include "activation_functions/Tanh.cuh"
 #include "activation_functions/Logistic.cuh"
 #include "activation_functions/Identity.cuh"
@@ -88,6 +89,8 @@ layers::Layer<TDevice>* LayerFactory<TDevice>::createLayer(
     	return new RnnLayer<TDevice>(layerChild, weightsSection, *precedingLayer, true);
     else if (layerType == "feedback")
     	return new FeedBackLayer<TDevice>(layerChild, weightsSection, *precedingLayer);
+    else if (layerType == "amalgamate")
+    	return new AmalgamateLayer<TDevice>(layerChild, weightsSection, *precedingLayer);
     
     /*
     // not implemented yet

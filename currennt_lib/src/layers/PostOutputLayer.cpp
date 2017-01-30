@@ -192,6 +192,16 @@ namespace layers {
 	return false;
     }
 
+    template <typename TDevice>
+    typename PostOutputLayer<TDevice>::real_vector& PostOutputLayer<TDevice>::secondOutputs(
+		const bool flagTrain)
+    {
+	if (flagTrain)
+	    return this->outputs();
+	else
+	    return this->precedingLayer().outputs();
+    }
+    
     // explicit template instantiations
     template class PostOutputLayer<Cpu>;
     template class PostOutputLayer<Gpu>;

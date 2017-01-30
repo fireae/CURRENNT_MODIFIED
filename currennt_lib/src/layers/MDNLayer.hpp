@@ -87,6 +87,12 @@ namespace layers {
 	real_vector    m_sharedWeightUpdates; // shared space for udpate
 	bool           m_trainable;           // whether this layer is trainable
 	int            m_trainableNum;        // number of parameters to be trained
+
+
+	// for probablistic model
+	std::string    m_probBiasDir;        //
+	int            m_probBiasDim;        //
+	real_vector    m_probBiasVec;
 	
     public:
 	MDNLayer(
@@ -148,11 +154,17 @@ namespace layers {
 	
 	virtual const std::string& layerAddInfor(const int opt) const;
 
-	virtual real_vector& secondOutputs();
+	virtual void loadSequences(const data_sets::DataSetFraction &fraction);
 
+	/* *
+	 * Functions to support the feedback data
+	 */
 	virtual void retrieveFeedBackData();
 
 	virtual void retrieveFeedBackData(const int timeStep);
+	
+	virtual real_vector& secondOutputs(const bool flagTrain);
+	
     };
 
 } // namespace layers

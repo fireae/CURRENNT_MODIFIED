@@ -1231,7 +1231,11 @@ namespace layers {
 			m_fw.timestepMatrices[timestep].tmpOutputErrorsWrapT.addProduct(
 				m_fw.timestepMatrices[timestep+1].h2hWrap, false, 
 				m_fw.timestepMatrices[timestep+1].unitDeltasWrapT, false);
-
+			// Note: h2hWrap contains 1-diagonal block, which copies the gradient
+			//       from the next step to this step.
+			//       Together with step3 below, the gradient w.r.t hidden, input and
+			//       bias can be correctly set
+			
 			// step3. set the gradient of the next step to zero
 			/*{{
 			    internal::CleanUnitDeltasClockRnn fn;

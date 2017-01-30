@@ -2130,6 +2130,37 @@ namespace {
 
 
     
+    // copy segment
+    struct ProbBiasSoftmax
+    {
+	real_t *source;
+	real_t *target;
+
+	int srcDim;
+	int srcS;     // the first dimension to be copied in source
+
+	int copyDim;  // the dim of segment to be copied
+
+	int tarDim;
+	int tarS;     // the first dimension to store the first dimension from source
+	
+	__host__ __device__ void operator() (const thrust::tuple<real_t&, int> &t) const
+	{
+	    int timeIdx    = t.get<1>();
+	    real_t probSum = 0.0;
+	    for (int i =0; i < copyDim; i++){
+		probSum += (target[timeIdx * tarDim + tarS + i] +
+			    source[timeIdx * srcDim + srcS + i]);
+	    }
+	    if (probSum > 0.00001){
+		for (int i =0; i < copyDim; i++)
+		    target[timeIdx * tarDim + tarS + i] =
+			(target[timeIdx * tarDim + tarS + i] +
+			 source[timeIdx * srcDim + srcS + i]) / probSum;
+	    }
+	}
+    };
+
     /********************************************************
      other utilizes
     *******************************************************/
@@ -2382,6 +2413,13 @@ namespace layers {
 	return m_endDimOut - m_startDimOut;
     }
 
+    template <typename TDevice>
+    void MDNUnit<TDevice>::biasProb(real_vector &secondOutput, const int dimStart,
+				    const int bufferDim,
+				    real_vector &biasDataVec,  const int timeStep)
+    {
+	
+    }
 	
     
     /********************************************************
@@ -3344,6 +3382,7 @@ namespace layers {
 			thrust::make_tuple(this->m_paraVec.begin() + te*fn.copyDim, 
 					   thrust::counting_iterator<int>(0)+te*fn.copyDim)),
 		fn);
+	    
 	}else{
 	    internal::setOneHotVectorSoftmax fn;
 	    fn.source = helpers::getRawPointer(targets);
@@ -3361,6 +3400,7 @@ namespace layers {
 			thrust::make_tuple(this->m_paraVec.begin() + te * this->m_paraDim, 
 					   thrust::counting_iterator<int>(0)+ te*this->m_paraDim)),
 		fn);
+	    
 	}
     }
 
@@ -3369,6 +3409,38 @@ namespace layers {
     {
 	return (this->m_endDim - this->m_startDim);
     }
+
+    template <typename TDevice>
+    void MDNUnit_softmax<TDevice>::biasProb(real_vector &secondOutput, const int bufferDim,
+					    const int dimStart,
+					    real_vector &biasDataVec,  const int timeStep)
+    {
+	int ts = timeStep * this->m_precedingLayer.parallelSequences();
+	int te = ts + this->m_precedingLayer.parallelSequences();
+	
+	if (this->m_feedBackType == MDNUNIT_FEEDBACK_OPT_0){
+	    internal::ProbBiasSoftmax fn;
+	    fn.target = helpers::getRawPointer(secondOutput);
+	    fn.tarDim = bufferDim;
+	    fn.tarS   = dimStart;
+	    
+	    fn.source = helpers::getRawPointer(biasDataVec);
+	    fn.srcDim = bufferDim;
+	    fn.srcS   = dimStart;
+	    fn.copyDim= this->m_paraDim;
+	    
+	    thrust::for_each(
+		thrust::make_zip_iterator(
+			thrust::make_tuple(this->m_paraVec.begin() + ts, 
+					   thrust::counting_iterator<int>(0)+ts)),
+		thrust::make_zip_iterator(
+			thrust::make_tuple(this->m_paraVec.begin() + te, 
+					   thrust::counting_iterator<int>(0)+te)),
+		fn);
+	    
+	}
+    }
+
     /********************************************************
      MDNUnit_mixture
     *******************************************************/

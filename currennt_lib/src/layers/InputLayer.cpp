@@ -34,6 +34,7 @@
 
 #include "../helpers/getRawPointer.cuh"
 #include <thrust/transform_reduce.h>
+#include <thrust/transform.h>
 #include <thrust/functional.h>
 #include <thrust/sequence.h>
 #include <thrust/for_each.h>
@@ -83,6 +84,9 @@ namespace layers {
 	, m_flagWeUpdate(false)
     {
 	m_weBufferInput.resize(parallelSequences*maxSeqLength*this->size(), 0.0);
+	m_weMask.clear();
+	m_weMaskFlag = false;
+
     }
 
     template <typename TDevice>
@@ -297,7 +301,8 @@ namespace layers {
 	    tempVec.push_back(tempVal);
 	}
 	thrust::copy(tempVec.begin(), tempVec.end(), m_weBank.begin());
-	std::cout << "Read " << numEle/dim << " vectors" << std::endl;
+	printf("Initialize embedded vectors");
+	printf("\n\tRead %d vectors, of dimension %d\n", (int)numEle/dim, dim);
 	
 	// to store the word vector sequences for each frame
 	m_weIdx    = Cpu::real_vector(maxLength, -1);
@@ -360,6 +365,54 @@ namespace layers {
 	}
 	return true;
     }
+
+    template <typename TDevice>
+    int InputLayer<TDevice>::readWeMask(std::vector<real_t>::iterator b)
+    {
+	if (m_weBank.size()>0){
+	    Cpu::real_vector tempVec;
+	    bool tempflag;
+	    
+	    tempflag = false;
+	    tempVec.resize(m_weBank.size());
+	    
+	    std::vector<real_t>::iterator t = b;
+	    for (int i = 0; i < m_weBank.size(); ++t, i++){
+		if (*t <0 || *t >1){
+		    throw std::runtime_error("DataMask is out of range [0, 1]");
+		}else
+		    tempVec[i] = *t;
+	    }	    
+	    // copy the mask data into m_weMask
+	    m_weMask     = tempVec;
+	
+	    // set the flag
+	    m_weMaskFlag = true;
+	}
+	return m_weBank.size();
+    }
+
+    template <typename TDevice>
+    void InputLayer<TDevice>::maskWe()
+    {
+	if (m_weMaskFlag)
+	    thrust::transform(m_weBank.begin(),  m_weBank.end(),
+			      m_weMask.begin(),  m_weBank.begin(),
+			      thrust::multiplies<real_t>());
+    }
+
+    template <typename TDevice>
+    Cpu::real_vector& InputLayer<TDevice>::_weMask()
+    {
+	return m_weMask;
+    }
+
+    template <typename TDevice>
+    bool InputLayer<TDevice>::flagWeMask()
+    {
+	return m_weMaskFlag;
+    }
+
     
     // explicit template instantiations
     template class InputLayer<Cpu>;

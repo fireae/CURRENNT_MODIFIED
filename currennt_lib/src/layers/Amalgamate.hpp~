@@ -58,7 +58,7 @@ namespace layers {
 	int_vector      m_aggOpt;         //
 	pattype_vector  m_boundaryInfo;   // buffer to store the boundary information
 	real_vector     m_aggBuffer;
-	int             m_crossBoundary;  // 
+	
     public:
 	
 	FeedBackLayer(

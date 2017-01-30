@@ -409,7 +409,8 @@ namespace layers {
 	return m_weightNum;
     }
     template <typename TDevice>
-    void TrainableLayer<TDevice>::readWeightMask(std::vector<real_t>::iterator b, std::vector<real_t>::iterator e)
+    void TrainableLayer<TDevice>::readWeightMask(std::vector<real_t>::iterator b,
+						 std::vector<real_t>::iterator e)
     {
 	Cpu::real_vector tempVec;
 	bool tempflag;
@@ -443,7 +444,9 @@ namespace layers {
     template <typename TDevice>
     void TrainableLayer<TDevice>::maskWeight()
     {
-	thrust::transform(weights().begin(), weights().end(), weightMask().begin(), weights().begin(), thrust::multiplies<real_t>());
+	thrust::transform(weights().begin(),    weights().end(),
+			  weightMask().begin(), weights().begin(),
+			  thrust::multiplies<real_t>());
     }
 
     template <typename TDevice>
@@ -687,7 +690,7 @@ namespace layers {
 	    m_weightUpdates = weights;
 	    
 	}else{
-	    printf("not read wight for layer %s", this->name().c_str());
+	    printf("not read weight for layer %s", this->name().c_str());
 	}
     }
     

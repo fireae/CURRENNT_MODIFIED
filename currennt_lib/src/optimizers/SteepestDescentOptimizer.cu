@@ -92,16 +92,17 @@ namespace {
     struct UpdateWeWeightFn
     {
         real_t learningRate;
-        const real_t *weights;
-        const real_t *weightUpdates;
-        
+        real_t *weights;
+        real_t *weightUpdates;
+        real_t *weightMask;
+	bool    useWeightMask;
         __host__ real_t operator() (const int &weightIdx)
         {
             // calculate and store the weight delta
             real_t delta =  -1 * learningRate * weightUpdates[weightIdx];
             // calculate the new weight
-            real_t newWeight = weights[weightIdx] + delta;
-
+            real_t newWeight = weights[weightIdx] +
+		(useWeightMask ? (delta * weightMask[weightIdx]) : delta);
             return newWeight;
         }
     };
@@ -178,8 +179,9 @@ namespace optimizers {
 	    Cpu::real_vector err    = layer->outputErrorsCpu();
 
 	    internal::UpdateWeWeightFn fn;
-	    fn.learningRate = m_weLearningRate;
-	
+	    fn.learningRate  = m_weLearningRate;
+	    fn.useWeightMask = layer->flagWeMask();
+	    
 	    // updating now
 	    for (int i=0;i<weIdx.size();i++){
 	    
@@ -196,15 +198,18 @@ namespace optimizers {
 		    continue;
 		}
 		// locate the vector in weBank
-		fn.weights       = helpers::getRawPointer(layer->_weBank())+(int)weIdx[i]*weDim;
+		fn.weights        = helpers::getRawPointer(layer->_weBank())+(int)weIdx[i]*weDim;
+		if (layer->flagWeMask())
+		    fn.weightMask = helpers::getRawPointer(layer->_weMask())+(int)weIdx[i]*weDim;
+		else
+		    fn.weightMask = NULL;
+		
 		// locate the update vector in err (the err includes the dimension of normal input)
 		fn.weightUpdates = helpers::getRawPointer(err)+i*inputSize+weIDDim;
-		thrust::transform(
-				  thrust::counting_iterator<int>(0),
+		thrust::transform(thrust::counting_iterator<int>(0),
 				  thrust::counting_iterator<int>(weDim),
 				  layer->_weBank().begin()+weIdx[i]*weDim,
-				  fn
-				  );
+				  fn);
 	    }
 	    // debug
 	    if(0){

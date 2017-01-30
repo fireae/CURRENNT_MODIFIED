@@ -189,7 +189,7 @@ public:
     bool initMseWeight(const std::string mseWeightPath);
 
     /* Add 0413 Wang: for weight mask */
-    bool initWeightMask(const std::string weightMaskPath);
+    bool initWeightMask(const std::string weightMaskPath, const int weightMaskOpt);
 
     void maskWeight();
     
