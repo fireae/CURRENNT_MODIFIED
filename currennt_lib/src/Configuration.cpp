@@ -179,6 +179,12 @@ Configuration::Configuration(int argc, const char *argv[])
 	 std::string(
 	      std::string("if the output layer is a gate layer, get output from gate instead") +
 	      std::string("of transformation units? (default false)")).c_str())
+	("mdnUVSigThreshold",
+	 po::value(&m_mdnUVSigThreshold)->default_value(0.5),                  
+	 std::string("Threhold for uvsigmoid (0.5)").c_str())
+	("mdnSoftmaxGenMethod",
+	 po::value(&m_mdnSoftMaxGenMethod)->default_value(0),
+	 std::string("Method to generate from softmax (0: one-hot (def); 1: soft merge)").c_str())
         ;
 
     po::options_description trainingOptions("Training options");
@@ -244,12 +250,9 @@ Configuration::Configuration(int argc, const char *argv[])
 	("mseWeight",           
 	 po::value(&m_mseWeightPath)    ->default_value(""),                      
 	 "path to the weight for calculating the SSE and back-propagation (binary float data)")
-	("lr_decay_rate",       
+	("LRDecayRate",       
 	 po::value(&m_lr_decay_rate)    ->default_value(0.1),                     
-	 "the rate to decay learning rate (0.1)")
-	("lr_decay_epoch",      
-	 po::value(&m_lr_decay_epoch)   ->default_value(-1),                      
-	 "ffter how many no-best epochs should the lr be decayed (-1, no use)")
+	 "The rate to decay learning rate (default 0.1). Use Optimizer=4")
 	/* Add 04-13 Wang: for weight mask*/
 	("weight_mask",         
 	 po::value(&m_weightMaskPath)   ->default_value(""),                      
@@ -260,9 +263,9 @@ Configuration::Configuration(int argc, const char *argv[])
 	 po::value(&m_weightMaskOpt)   ->default_value(0),                      
 	 std::string(
 	      std::string("Option to read and use the weight mask\n") + 
-	      std::string("\t0: the weight mask for normal NN weight (default)") +
-	      std::string("\t1: the weight mask for embedded vectors") +
-	      std::string("\t2: the weight mask for embedded vectors and NN weight")).c_str())
+	      std::string("\n\t0: the weight mask for normal NN weight (default)") +
+	      std::string("\n\t1: the weight mask for embedded vectors") +
+	      std::string("\n\t2: the weight mask for embedded vectors and NN weight")).c_str())
 	
 	/* Add 0504 Wang: for MDN flag*/
 	("mdn_config",          
@@ -334,9 +337,6 @@ Configuration::Configuration(int argc, const char *argv[])
 	 std::string(
 	      std::string("Option for the classical form AR model learning.(default not use) ") + 
 	      std::string("Increase the order of AR model every N epochs ")).c_str())
-	("clockRNNTimeResolution", 
-	 po::value(&m_clockRNNTimeRes)     ->default_value(""), 
-	 "Please specify the ClockRNN option in network.jsn")
 	("Optimizer",            
 	 po::value(&m_optimizerOption)     ->default_value(0), 
 	 std::string(
@@ -344,10 +344,18 @@ Configuration::Configuration(int argc, const char *argv[])
 	      std::string("\n\t0: normal gradient descent SGD (default)") + 
 	      std::string("\n\t1: AdaGrad (except the Trainable MDNLayer).") + 
 	      std::string("\n\t2: Average SGC over the utterance.") + 
-	      std::string("\n\t3: SGD then AdaGrad (together with --OptimizerSecondLR)")).c_str())
+	      std::string("\n\t3: SGD then AdaGrad (together with --OptimizerSecondLR)")+
+	      std::string("\n\t4: SGD decay the learning rate after validation failed")).c_str())
 	("OptimizerSecondLR",    
 	 po::value(&m_secondLearningRate)  ->default_value(0.01), 
 	 "Optimizer==3, it requirs additional learning rate for AdaGrad (0.01 default)")
+	("ScheduleSampOpt",
+	 po::value(&m_scheduleSampOpt)  ->default_value(0),
+	 "Method for schedule sampling. Default 0 (not use schedule sampling)")
+	("ScheduleSampPara",
+	 po::value(&m_scheduleSampPara) ->default_value(0),
+	 "Parameter for schedule sampling. Default 0")
+
         ;
 
     po::options_description autosaveOptions("Autosave options");
@@ -1068,10 +1076,6 @@ const bool& Configuration::outputFromGateLayer() const
     return m_outputGateOut;
 }
 
-const int& Configuration::lrDecayEpoch() const
-{
-    return m_lr_decay_epoch;
-}
 const real_t& Configuration::lrDecayRate() const
 {
     return m_lr_decay_rate;
@@ -1178,10 +1182,6 @@ const int& Configuration::arRMDNUpdateInterval() const
     return m_ARRMDNUpdateInterval;
 }
 
-const std::string& Configuration::clockRNNTimeRes() const
-{
-    return m_clockRNNTimeRes;
-}
 
 const int& Configuration::KLDOutputDataType() const
 {
@@ -1259,4 +1259,25 @@ const int& Configuration::aggregateOpt() const
 const int& Configuration::weightMaskOpt() const
 {
     return m_weightMaskOpt;
+}
+
+const int& Configuration::scheduleSampOpt() const
+{
+    return m_scheduleSampOpt;
+}
+
+const int& Configuration::scheduleSampPara() const
+{
+    return m_scheduleSampPara;
+}
+
+const real_t& Configuration::mdnUVSigThreshold() const
+{
+    return m_mdnUVSigThreshold;
+}
+
+
+const int& Configuration::mdnSoftMaxGenMethod() const
+{
+    return m_mdnSoftMaxGenMethod;
 }

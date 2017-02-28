@@ -77,7 +77,7 @@ namespace {
 
 	int    *lookBack;   // lookback step
 	int     lookBackStepNM; // how many steps to look back ?
-	
+	int     crossBoundary;
 	// dispatched over Dim * T * Parallel
 	__host__ __device__ void operator() (const thrust::tuple<const real_t&, int> &t)
 	{
@@ -107,10 +107,18 @@ namespace {
 		    
 		    if (timeStep < lookBackTime)      // loopback one step
 			output[outputIdx] = 0.0;
-		    else
+		    else{
 			output[outputIdx] = input2[(timeStep - lookBackTime) * dimInput2 +
-						   dimIdx + dimInput2Start];			
+						   dimIdx + dimInput2Start];
+			if (crossBoundary == 3 &&
+			    input2[(timeStep - lookBackTime) * dimInput2 + dimInput2Start] > 0.98){
+			    output[outputIdx] = 0.0;
+			    // Set the feedback to zero if previous frame is silence
+			}
+		    }
+		    
 		}else{
+		    //output[outputIdx] = 0;
 		    output[outputIdx] = input1[timeStep * dimInput1 + dimIdx];
 		}
 	    }else{
@@ -175,10 +183,19 @@ namespace {
 		    output[outputIdx]= aggreInfo;
 		}
 
-		// aggregating information using tanh and moving average
-		aggreInfo  = (((time - boundTime) / ((time - boundTime)+1.0)) * aggreInfo +
-			      cell_act_fn_t::fn(input2[inputIdx]) / ((time-boundTime)+1.0));
-
+		if (crossBoundary == 3 && (inputIdx - dimInput2)>0 &&
+		    input2[inputIdx - dimInput2 - dimIdxRel % dim1Band] > 0.98){
+		    output[outputIdx] = 0;
+		    // set the previous frame to zero if it is silence
+		}
+		
+		if (crossBoundary == 3 && input2[inputIdx - dimIdxRel % dim1Band] > 0.98){
+		    // don't aggregate this frame
+		}else{
+		    // aggregating information using tanh and moving average
+		    aggreInfo  = (((time - boundTime) / ((time - boundTime)+1.0)) * aggreInfo +
+				  cell_act_fn_t::fn(input2[inputIdx]) / ((time-boundTime)+1.0));
+		}
 		outputIdx += dimOutput;
 		inputIdx  += dimInput2;
 	    }
@@ -247,11 +264,23 @@ namespace {
 		}else{
 		    
 		    // aggregating the previous frame
-		    aggreInfo  = ((preTime-boundTime) / (preTime - boundTime + 1.0)) * aggreInfo +
-			cell_act_fn_t::fn(input2[inputIdx - dimInput2]) / (preTime - boundTime+1.0);
+		    if (crossBoundary == 3 &&
+			input2[inputIdx - dimInput2 - dimIdxRel % dim1Band] > 0.98){
+			
+			
+		    }else{
+			aggreInfo  = ((preTime-boundTime) / (preTime - boundTime + 1.0)) *
+			    aggreInfo +
+			    cell_act_fn_t::fn(input2[inputIdx - dimInput2]) /
+			    (preTime - boundTime+1.0);
+		    }
 		    
 		    // propagate the info to the current frame
-		    if (crossBoundary){
+		    if (crossBoundary == 3 &&
+			input2[inputIdx - dimInput2 - dimIdxRel % dim1Band] > 0.98){
+			output[outputIdx]= 0;
+			
+		    }else if (crossBoundary == 1){
 			// deliver the aggregation across boundary
 			output[outputIdx]= aggreInfo;
 			if (boundaryInfo[time * bandNum + bandIdx] < 1){
@@ -361,16 +390,16 @@ namespace layers{
 	}
 
 	// get aggregate information
-	m_aggStr      = ((layerChild->HasMember("aggregate")) ? 
-			 ((*layerChild)["aggregate"].GetString()) : (""));
+	m_aggStr         = ((layerChild->HasMember("aggregate")) ? 
+			    ((*layerChild)["aggregate"].GetString()) : (""));
+	m_crossBoundary  = (layerChild->HasMember("aggregate_cross_boundary") ? 
+			    (*layerChild)["aggregate_cross_boundary"].GetInt() : 0);
+
 	if (m_aggStr.size()){
 	    cpu_int_vector tempOpt;
 	    ParseLookBackStep(m_aggStr, tempOpt);
 	    m_aggOpt = tempOpt;
 	    m_boundaryInfo.resize(m_aggOpt.size() * precedingLayer.maxSeqLength(), 0);
-	    
-	    m_crossBoundary  = (layerChild->HasMember("aggregate_cross_boundary") ? 
-				(*layerChild)["aggregate_cross_boundary"].GetInt() : 0);
 	    m_aggOptSyn      = config.aggregateOpt();
 	}else{
 	    m_aggOpt.clear(); // default, don't use aggregate
@@ -518,7 +547,7 @@ namespace layers{
 	    fn.lookBack       = helpers::getRawPointer(this->m_lookBack);
 
 	    fn.lookBackStepNM = this->m_lookBack.size();
-	    
+	    fn.crossBoundary  = m_crossBoundary;
 	    int n = this->curMaxSeqLength() * this->parallelSequences() * this->size();
 	    thrust::for_each(
 		thrust::make_zip_iterator(thrust::make_tuple(this->outputs().begin(),
@@ -527,7 +556,6 @@ namespace layers{
 							     thrust::counting_iterator<int>(0)+n)),
 		fn);
 	    // dustbin.txt/Block1226x03
-	    	    
 	}}
 	
 	{{
@@ -566,6 +594,7 @@ namespace layers{
 		fn);
 	    }
 	}}
+	
 	/*
 	Cpu::real_vector tmp = this->outputs();
 	for (int i = 0; i<this->curMaxSeqLength(); i++){
@@ -621,7 +650,7 @@ namespace layers{
 	    fn.lookBack       = helpers::getRawPointer(this->m_lookBack);
 
 	    fn.lookBackStepNM = this->m_lookBack.size();
-	    
+	    fn.crossBoundary  = m_crossBoundary;
 	    thrust::for_each(
 	       thrust::make_zip_iterator(
 		 thrust::make_tuple(
@@ -638,7 +667,7 @@ namespace layers{
 
 	{{
 	    // aggregating
-	    if (m_aggOptSyn && m_aggOpt.size()){
+	    if (m_aggOptSyn==1 && m_aggOpt.size()){
 		// strategy one:
 		//   use the same aggration algorithm as in the training stage
 		if (timeStep == 0)
@@ -674,6 +703,43 @@ namespace layers{
 				thrust::make_tuple(this->outputs().begin()+dimension,
 						   thrust::counting_iterator<int>(0)+dimension)),
 						   fn);
+	    }else if (m_aggOptSyn == 2){
+		
+		int previousSize  = this->precedingLayer().size();
+		
+		internal::vectorFillForward fn;
+		
+		fn.dimInput1      = previousSize;
+		fn.dimInput2      = m_targetDim;
+	    
+		fn.dimOutput      = this->size();
+		fn.parallel       = this->parallelSequences();
+		fn.dimInput2Start = m_targetDimStart;
+		
+
+		fn.input1         = helpers::getRawPointer(this->precedingLayer().outputs());
+		fn.input2         = helpers::getRawPointer(m_targetLayer->secondOutputs(false));
+		fn.output         = helpers::getRawPointer(this->outputs());
+
+		fn.dim1Step       = m_targetDimEnd - m_targetDimStart; // dimension for 1 step
+		fn.crossBoundary  = m_crossBoundary;
+		Cpu::int_vector  tmp(2,1);
+		int_vector       tmpGPU = tmp;
+		fn.lookBack       = helpers::getRawPointer(tmpGPU);
+
+		fn.lookBackStepNM = m_aggOpt.size();
+		
+		thrust::for_each(
+	         thrust::make_zip_iterator(
+		  thrust::make_tuple(
+			this->outputs().begin()+ effTimeStepS * this->size(),
+			thrust::counting_iterator<int>(0)+ effTimeStepS * this->size())),
+		 thrust::make_zip_iterator(
+		  thrust::make_tuple(
+			this->outputs().begin()+ effTimeStepE * this->size(),
+			thrust::counting_iterator<int>(0)+ effTimeStepE * this->size())),
+			fn);
+
 	    }
 	}}
 

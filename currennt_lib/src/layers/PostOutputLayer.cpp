@@ -196,12 +196,20 @@ namespace layers {
     typename PostOutputLayer<TDevice>::real_vector& PostOutputLayer<TDevice>::secondOutputs(
 		const bool flagTrain)
     {
-	if (flagTrain)
+	if (flagTrain){
 	    return this->outputs();
-	else
+	}else{
 	    return this->precedingLayer().outputs();
+	}
     }
     
+    template <typename TDevice>
+    void PostOutputLayer<TDevice>::exportLayer(const helpers::JsonValue &layersArray, 
+					      const helpers::JsonAllocator &allocator) const
+    {
+        Layer<TDevice>::exportLayer(layersArray, allocator);
+    }
+
     // explicit template instantiations
     template class PostOutputLayer<Cpu>;
     template class PostOutputLayer<Gpu>;

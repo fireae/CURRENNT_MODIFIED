@@ -29,6 +29,7 @@
 #define  OPTIMIZATION_ADAGRAD 1              //  AdaGrad
 #define  OPTIMIZATION_AVEGRAD 2              //  average the gradient per fraction of data
 #define  OPTIMIZATION_STOCHASTIC_ADAGRAD 3   //  Stochastic gradient + AdaGrad
+#define  OPTIMIZATION_SGD_DECAY 4            //  Stochastic gradient, and learning rate decay
 #define  ADAGRADFACTOR 0.000001
 
 namespace optimizers {
@@ -58,6 +59,7 @@ namespace optimizers {
 	
 	// 0511 wang: check Nan and other;
 	bool   m_blowed;
+	int    m_blowedTime;
         int    m_curEpoch;
         int    m_epochsSinceLowestError;
 
@@ -74,11 +76,6 @@ namespace optimizers {
         real_t m_curValidationErrorPerFrame;
         real_t m_curTestErrorPerFrame;
 
-	// Add 0409 for learning_rate decay
-	bool      m_flag_decay;         // whether the learning rate should be decayed
-	const int m_decayEpochNM;       // after how many sub-optimal epochs for decaying
-	int       m_waitAfterDecay;     // how many epochs to wait before decay again
-	
 	
         std::vector<real_vector> m_curWeightUpdates;
         std::vector<real_vector> m_bestWeights;
@@ -108,9 +105,6 @@ namespace optimizers {
 	/* Add 16-02-22 Wang: for WE updating */
 	virtual void              _updateWeInput(int fracLength) =0;
 	
-	/* Add 04-09 for learning rate decay */
-	virtual bool              _checkLRdecay();
-	virtual void              _setLRdecayFalse();
 	
 	// Add 10-24 for AdaGrad
 	const unsigned& _optOption() const;
@@ -139,11 +133,9 @@ namespace optimizers {
             int maxEpochsNoBest,
             int validateEvery,
             int testEvery,
-	    int decayEpochNM,
 	    unsigned optOption
             );
 
-	bool checkLRdecay();
         /**
          * Destructs the optimizer
          */
@@ -240,7 +232,7 @@ namespace optimizers {
          */
         virtual void exportState(const helpers::JsonDocument &jsonDoc) const;
 	
-	virtual void adjustLR(int decayTime) =0;
+	virtual void adjustLR() =0;
 	
 	virtual void changeLR(real_t newLR) =0;
 	

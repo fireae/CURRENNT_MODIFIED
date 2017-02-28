@@ -33,6 +33,10 @@
 #include <thrust/transform.h>
 #include <thrust/fill.h>
 
+
+/* Macro definition */
+#define OP_BLOWED_THRESHOLD 5 // tolerance of blowed network 
+
 namespace optimizers {
 
     template <typename TDevice>
@@ -54,18 +58,16 @@ namespace optimizers {
         boost::shared_ptr<data_sets::DataSetFraction> frac;
         bool firstFraction = true;                           // first fraction
 	int  uttNum        = ds.totalSequences();            // total number of sequences
-	int  uttCnt        = 0;                              // utterance counter
+	real_t  uttCnt     = 0;                              // utterance counter
 	int  frameNum      = -1;                             // number of frames in mini-batch
-	
         while ((frac = ds.getNextFraction())) {
 	    
 	    // get the number of frames for SGD
 	    if (Configuration::instance().hybridOnlineBatch()) 
 		frameNum   = frac->fracTimeLength();
-	    
             // compute forward pass and calculate the error
             m_neuralNetwork.loadSequences(*frac);
-            m_neuralNetwork.computeForwardPass();
+            m_neuralNetwork.computeForwardPass(frac->maxSeqLength(), (m_curEpoch-1));
             error += (m_neuralNetwork.calculateError()/ds.totalSequences());
 	    
 	    // check for NaN
@@ -73,6 +75,8 @@ namespace optimizers {
 		printf("NaN detected. Tune the learning rate please.\n");
 		this->m_blowed = true;
 		break;
+	    }else{
+		this->m_blowed = false;
 	    }
 	    
 	    // calculate the classification error if any of the layers used
@@ -312,7 +316,7 @@ namespace optimizers {
     Optimizer<TDevice>::Optimizer(
 	NeuralNetwork<TDevice> &neuralNetwork, data_sets::DataSet &trainingSet, 
 	data_sets::DataSet &validationSet, data_sets::DataSet &testSet,
-	int maxEpochs, int maxEpochsNoBest, int validateEvery, int testEvery, int decayEpochNM,
+	int maxEpochs, int maxEpochsNoBest, int validateEvery, int testEvery,
 	unsigned optOption)
         : m_neuralNetwork             (neuralNetwork)
         , m_trainingSet               (trainingSet)
@@ -332,9 +336,6 @@ namespace optimizers {
         , m_curValidationClassError   (0)
         , m_curTrainingClassError     (0)
         , m_curTestClassError         (0)
-	, m_decayEpochNM              (decayEpochNM)
-	, m_flag_decay                (false)
-	, m_waitAfterDecay            (0)
 	, m_blowed                    (false)
 	, m_optOption                 (optOption)
     {
@@ -381,11 +382,8 @@ namespace optimizers {
 	    printf("\nOptimization: plain SGD \n");
 	}
 	
+	m_blowedTime = 0;
 	
-	// Add 0409 to check the decayEpochNM
-	if (m_decayEpochNM >= m_maxEpochsNoBest){
-	    printf("WARNING: decayEpochNM should be less than m_maxEpochsNoBest.");
-	}
     }
 
     template <typename TDevice>
@@ -481,7 +479,18 @@ namespace optimizers {
             m_curTrainingError = _processDataSet(m_trainingSet, true, &m_curTrainingClassError);
 	    
 	    // Add 0511
-	    if (this->m_blowed) {return m_finished;}
+	    if (this->m_blowed) {
+		this->reinit();
+		this->adjustLR();
+		this->m_neuralNetwork.reInitWeight();
+		m_blowedTime++;
+		if (m_blowedTime > OP_BLOWED_THRESHOLD){
+		    m_finished = true;
+		    printf("Learning rate tuning timeout\n");
+		    printf("Please change configuration and re-train\n");
+		}
+		return m_finished;
+	    }
 
 	    
 	    // Training error
@@ -523,20 +532,7 @@ namespace optimizers {
 					  m_testSet.totalTimesteps());
 	    }
 	    
-	    
-            // Add 0409 for decaying the learning rate
-	    /*if (m_decayEpochNM > 0 && 
-		m_epochsSinceLowestError >= m_decayEpochNM && 
-		m_waitAfterDecay < 1){
-		m_flag_decay = true;
-		//m_epochsSinceLowestError = 0;
-		m_waitAfterDecay = m_decayEpochNM;
-	    }
-	    if (m_waitAfterDecay > 0){
-		m_waitAfterDecay--;
-	    }
-	    */
-	    
+	    	    
 	    // Check status
 	    if (m_maxEpochs >= 0 && m_curEpoch >= m_maxEpochs){
 		// it must be finished
@@ -547,11 +543,17 @@ namespace optimizers {
 		if (m_optOption == OPTIMIZATION_STOCHASTIC_ADAGRAD){
 		    // no best after N epochs, swtich to AdaGrad
 		    m_optOption = OPTIMIZATION_ADAGRAD;
-		    // let's start from 1, to avoid save the network
+		    // let's start from 1, to avoid saving the network
 		    m_epochsSinceLowestError = 1;
 		    m_lowestValidationError  = std::numeric_limits<real_t>::max();
 		    m_optStatus = "To ADAGRAD";
 		    this->changeLR(Configuration::instance().optimizerSecondLR());
+		    _restoreWeights();
+		}else if (m_optOption == OPTIMIZATION_SGD_DECAY){
+		    // let's start from 1, to avoid saving the network
+		    m_epochsSinceLowestError = 1;
+		    m_optStatus = "SGD (decay LR)";
+		    this->adjustLR();
 		    _restoreWeights();
 		}else{
 		    // no best after N epochs
@@ -636,13 +638,15 @@ namespace optimizers {
 	// Add 10-02: status of the optimizer
 	m_optOption               =
 	    helpers::checkedJsonGet<int   >(*jsonDoc, "optimizer_status");
-	
+
+	// Read the optimizer_best_weights to m_bestWeights
         _importWeights(jsonDoc, "optimizer_best_weights", &m_bestWeights);
-	
+
+	// If AdaGrad is used, read the optimizer_status_vector to m_weightStats
 	if (m_optOption == OPTIMIZATION_ADAGRAD || 
-	    m_optOption == OPTIMIZATION_STOCHASTIC_ADAGRAD){
+	    m_optOption == OPTIMIZATION_STOCHASTIC_ADAGRAD)
 	    _importWeights(jsonDoc, "optimizer_status_vector",   &m_weightStats);
-	}
+	
     }
     
     template <typename TDevice>
@@ -652,23 +656,6 @@ namespace optimizers {
     }
 
     
-    /* Add 04-09 for learning rate decay */
-    template <typename TDevice>
-    bool Optimizer<TDevice>::_checkLRdecay()
-    {
-	return m_flag_decay;
-    }
-
-    template <typename TDevice>
-    void Optimizer<TDevice>::_setLRdecayFalse()
-    {
-	m_flag_decay = false;
-    }
-    template <typename TDevice>
-    bool Optimizer<TDevice>::checkLRdecay()
-    {
-	return m_flag_decay;
-    }
 
     template <typename TDevice>
     bool Optimizer<TDevice>::blowed()
@@ -702,8 +689,6 @@ namespace optimizers {
         m_curValidationClassError   =(0);
         m_curTrainingClassError     =(0);
         m_curTestClassError         =(0);
-	m_flag_decay                =(false);
-	m_waitAfterDecay            =(0);
 	m_blowed                    =(false);
 
         m_bestWeights.resize(m_neuralNetwork.layers().size());

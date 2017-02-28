@@ -117,12 +117,12 @@ public:
     /**
      * Computes the forward pass
      */
-    void computeForwardPass();
+    void computeForwardPass(const int curMaxSeqLength, const real_t uttCnt);
 
     /**
      * Computes the forward pass
      */
-    void computeForwardPass(const int curMaxSeqLength, const real_t generationOpt);
+    void computeForwardPassGen(const int curMaxSeqLength, const real_t generationOpt);
     
     /**
      * Computes the backward pass, including the weight updates

@@ -81,9 +81,26 @@ namespace layers {
 	}
 	return tmp;
     }
+
+    void readQuanMerge(const std::string options, Cpu::int_vector &quanOpt)
+    {
+	// read in the option
+	std::vector<std::string> tempArgs;
+	boost::split(tempArgs, options, boost::is_any_of("_"));
+	if ((tempArgs.size() % 2) != 0 && tempArgs.size()!= 1){
+	    printf("quanMerge: S_E_S_E");
+	    throw std::runtime_error("Error in MDN layer configuration");
+	}
+	quanOpt.resize(tempArgs.size(),-1);
+	for (int i=0; i < tempArgs.size(); i++){
+	    quanOpt[i] = boost::lexical_cast<int>(tempArgs[i]);
+	}
+    }
+
     
     /********************************************************
      MDNLayer
+
     *******************************************************/
     // definition of the MDN layer
     template <typename TDevice>
@@ -122,6 +139,20 @@ namespace layers {
 	optTanhAutoReg.clear();
 	
 	/******************* Read config ********************/
+	//
+	m_uvSigmoidStr = ((layerChild->HasMember("uvSigmoidSoftmax")) ? 
+			  ((*layerChild)["uvSigmoidSoftmax"].GetString()) : (""));
+	m_quanMergeStr = ((layerChild->HasMember("quantizeMerge")) ? 
+			  ((*layerChild)["quantizeMerge"].GetString()) : (""));
+	if (m_quanMergeStr.size()){
+	    Cpu::int_vector temp;
+	    readQuanMerge(m_quanMergeStr, temp);
+	    m_quanMergeVal = temp;
+	}else{
+	    m_quanMergeVal.clear();
+	}
+	
+	// I should put this to the layerChild section
 	// read in the configuration from .autosave 
 	if (weightsSection.isValid() && weightsSection->HasMember(this->name().c_str())) {
 	    const rapidjson::Value &weightsChild = (*weightsSection)[this->name().c_str()];
@@ -182,7 +213,8 @@ namespace layers {
 	    std::ifstream ifs(config.mdnFlagPath().c_str(), 
 			      std::ifstream::binary | std::ifstream::in);
 	    if (!ifs.good())
-		throw std::runtime_error(std::string("Can't open MDNConfig:"+config.mdnFlagPath()));
+		throw std::runtime_error(std::string("Can't open MDNConfig:" +
+						     config.mdnFlagPath()));
 	    
 	    std::streampos numEleS, numEleE;
 	    numEleS = ifs.tellg();
@@ -277,6 +309,8 @@ namespace layers {
 	int weightsNum = 0;
 	this->m_trainable = false;
 
+	
+	/******************** Create MDNUnit **************************/
 	// create the MDNUnits
 	for (int i=0; i<numEle; i++){
 	    unitS    = (int)m_mdnConfigVec[1+i*5];  // start dimension in output of previous layer
@@ -296,13 +330,18 @@ namespace layers {
 		
 	    // multi-nomial distribution (parameterized by softmax function)
 	    }else if(mdnType==MDN_TYPE_SOFTMAX){
+		bool uvSig = (i < m_uvSigmoidStr.size())?(m_uvSigmoidStr[i]=='y'):(false);
 		mdnUnit = new MDNUnit_softmax<TDevice>(unitS, unitE, unitSOut, unitEOut, mdnType, 
 						       precedingLayer, this->size(),
+						       uvSig, m_quanMergeVal,
+						       config.mdnUVSigThreshold(),
 						       MDNUNIT_TYPE_0, m_secondOutputOpt[i]);
 		m_mdnParaDim += (unitE - unitS);
 		outputSize += 1;
-		printf("\tMDN softmax\n");
-
+		printf("\tMDN softmax (uvSig [%d], uvT [%f], quanMerge [%s], genM [%d])\n",
+		       uvSig, config.mdnUVSigThreshold(),m_quanMergeStr.c_str(),
+		       config.mdnSoftMaxGenMethod());
+		
 	    // Gaussian mixture distribution
 	    }else if(mdnType > 0){
 		
@@ -439,10 +478,12 @@ namespace layers {
 		if (tmpTrainableFlag == MDNUNIT_TYPE_2){
 		    if (tmpTieVarianceFlag){
 			// K mixture weight, K*Dim mean, K*1 variance, Dim a, Dim b
-			outputSize += ((unitE - unitS)-2*mdnType-3*(unitEOut - unitSOut))/mdnType;
+			outputSize +=
+			    ((unitE - unitS)-2*mdnType-3*(unitEOut - unitSOut))/mdnType;
 		    }else{
 			// K mixture weight, K*Dim mean, K*Dim variance, Dim a, Dim b
-			outputSize += ((unitE - unitS)-mdnType-3*(unitEOut - unitSOut))/(2*mdnType);
+			outputSize +=
+			    ((unitE - unitS)-mdnType-3*(unitEOut - unitSOut))/(2*mdnType);
 		    }
 		}else{
 		    if (tmpTieVarianceFlag){
@@ -561,12 +602,15 @@ namespace layers {
 	    }
 	}
 
-	// Allocate memory for second output (for feedback, if necessary)
+	/***************** Initialize memory for vectors ***************/
+	// Allocate memory for second output
 	if (m_secondOutputDim > 0){
+
+	    // for feedback link
 	    Cpu::real_vector tmp(this->outputs().size()/this->size() * m_secondOutputDim, 0.0);
 	    m_secondOutput = tmp;
 
-	    // if probabilistic bias is used (currently only consider feedback case)
+	    // for biased probability vector used in generation
 	    m_probBiasDir = config.probDataDir();
 	    m_probBiasDim = config.probDataDim();
 	    if (m_probBiasDim > 0 && m_probBiasDim == m_secondOutputDim){
@@ -576,11 +620,21 @@ namespace layers {
 		printf("\tWARNING: the prob bias must be %d in dimension\n", m_secondOutputDim);
 		printf("\tWARNING: prob bias data will not used\n");
 		m_probBiasDim = -1;
+		m_probBiasVec.clear();
+	    }else{
+		m_probBiasDim = -1;
+		m_probBiasVec.clear();
 	    }
-	    
 	}else{
 	    m_secondOutput.clear();
+	    m_probBiasVec.clear();
+	    m_probBiasDim = -1;
 	}
+
+	// Allocate memory for mdnParameter
+	Cpu::real_vector tmp(this->outputs().size() / this->size() * this->m_mdnParaDim, 0.0);
+	this->m_mdnParaVec = tmp;
+
     }
 
     template <typename TDevice>
@@ -821,10 +875,6 @@ namespace layers {
 	{
 	    // output the data parameter
 	    printf("generating the parameters of MDN");
-	    this->m_mdnParaVec.resize(this->m_mdnParaDim*
-				      this->precedingLayer().curMaxSeqLength()*
-				      this->precedingLayer().parallelSequences(), 
-				      0.0);
 	    BOOST_FOREACH (boost::shared_ptr<MDNUnit<TDevice> > &mdnUnit, m_mdnUnits)
 	    {
 		mdnUnit->getParameter(helpers::getRawPointer(this->m_mdnParaVec));
@@ -850,15 +900,14 @@ namespace layers {
     template <typename TDevice>
     void MDNLayer<TDevice>::getOutput(const int timeStep, const real_t para)
     {
+	
 	// for frame by frame, we always assume that parameter and output should be generated
 	if (para > -1.50 || para < -3.0){
-	    // sampling, get parameter, or anything else
-	    if (timeStep == 0)
-		this->m_mdnParaVec.resize(this->m_mdnParaDim *
-					  this->precedingLayer().curMaxSeqLength() *
-					  this->precedingLayer().parallelSequences(), 0.0);
-
 	    BOOST_FOREACH (boost::shared_ptr<MDNUnit<TDevice> > &mdnUnit, m_mdnUnits){
+		if (m_probBiasDim > 0){
+		    mdnUnit->biasProb(this->m_probBiasVec,  0,  0,
+				      this->m_probBiasVec,  timeStep);
+		}
 		mdnUnit->getOutput(timeStep, ((para>0)?(para):(0.0001)), (this->_targets()));
 		mdnUnit->getParameter(timeStep, helpers::getRawPointer(this->m_mdnParaVec));
 	    }
@@ -961,24 +1010,42 @@ namespace layers {
 	
 	BOOST_FOREACH (boost::shared_ptr<MDNUnit<TDevice> > &mdnUnit, m_mdnUnits){
 	    mdnUnit->fillFeedBackData(this->m_secondOutput,  m_secondOutputDim,  dimStart,
-				      this->_targets());
+				      this->_targets(), 0);
 	    dimStart += mdnUnit->feedBackDim();
 	    cnt++;
 	}
     }
-    
+
     template <typename TDevice>
-    void MDNLayer<TDevice>::retrieveFeedBackData(const int timeStep)
+    void MDNLayer<TDevice>::retrieveFeedBackData(real_vector& randNum, const int method)
+    {
+	int dimStart = 0;
+	int cnt      = 0;
+
+	// The code here is dirty
+	BOOST_FOREACH (boost::shared_ptr<MDNUnit<TDevice> > &mdnUnit, m_mdnUnits){
+
+	    mdnUnit->fillFeedBackData(this->m_secondOutput,  m_secondOutputDim,  dimStart,
+				      randNum, method);
+	    dimStart += mdnUnit->feedBackDim();
+	    cnt++;
+	}
+    }
+
+    template <typename TDevice>
+    void MDNLayer<TDevice>::retrieveFeedBackData(const int timeStep, const int method)
     {
 	int dimStart = 0;
 	int cnt      = 0;
 	BOOST_FOREACH (boost::shared_ptr<MDNUnit<TDevice> > &mdnUnit, m_mdnUnits){
 	    mdnUnit->fillFeedBackData(this->m_secondOutput,  m_secondOutputDim,  dimStart,
-				      this->_targets(), timeStep);
+				      this->_targets(), timeStep, method);
 	    dimStart += mdnUnit->feedBackDim();
 	    cnt++;
 	}
 	dimStart     = 0;
+	
+	/* 2017/02/22 Used for bias modify the probability vector for feedback
 	if (m_probBiasDim > 0){
 	    BOOST_FOREACH (boost::shared_ptr<MDNUnit<TDevice> > &mdnUnit, m_mdnUnits){
 		mdnUnit->biasProb(this->m_secondOutput,  m_secondOutputDim,  dimStart,
@@ -987,6 +1054,8 @@ namespace layers {
 		cnt++;
 	    }
 	}
+	*/
+	
     }
     
     template <typename TDevice>
@@ -994,8 +1063,8 @@ namespace layers {
     {
 	PostOutputLayer<TDevice>::loadSequences(fraction);
 
-	// if additional probabilistic data should be loaded
-	// this part should be moved to DataSet.cpp
+	// Load additional probabilistic data for biased generation in model with feedback link
+	// NOTE: this part should be moved to DataSet.cpp
 	if (m_probBiasDim > 0){
 	    int bias = 0;
 	    for (int i = 0; i < fraction.numSequences(); i++){
@@ -1022,10 +1091,23 @@ namespace layers {
 		bias += numEle;
 		ifs.close();
 	    }
-	}
-	
+	}	
     }
-    
+
+    // export
+    template <typename TDevice>
+    void MDNLayer<TDevice>::exportLayer(const helpers::JsonValue &layersArray, 
+					const helpers::JsonAllocator &allocator) const
+    {
+	Layer<TDevice>::exportLayer(layersArray, allocator);
+        (*layersArray)[layersArray->Size() - 1].AddMember("uvSigmoidSoftmax",
+							  m_uvSigmoidStr.c_str(),
+							  allocator);
+	(*layersArray)[layersArray->Size() - 1].AddMember("quantizeMerge",
+							  m_quanMergeStr.c_str(),
+							  allocator);
+    }
+
     template class MDNLayer<Cpu>;
     template class MDNLayer<Gpu>;
 

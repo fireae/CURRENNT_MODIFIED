@@ -57,13 +57,14 @@ namespace layers {
     {
 
 	typedef typename TDevice::real_vector real_vector;
+	typedef typename TDevice::int_vector int_vector;
 	typedef typename Cpu::real_vector cpu_real_vector;
 
     protected:
 	cpu_real_vector m_mdnVec;        // the vector of mdnunit flag
 	cpu_real_vector m_mdnConfigVec;  // vector of the mdn configuration
 	real_vector     m_mdnParaVec;    // vector of parameters of all MDNUnits
-
+	
 	
 	// the vector of MDNUnit for computation
 	std::vector<boost::shared_ptr<MDNUnit<TDevice> > > m_mdnUnits;  
@@ -93,6 +94,11 @@ namespace layers {
 	std::string    m_probBiasDir;        //
 	int            m_probBiasDim;        //
 	real_vector    m_probBiasVec;
+
+	// for uvSigmoid softmax
+	std::string    m_uvSigmoidStr;
+	std::string    m_quanMergeStr;
+	int_vector     m_quanMergeVal;
 	
     public:
 	MDNLayer(
@@ -161,9 +167,15 @@ namespace layers {
 	 */
 	virtual void retrieveFeedBackData();
 
-	virtual void retrieveFeedBackData(const int timeStep);
+	virtual void retrieveFeedBackData(real_vector& randNum, const int method);
+
+	virtual void retrieveFeedBackData(const int timeStep, const int method=0);
 	
 	virtual real_vector& secondOutputs(const bool flagTrain);
+
+	// export
+	virtual void exportLayer(const helpers::JsonValue &layersArray, 
+				 const helpers::JsonAllocator &allocator) const;
 	
     };
 

@@ -97,7 +97,6 @@ private:
 
     /* Add 0409 Wang: to decay the learning rate */
     real_t      m_lr_decay_rate;
-    int         m_lr_decay_epoch;
     
     /* Add 0413 Wang: to mask the weight of network */
     std::string m_weightMaskPath;
@@ -131,8 +130,6 @@ private:
     real_t      m_ARRMDNInitVar;        // the variance of Gaussian dis for initializing AR
     int         m_ARRMDNUpdateInterval; // after how many epochs update the n+1 order AR ? 
     
-    /* Add 1009 ClockRNN */
-    std::string m_clockRNNTimeRes;      // option for the ClockRNN
     
     /* Add 1012 KLD output*/
     int         m_KLDOutputDataType;    // 
@@ -162,6 +159,13 @@ private:
 
     /* Add 20170129 options for reading weight mask*/
     int      m_weightMaskOpt;          // option to read and use the weight mask
+
+    /* Add 20170131 schedule sampling */
+    int      m_scheduleSampOpt;       //   
+    int      m_scheduleSampPara;    //
+
+    real_t   m_mdnUVSigThreshold;
+    int      m_mdnSoftMaxGenMethod;
     
     unsigned m_truncSeqLength;
     unsigned m_parallelSequences;
@@ -611,8 +615,6 @@ public:
 
     const bool& outputFromGateLayer() const;
 
-    const int& lrDecayEpoch() const;
-
     const real_t& lrDecayRate() const;
 
     const std::string& mdnDyn() const;
@@ -627,8 +629,6 @@ public:
 
     const int& arRMDNUpdateInterval() const;
     
-    const std::string& clockRNNTimeRes() const;
-
     const int& KLDOutputDataType() const;
 
     const real_t& lrFactor() const;
@@ -654,7 +654,14 @@ public:
     const std::string& probDataDir() const;
 
     const int& aggregateOpt() const;
-    
+
+    const int& scheduleSampOpt() const;
+
+    const int& scheduleSampPara() const;
+
+    const real_t& mdnUVSigThreshold() const;
+
+    const int& mdnSoftMaxGenMethod() const;
 };
 
 

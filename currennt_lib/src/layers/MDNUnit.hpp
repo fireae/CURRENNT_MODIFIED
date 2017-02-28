@@ -177,11 +177,13 @@ namespace layers{
 
 	virtual const std::string& MDNUnitInfor(const int opt);
 
-	virtual void fillFeedBackData(real_vector &fillBuffer, const int bufferDim,
-				      const int dimStart, real_vector &targets);
+	virtual void fillFeedBackData(real_vector &fillBuffer, const int    bufferDim,
+				      const int dimStart,      real_vector &targets,
+				      const int method);
 
 	virtual void fillFeedBackData(real_vector &fillBuffer, const int bufferDim,
-				      const int dimStart, real_vector &targets, const int timeStep);
+				      const int dimStart,      real_vector &targets,
+				      const int timeStep,      const int method);
 
 	virtual int feedBackDim();
 
@@ -237,10 +239,11 @@ namespace layers{
 	virtual bool flagValid();
 
 	virtual void fillFeedBackData(real_vector &fillBuffer, const int bufferDim,
-				      const int dimStart, real_vector &targets);
+				      const int dimStart, real_vector &targets, const int method=0);
 
 	virtual void fillFeedBackData(real_vector &fillBuffer, const int bufferDim,
-				      const int dimStart, real_vector &targets, const int timeStep);
+				      const int dimStart, real_vector &targets, const int timeStep,
+				      const int method=0);
 
 	virtual int feedBackDim();
     };
@@ -255,14 +258,28 @@ namespace layers{
     class MDNUnit_softmax : public MDNUnit<TDevice>
     {
 	typedef typename TDevice::real_vector real_vector;
+	typedef typename TDevice::int_vector  int_vector;
 	typedef typename Cpu::real_vector cpu_real_vector;
 
     protected:
 	real_vector     m_offset;
 	cpu_real_vector m_tmpProb;
+	int_vector      m_quanMerge;   // NOT USED ANYMORE
+	int             m_genMethod;   // Generation method
+	bool            m_uvSigmoid;   // Is this a softmax with hierarchical softmax ?
+	real_t          m_threshold;   // Threshold for hierarchical softmax on U/V
+	
     public:
-	MDNUnit_softmax(int startDim, int endDim, int startDimOut, int endDimOut, 
-			int type, Layer<TDevice> &precedingLayer, int outputSize,
+	MDNUnit_softmax(int  startDim,
+			int  endDim,
+			int  startDimOut,
+			int  endDimOut, 
+			int  type,
+			Layer<TDevice> &precedingLayer,
+			int  outputSize,
+			bool uvSigmoid,
+			int_vector &quanMerge,
+			const real_t &threshold,
 			const int trainable   = MDNUNIT_TYPE_0,
 			const int feedBackOpt = MDNUNIT_FEEDBACK_OPT_0);
 
@@ -293,10 +310,11 @@ namespace layers{
 	virtual const std::string& MDNUnitInfor(const int opt);
 
 	virtual void fillFeedBackData(real_vector &fillBuffer, const int bufferDim,
-				      const int dimStart, real_vector &targets);
+				      const int dimStart, real_vector &targets, const int method=0);
 
 	virtual void fillFeedBackData(real_vector &fillBuffer, const int bufferDim,
-				      const int dimStart, real_vector &targets, const int timeStep);
+				      const int dimStart, real_vector &targets, const int timeStep,
+				      const int method=0);
 
 	virtual int  feedBackDim();
 
@@ -362,10 +380,11 @@ namespace layers{
 	virtual bool flagValid();
 
 	virtual void fillFeedBackData(real_vector &fillBuffer, const int bufferDim,
-				      const int dimStart, real_vector &targets);
+				      const int dimStart, real_vector &targets, const int method=0);
 
 	virtual void fillFeedBackData(real_vector &fillBuffer, const int bufferDim,
-				      const int dimStart, real_vector &targets, const int timeStep);
+				      const int dimStart, real_vector &targets, const int timeStep,
+				      const int method=0);
 
 	virtual int  feedBackDim();
 
@@ -470,10 +489,11 @@ namespace layers{
 	virtual void transformARParameter();
 
 	virtual void fillFeedBackData(real_vector &fillBuffer, const int bufferDim,
-				      const int dimStart, real_vector &targets);
+				      const int dimStart, real_vector &targets, const int method=0);
 
 	virtual void fillFeedBackData(real_vector &fillBuffer, const int bufferDim,
-				      const int dimStart, real_vector &targets, const int timeStep);
+				      const int dimStart, real_vector &targets, const int timeStep,
+				      const int method=0);
 
 	virtual int  feedBackDim();
     };    

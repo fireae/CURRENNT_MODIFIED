@@ -227,12 +227,6 @@ namespace optimizers {
 	    
 	}else{
 	    
-	    // Add 0409 learning weight decay
-	    /*if (this->_checkLRdecay()){
-		m_learningRateDecay = m_learningRateDecay*m_learningRateDecayRate;
-		this->_setLRdecayFalse(); // reset the flag_decay
-	      }
-	    */
 	   
 	    // Update the parameter
 	    internal::UpdateWeightFn_withMask updateWeightFn;
@@ -304,7 +298,7 @@ namespace optimizers {
 		// if mask is utilized
 		if (layer && layer->flagUseWeightMask()){
 		    updateWeightFn.momentum      = m_momentum;
-		    updateWeightFn.learningRate  = m_learningRate*m_learningRateDecay;
+		    updateWeightFn.learningRate  = m_learningRate;
 		    
 		    if (layer->learningRate() >= 0.0)
 			updateWeightFn.learningRate = layer->learningRate();
@@ -327,7 +321,7 @@ namespace optimizers {
 		// if mask is not used
 		}else if(layer){
 		    updateWeightFn2.momentum      = m_momentum;
-		    updateWeightFn2.learningRate  = m_learningRate*m_learningRateDecay;
+		    updateWeightFn2.learningRate  = m_learningRate;
 		    
 		    if (layer->learningRate() >= 0.0)
 			updateWeightFn2.learningRate = layer->learningRate();
@@ -347,7 +341,7 @@ namespace optimizers {
 		// trainable MDN layer
 		}else if(mdnlayer && mdnlayer->flagTrainable()){
 		    updateWeightFn2.momentum     = m_momentum;
-		    updateWeightFn2.learningRate = m_learningRate*m_learningRateDecay;
+		    updateWeightFn2.learningRate = m_learningRate;
 		    //if (layer->learningRate() >= 0.0)
 		    //     updateWeightFn2.learningRate = layer->learningRate();
 		    
@@ -385,24 +379,20 @@ namespace optimizers {
         data_sets::DataSet &testSet, int maxEpochs, int maxEpochsNoBest, 
 	int validateEvery, int testEvery, 
         real_t learningRate, real_t momentum, real_t weLearningRate, 
-	real_t learningRateDecayRate, int decayEpochNM, unsigned optOption)
+	unsigned optOption,
+	real_t adjustLRRate)
         : Optimizer<TDevice>(neuralNetwork, trainingSet, validationSet, testSet, 
-			     maxEpochs, maxEpochsNoBest, validateEvery, testEvery, decayEpochNM,
+			     maxEpochs, maxEpochsNoBest, validateEvery, testEvery,
 			     optOption)
-        , m_learningRate    (learningRate)
-	, m_weLearningRate  (weLearningRate)
-	, m_learningRateDecayRate(learningRateDecayRate)
-        , m_momentum        (momentum)
+        , m_learningRate       (learningRate)
+	, m_learningRateAdjust (adjustLRRate)
+	, m_weLearningRate     (weLearningRate)
+        , m_momentum           (momentum)
     {
         // intialize the weight deltas vectors with zeros
         m_weightDeltas = this->_curWeightUpdates();
         for (size_t i = 0; i < m_weightDeltas.size(); ++i)
             thrust::fill(m_weightDeltas[i].begin(), m_weightDeltas[i].end(), 0);
-	
-	// Add 0409 for decaying the learning rate
-	m_learningRateDecay = 1.0;
-
-	
     }
 
     template <typename TDevice>
@@ -440,11 +430,12 @@ namespace optimizers {
     }
 
     template <typename TDevice>
-    void SteepestDescentOptimizer<TDevice>::adjustLR(int decayTime)
+    void SteepestDescentOptimizer<TDevice>::adjustLR()
     {
-	for(int i =0; i < decayTime; i++)
-	    m_learningRateDecay = m_learningRateDecay*0.1;
-	printf("\tAdjust the learning rate to %e", m_learningRate*m_learningRateDecay);
+	//for(int i =0; i < decayTime; i++)
+	//    m_learningRateDecay = m_learningRateDecay*0.1;
+	//printf("\tAdjust the learning rate to %e", m_learningRate*m_learningRateDecay);
+	m_learningRate *= m_learningRateAdjust;
     }
     
     template <typename TDevice>

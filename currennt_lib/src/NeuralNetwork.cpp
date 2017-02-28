@@ -33,17 +33,25 @@
 #include <cassert>
 
 #include <boost/foreach.hpp>
+#include <boost/random/normal_distribution.hpp>
+#include <boost/random/uniform_real_distribution.hpp>
+#include <boost/random/mersenne_twister.hpp>
 
+#define NN_SCHEDULE_MIN 0.000
 
 template <typename TDevice>
 NeuralNetwork<TDevice>::NeuralNetwork(
-	const helpers::JsonDocument &jsonDoc, int parallelSequences, 
-	int maxSeqLength, int chaDim, int maxTxtLength,
-	int inputSizeOverride, int outputSizeOverride)
+ const helpers::JsonDocument &jsonDoc,
+ int parallelSequences, 
+ int maxSeqLength,
+ int chaDim,
+ int maxTxtLength,
+ int inputSizeOverride,
+ int outputSizeOverride
+ )
 {
     try {
-	
-	
+
         // check the layers and weight sections
         if (!jsonDoc->HasMember("layers"))
             throw std::runtime_error("Missing section 'layers'");
@@ -56,13 +64,12 @@ NeuralNetwork<TDevice>::NeuralNetwork(
         if (jsonDoc->HasMember("weights")) {
             if (!(*jsonDoc)["weights"].IsObject())
                 throw std::runtime_error("Section 'weights' is not an object");
-
             weightsSection = helpers::JsonValue(&(*jsonDoc)["weights"]);
         }
 	
 	int cnt = 0;
 	
-	// Add 1220
+	// Add 1220, support to the FeedBackLayer
 	std::vector<int> feedBacklayerId; // layer Idx for the FeedBackLayer
 	feedBacklayerId.clear();
 	bool flagMDNOutput = false;
@@ -71,8 +78,10 @@ NeuralNetwork<TDevice>::NeuralNetwork(
         // extract the layers
         for (rapidjson::Value::ValueIterator layerChild = layersSection.Begin(); 
 	     layerChild != layersSection.End(); 
-	     ++layerChild, cnt++) {
+	     ++layerChild, cnt++)
+	{
             printf("\nLayer (%d)", cnt);
+	    
 	    // check the layer child type
             if (!layerChild->IsObject())
                 throw std::runtime_error("A layer section in the 'layers' array is not an object");
@@ -85,7 +94,8 @@ NeuralNetwork<TDevice>::NeuralNetwork(
 	    printf(" %s ", layerType.c_str());
 	    
             // override input/output sizes
-            if (inputSizeOverride > 0 && layerType == "input") {
+            if (inputSizeOverride > 0 && layerType == "input")
+	    {
               (*layerChild)["size"].SetInt(inputSizeOverride);
             }
 	    
@@ -98,9 +108,9 @@ NeuralNetwork<TDevice>::NeuralNetwork(
 		(*layerChild)["size"].SetInt(outputSizeOverride);
 		}
 	    */
+	    
             try {
             	layers::Layer<TDevice> *layer;
-		
 		
 		/* Add 02-24 Wang for Residual Network*/
 		/*
@@ -113,22 +123,27 @@ NeuralNetwork<TDevice>::NeuralNetwork(
 		    parallelSequences, maxSeqLength, m_layers.back().get()); */
 		
 		// first layer
-                if (m_layers.empty()){   
+                if (m_layers.empty()){
+		    
 		    if (layerType == "skipadd"           || layerType == "skipini"       || 
 			layerType == "skippara_logistic" || layerType == "skippara_relu" || 
 			layerType == "skippara_tanh"     || 
-			layerType == "skippara_identity"){
+			layerType == "skippara_identity")
+		    {
 			printf("SkipAdd, SkipPara can not be the first hidden layer");
 			throw std::runtime_error("Error in network.jsn: layer type error\n");
 		    }
-		    layer = LayerFactory<TDevice>::createLayer(layerType, &*layerChild, 
-							       weightsSection, parallelSequences, 
-							       maxSeqLength, chaDim, maxTxtLength);
+		    
+		    layer = LayerFactory<TDevice>::createLayer(
+				layerType,     &*layerChild, 
+				weightsSection, parallelSequences, 
+				maxSeqLength,   chaDim,   maxTxtLength);
 
 		}else if(layerType == "skipadd"           || layerType == "skipini"       ||
 			 layerType == "skippara_logistic" || layerType == "skippara_relu" || 
 			 layerType == "skippara_tanh"     || 
-			 layerType == "skippara_identity"){
+			 layerType == "skippara_identity")
+		{
 
 		    // SkipLayers: all the layers that link to the current skip layer
 		    //  here, it includes the last skip layer and the previous normal 
@@ -148,25 +163,26 @@ NeuralNetwork<TDevice>::NeuralNetwork(
 		    
 		    if (layerType == "skipadd" || layerType == "skipini")
 			layer = LayerFactory<TDevice>::createSkipAddLayer(
-							layerType, &*layerChild, weightsSection, 
-							parallelSequences, 
-							maxSeqLength, SkipLayers);
+				  layerType,     &*layerChild,
+				  weightsSection, parallelSequences, 
+				  maxSeqLength,   SkipLayers);
 		    else
 			layer = LayerFactory<TDevice>::createSkipParaLayer(
-							layerType, &*layerChild, weightsSection, 
-							parallelSequences, 
-							maxSeqLength, SkipLayers);
+				  layerType,     &*layerChild,
+				  weightsSection, parallelSequences, 
+				  maxSeqLength,   SkipLayers);
 		    
 		    // add the skipadd layer to Network buffer
 		    m_skipAddLayers.push_back(layer);
 		
 		}else{
-		    // normal layers
+		    // other layers types
                     layer = LayerFactory<TDevice>::createLayer(
-							layerType, &*layerChild, weightsSection, 
-							parallelSequences, 
-							maxSeqLength, chaDim, maxTxtLength, 
-							m_layers.back().get());
+			       layerType,      &*layerChild,
+			       weightsSection, parallelSequences, 
+			       maxSeqLength,   chaDim, maxTxtLength, 
+			       m_layers.back().get());
+		    
 		    if (layerType == "mdn")
 			flagMDNOutput = true;
 		}
@@ -218,17 +234,18 @@ NeuralNetwork<TDevice>::NeuralNetwork(
             }
         }
 	
-	// 
+	// Link the target layer with the feedback layer
 	if (!feedBacklayerId.empty()){
 	    for (size_t i = 0; i<feedBacklayerId.size(); i++){
 		m_layers[feedBacklayerId[i]]->linkTargetLayer(*(m_layers.back().get()));
 	    }
+	    // check the bi-directional rnn
 	    for (size_t i = m_firstFeedBackLayer; i < m_layers.size()-1; i++){
 		if (m_layers[i]->type()==std::string("brnn") ||
 		    m_layers[i]->type()==std::string("blstm"))
 		    throw std::runtime_error(
-				std::string("Error in network.jsn.") +
-				std::string("brnn and blstm can't be used with feedback."));
+			 std::string("Error in network.jsn.") +
+			 std::string("brnn and blstm can't be used with feedback."));
 	    }
 	}
 	
@@ -262,16 +279,19 @@ layers::InputLayer<TDevice>& NeuralNetwork<TDevice>::inputLayer()
     return static_cast<layers::TrainableLayer<TDevice>&>(*m_layers[m_layers.size()-2]);
   }
 */
+
 template <typename TDevice>
 layers::Layer<TDevice>& NeuralNetwork<TDevice>::outputLayer(const int layerID)
 {
-    // default case, the output
+    // default case, the output layer
     int tmpLayerID = layerID;
     if (tmpLayerID < 0)
 	tmpLayerID = m_layers.size()-2;
+    
     // check
     if (tmpLayerID > (m_layers.size()-1))
 	throw std::runtime_error(std::string("Invalid output_tap ID (out of range)"));
+    
     return (*m_layers[tmpLayerID]);
 }
 
@@ -280,9 +300,11 @@ layers::SkipLayer<TDevice>* NeuralNetwork<TDevice>::outGateLayer(const int layer
 {
     // default case, the output
     int tmpLayerID = layerID;
+    
     // check
     if (tmpLayerID > (m_layers.size()-2) || tmpLayerID < 0)
 	throw std::runtime_error(std::string("Invalid gate_output_tap ID (out of range)"));
+    
     return dynamic_cast<layers::SkipLayer<TDevice>*>(m_layers[tmpLayerID].get());
 }
 
@@ -291,8 +313,6 @@ layers::MDNLayer<TDevice>* NeuralNetwork<TDevice>::outMDNLayer()
 {
     return dynamic_cast<layers::MDNLayer<TDevice>*>(m_layers[m_layers.size()-1].get());
 }
-
-
 
 template <typename TDevice>
 layers::PostOutputLayer<TDevice>& NeuralNetwork<TDevice>::postOutputLayer()
@@ -303,45 +323,192 @@ layers::PostOutputLayer<TDevice>& NeuralNetwork<TDevice>::postOutputLayer()
 template <typename TDevice>
 void NeuralNetwork<TDevice>::loadSequences(const data_sets::DataSetFraction &fraction)
 {
-    BOOST_FOREACH (boost::shared_ptr<layers::Layer<TDevice> > &layer, m_layers){
+    BOOST_FOREACH (boost::shared_ptr<layers::Layer<TDevice> > &layer, m_layers)
+    {
         layer->loadSequences(fraction);
-	// Add 20160902, add noise for each input vector
     }
-    
 }
 
+
 template <typename TDevice>
-void NeuralNetwork<TDevice>::computeForwardPass()
+void NeuralNetwork<TDevice>::computeForwardPass(const int curMaxSeqLength,
+						const real_t uttCnt)
 {
-    if (m_firstFeedBackLayer > 0){
-	// for for feedback link
+    // |
+    // |- No feedback, normal forward and recurrent computation
+    // |- Feedback layer exists
+    //    |- Case 0: use only ground truth as feedback data
+    //    |- Case 1: use schedule uniform initialization ( 1/N )
+    //    |- Case 2: use schedule back-off (set to zero)
+    //    |- Case 3: use schedule sampling, soft-vector feedback
+    //    |- Case 4: use schedule sampling, one-hot feedback
+    //
+    
+    const Configuration &config = Configuration::instance();
+
+    // No feedback, normal forward computation
+    if (m_firstFeedBackLayer <= 0){
+	BOOST_FOREACH (boost::shared_ptr<layers::Layer<TDevice> > &layer, m_layers)
+	    layer->computeForwardPass();
+
+    // Other cases, Feedback exists
+    }else {
+	
+	// prepare random numbers
+    	static boost::mt19937 *gen = NULL;
+	if (!gen) {
+	    gen = new boost::mt19937;
+	    gen->seed(config.randomSeed()+98); // any random number
+	}
+	boost::random::uniform_real_distribution<real_t> dist(0, 1);
+
+	// options for schedule sampling
+	int scheduleSampOpt = config.scheduleSampOpt();
+	int scheduleSampPara= config.scheduleSampPara();
+	
+	// Prepare the ground truth 
 	layers::MDNLayer<TDevice> *olm;
 	olm = outMDNLayer();
-	if (olm != NULL) olm->retrieveFeedBackData(); //
-    }
-    
-    BOOST_FOREACH (boost::shared_ptr<layers::Layer<TDevice> > &layer, m_layers)
-        layer->computeForwardPass();
+	if (olm != NULL){
+	    olm->retrieveFeedBackData();
+	}else if (scheduleSampOpt > 0){
+	    printf("\n\n Schedule sampling (back-off) is not implemented for non-MDN network\n\n");
+	    throw std::runtime_error(std::string("To be implemented"));
+	}else{
+	    
+	}
 
+	//
+	int methodCode;
+	switch (scheduleSampOpt){
+	case 0:
+	    {
+		// Case0: use ground truth directly
+		BOOST_FOREACH (boost::shared_ptr<layers::Layer<TDevice> > &layer, m_layers)
+		    layer->computeForwardPass();
+		break;
+	    }
+	case 1:
+	case 2:
+	    {
+		// Case 1 & 2: schedule back-off, using either 1/N (case 1) or zero (case 2)
+		real_t threshold = ((real_t)scheduleSampPara)/100;
+
+		Cpu::real_vector randNum;
+		randNum.reserve(curMaxSeqLength);
+		for (size_t i = 0; i < curMaxSeqLength; ++i){
+		    if (dist(*gen) > threshold){
+			randNum.push_back(0);
+			//printf("h ");
+		    }else{
+			randNum.push_back(1);
+			//printf("m ");
+		    }
+		}
+		// specify the method code
+		methodCode = -1 * ((scheduleSampOpt==1)? 1 : 2);
+		
+		// Kill the feedback data
+		typename TDevice::real_vector temp = randNum;
+		olm->retrieveFeedBackData(temp, methodCode);
+
+		// ComputeForward
+		BOOST_FOREACH (boost::shared_ptr<layers::Layer<TDevice> > &layer, m_layers)
+		    layer->computeForwardPass();
+		break;
+	    }
+	case 3:
+	case 4:
+	    {
+		// Case 3 & 4: use soft vector as feedback (case 3) or one-hot (case 4)
+		real_t sampThreshold;
+		methodCode = ((scheduleSampOpt==3)? 0 : 1);
+		
+		// Forward computation for layers below Feedback
+		int cnt = 0;
+		BOOST_FOREACH (boost::shared_ptr<layers::Layer<TDevice> > &layer, m_layers)
+		{
+		    if (cnt == m_firstFeedBackLayer) break; 
+		    layer->computeForwardPass();
+		    cnt++;
+		}
+		// Determine the threshold 
+		if (scheduleSampPara > 0){
+		    // randomly use the generated sample
+		    //sampThreshold = ((real_t)scheduleSampPara /
+		    // (scheduleSampPara + exp((real_t)uttCnt / scheduleSampPara)));
+		    // sampThreshold = 1.0 - ((real_t)uttCnt/scheduleSampPara);
+		    sampThreshold = pow(scheduleSampPara/100.0, uttCnt);
+		    sampThreshold = ((sampThreshold  < NN_SCHEDULE_MIN) ?
+				     NN_SCHEDULE_MIN : sampThreshold);
+		}else{
+		    sampThreshold = (-1.0 * (real_t)scheduleSampPara / 100.0);
+		}
+
+		// printf("%f %f\n", uttCnt, sampThreshold);
+		// Forward computation for layer above feedback using schedule sampling
+		for (int timeStep = 0; timeStep < curMaxSeqLength; timeStep++){
+
+		    cnt = 0;
+		    BOOST_FOREACH (boost::shared_ptr<layers::Layer<TDevice> > &layer, m_layers)
+		    {
+			if (cnt >= m_firstFeedBackLayer){
+			    layer->prepareStepGeneration(timeStep); 
+			    layer->computeForwardPass(timeStep);    
+			}
+			cnt++;
+		    }
+		    
+		    // 
+		    if (dist(*gen) > sampThreshold){
+			//printf("\n %d HIT", timeStep);
+			if (olm != NULL){
+			    olm->getOutput(timeStep, 0.0001); 
+			    olm->retrieveFeedBackData(timeStep, methodCode);
+			}    
+		    }else{
+			//printf("\n %d MISS", timeStep);
+		    }
+		}
+
+		break;
+	    }
+	}
+    }
 }
 
 template <typename TDevice>
-void NeuralNetwork<TDevice>::computeForwardPass(const int curMaxSeqLength, 
-						const real_t generationOpt)
+void NeuralNetwork<TDevice>::computeForwardPassGen(const int curMaxSeqLength, 
+						   const real_t generationOpt)
 {
     layers::MDNLayer<TDevice> *olm;
+    const Configuration &config = Configuration::instance();
     
+    // no feedback layer, normal computation
     if (m_firstFeedBackLayer < 0){
-	// no feedback layer, normal computation
-	this->computeForwardPass();
+
+	this->computeForwardPass(curMaxSeqLength, -1);
 	// if MDN is available, infer the output, or copy the MDN parameter vector
 	olm = outMDNLayer();
 	if (olm != NULL) olm->getOutput(generationOpt);
-	
-    }else{
-	// feedback layer exists
-	int cnt = 0;
 
+    // feedback layer exists
+    }else{
+
+	static boost::mt19937 *gen = NULL;
+	if (!gen) {
+	    gen = new boost::mt19937;
+	    gen->seed(config.randomSeed()+98); // any random number
+	}
+	boost::random::uniform_real_distribution<real_t> dist(0, 1);
+
+	int scheduleSampOpt = config.scheduleSampOpt();
+	int scheduleSampPara= config.scheduleSampPara();
+	printf("SSAMPOpt: %d, SSAMPPara: %d\n", scheduleSampOpt, scheduleSampPara);
+	
+	int methodCode;
+	real_t sampThreshold;
+	int cnt = 0;
 	// layers below Feedback, use normal computation
 	BOOST_FOREACH (boost::shared_ptr<layers::Layer<TDevice> > &layer, m_layers){
 	    if (cnt == m_firstFeedBackLayer) break; 
@@ -349,6 +516,36 @@ void NeuralNetwork<TDevice>::computeForwardPass(const int curMaxSeqLength,
 	    cnt++;
 	}
 	
+	// determine the sampling parameter
+	switch (scheduleSampOpt){
+	case 0:
+	case 3:
+	    // always uses the soft vector (default option)
+	    sampThreshold  = 1;
+	    methodCode = 0;
+	    break;
+	case 4:
+	    if (scheduleSampPara > 0){
+		sampThreshold = 1;
+		methodCode = 0;
+	    }else{
+		sampThreshold = (-1.0 * (real_t)scheduleSampPara / 100.0);
+		methodCode = 1;
+	    }
+	    
+	    // use the one-hot best
+	    break;
+	case 1:
+	    methodCode = -1;
+	    sampThreshold = ((real_t)scheduleSampPara)/100;
+	    break;					    
+	case 2:
+	    methodCode = -2;
+	    sampThreshold = ((real_t)scheduleSampPara)/100;
+	    break;
+	    //
+	}
+		    
 	// layer above feedback
 	for (int timeStep = 0, cnt = 0; timeStep < curMaxSeqLength; timeStep ++, cnt = 0){
 	    BOOST_FOREACH (boost::shared_ptr<layers::Layer<TDevice> > &layer, m_layers){
@@ -358,13 +555,25 @@ void NeuralNetwork<TDevice>::computeForwardPass(const int curMaxSeqLength,
 		}
 		cnt++;
 	    }
+
+	    
 	    // if the output is MDN, we need to do one step further to get the output
 	    olm = outMDNLayer();
 	    if (olm != NULL){
 		olm->getOutput(timeStep, generationOpt); // infer the output from MDN
-		olm->retrieveFeedBackData(timeStep);
+		if (dist(*gen) < sampThreshold){
+		    olm->retrieveFeedBackData(timeStep, 0);
+		}else{
+		    olm->retrieveFeedBackData(timeStep, methodCode);
+		    printf("%d ", timeStep);
+		}
+		
 	    }
 	}
+	/*olm = outMDNLayer();
+	if (olm != NULL){	
+	    olm->getOutput(generationOpt);
+	    }*/
     }
 }
 
@@ -710,9 +919,11 @@ void NeuralNetwork<TDevice>::reInitWeight()
 }
 
 template <typename TDevice>
-void NeuralNetwork<TDevice>::initOutputForMDN(const data_sets::DataSetMV &datamv)
+void NeuralNetwork<TDevice>::initOutputForMDN(
+ const data_sets::DataSetMV &datamv)
 {
-    BOOST_FOREACH (boost::shared_ptr<layers::Layer<TDevice> > &layer, m_layers){
+    BOOST_FOREACH (boost::shared_ptr<layers::Layer<TDevice> > &layer,
+		   m_layers){
 	layers::MDNLayer<TDevice>* mdnLayer = 
 	    dynamic_cast<layers::MDNLayer<TDevice>*>(layer.get());
 	if (mdnLayer){
@@ -727,9 +938,11 @@ void NeuralNetwork<TDevice>::initOutputForMDN(const data_sets::DataSetMV &datamv
 }
 
 template <typename TDevice>
-void NeuralNetwork<TDevice>::readMVForOutput(const data_sets::DataSetMV &datamv)
+void NeuralNetwork<TDevice>::readMVForOutput(
+ const data_sets::DataSetMV &datamv)
 {
-    BOOST_FOREACH (boost::shared_ptr<layers::Layer<TDevice> > &layer, m_layers){
+    BOOST_FOREACH (boost::shared_ptr<layers::Layer<TDevice> > &layer,
+		   m_layers){
 	layers::PostOutputLayer<TDevice>* outputLayer = 
 	    dynamic_cast<layers::PostOutputLayer<TDevice>*>(layer.get());
 	if (outputLayer){
@@ -740,9 +953,9 @@ void NeuralNetwork<TDevice>::readMVForOutput(const data_sets::DataSetMV &datamv)
 }
 
 
-/* importWeights from pre-trained model
-   initialization for each layer is controled by ctrStr
-*/
+/* importWeights
+ * import weights from pre-trained model
+ */
 template <typename TDevice>
 void NeuralNetwork<TDevice>::importWeights(const helpers::JsonDocument &jsonDoc, 
 					   const std::string &ctrStr)
@@ -751,7 +964,7 @@ void NeuralNetwork<TDevice>::importWeights(const helpers::JsonDocument &jsonDoc,
 	// Read in the control vector, a sequence of 1 0
 	Cpu::int_vector tempctrStr;
 	tempctrStr.resize(m_layers.size(), 1);
-	if (ctrStr.size() > 0 && ctrStr.size()!=m_layers.size()){
+	if (ctrStr.size() > 0 && ctrStr.size()!= m_layers.size()){
 	    throw std::runtime_error("Length of trainedParameterCtr unequal #layer.");
 	}else if (ctrStr.size()>0){
 	    for (int i=0; i<ctrStr.size(); i++)
@@ -760,7 +973,7 @@ void NeuralNetwork<TDevice>::importWeights(const helpers::JsonDocument &jsonDoc,
 	    // nothing
 	}
 	
-	// Prepare the weight parameter
+	// Read in the weight parameter as a whole
 	helpers::JsonValue weightsSection;
         if (jsonDoc->HasMember("weights")) {
             if (!(*jsonDoc)["weights"].IsObject())
@@ -770,11 +983,13 @@ void NeuralNetwork<TDevice>::importWeights(const helpers::JsonDocument &jsonDoc,
 	    throw std::runtime_error("No weight section found");
 	}
 
-	// Read in the parameter
+	// Assign parameter to each layer
 	int cnt=0;
-	BOOST_FOREACH (boost::shared_ptr<layers::Layer<TDevice> > &layer, m_layers){
+	BOOST_FOREACH (boost::shared_ptr<layers::Layer<TDevice> > &layer, m_layers)
+	{
 	    layers::TrainableLayer<TDevice>* Layer = 
 		dynamic_cast<layers::TrainableLayer<TDevice>*>(layer.get());
+	    
 	    // Read in the parameter for a hidden layer
 	    if (Layer && tempctrStr[cnt] > 0){
 		printf("\n\t(%d) ", cnt);
@@ -789,6 +1004,7 @@ void NeuralNetwork<TDevice>::importWeights(const helpers::JsonDocument &jsonDoc,
 		}else{
 		   Layer->reReadWeight(weightsSection, Layer->size(), tempctrStr[cnt]); 
 		}*/
+		
 	    // Read in the parameter for MDN layer with trainable link
 	    }else if(tempctrStr[cnt] > 0){
 		layers::MDNLayer<TDevice>* mdnlayer = 
@@ -797,14 +1013,17 @@ void NeuralNetwork<TDevice>::importWeights(const helpers::JsonDocument &jsonDoc,
 		    printf("\n\t(%d) ", cnt);
 		    mdnlayer->reReadWeight(weightsSection, tempctrStr[cnt]);
 		}
+		
+	    // This layer is skipped
 	    }else if(Layer){
 		printf("\n\t(%d) not read weight for layer %s", cnt, Layer->name().c_str());
 	    }else{
-		// skip
+		// other cases
 	    }
 	    cnt++;
 	}
 	printf("\tdone\n\n");
+	
     }catch (const std::exception &e){
 	printf("\nTo read weight from another trained network (refer to net2):\n");
 	printf("\n\t1. prepare network.jsn (net1). Set the name of the layer to be initialized\n");

@@ -42,14 +42,13 @@ namespace optimizers {
 
     private:
         real_t       m_learningRate;
-        real_t       m_learningRateAda;
+	real_t       m_learningRateAdjust;
         const real_t m_momentum;
         std::vector<real_vector> m_weightDeltas;
 
         /* Add 16-02-22 Wang: for WE updating */
 	const real_t m_weLearningRate;
-	real_t       m_learningRateDecay;
-	const real_t m_learningRateDecayRate; // to decay the learning rate
+	
 
     protected:
         virtual void _updateWeights(int fracLength);
@@ -85,9 +84,8 @@ namespace optimizers {
             real_t learningRate,
             real_t momentum,
 	    real_t weLearningRate,
-	    real_t learningRateDecayRate,
-	    int decayEpochNM,
-	    unsigned optOption
+	    unsigned optOption,
+	    real_t adjustLRRate
             );
 
         /**
@@ -109,7 +107,7 @@ namespace optimizers {
         virtual void importParameter(const helpers::JsonDocument &jsonDoc);
 	
 	// 0511 Wang: adjust the learning rate
-	virtual void adjustLR(int decayTime);
+	virtual void adjustLR();
 	
 	virtual void changeLR(real_t newLR);
 

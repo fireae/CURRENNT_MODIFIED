@@ -212,7 +212,7 @@ namespace {
             return offset;
         }
     };    
-    
+
     struct CalculateExpFn
     {
 	// Calculate the exponential exp()
@@ -238,6 +238,40 @@ namespace {
 	    const real_t *data = NNOutput + (NNOutputSize * timeStep ) + dimStep;
 	    real_t b = helpers::safeExp(*data - offset[timeStep]);
 	    return b;
+	}
+    };
+
+    struct CalculateExpFn_UVSigmoid
+    {
+	// the first dimension as sigmoid part
+	// Calculate the exponential exp()
+	// Note: specifically for softmax and mixture weight
+	//       exp(x - offset) will be calulated given offset
+	int NNOutputSize;         // see CalculateOffsetFn above 
+	int startD;
+	int endD;
+	const real_t *offset;     // the average of the [max, min]
+	const char *patTypes;
+	const real_t *NNOutput;
+
+	__host__ __device__ real_t operator() (const int &outputIdx) const
+	{
+	    // timeStep: which frame is it?
+	    // dimStep:  which dimension in the NN output side this frame ?
+	    const int timeStep = outputIdx / (endD - startD);
+	    const int dimStep  = (outputIdx % (endD - startD)) + startD;
+	    
+	    if (patTypes[timeStep] == PATTYPE_NONE)
+		return SKIP_MARKER;
+
+	    const real_t *data = NNOutput + (NNOutputSize * timeStep ) + dimStep;
+	    if (dimStep > startD){
+		// normal softmax part
+		return helpers::safeExp(*data - offset[timeStep]);
+	    }else{
+		// sigmoid part
+		return activation_functions::Logistic::fn(*data);
+	    }
 	}
     };
 
@@ -287,8 +321,8 @@ namespace {
             int patIdx = t.get<1>();
 
             // check if the pattern belongs to a sequence
-            if (t.get<0>() == SKIP_MARKER)
-                return;
+            //if (t.get<0>() == SKIP_MARKER)
+            //  return;
 	    
 	    // point to the start of the continuous memory space
             const real_t *offOutputs = &outputs[patIdx * dimSize];
@@ -298,6 +332,30 @@ namespace {
             for (int i = 0; i < dimSize; ++i)
                 sum += offOutputs[i];
 
+            // store the result
+            t.get<0>() = sum;
+        }
+    };
+
+    struct SumUpOutputsFn_UVSigmoid
+    {
+	// SumUp the value over the data of in a continuous memory space
+	// For example, used in sum_k exp(w_k) for mixture weight normalization
+	// Results, will be saved to the first argument (real_t& )
+	
+        int dimSize;            // sum over this number of dimension
+        const real_t *outputs;  // data
+        __host__ __device__ void operator() (const thrust::tuple<real_t&, int> &t) const
+        {
+            // unpack the tuple
+            int patIdx = t.get<1>();
+
+	    // point to the start of the continuous memory space
+            const real_t *offOutputs = &outputs[patIdx * dimSize];
+	    // sum up the outputs
+            real_t sum = 0;
+            for (int i = 1; i < dimSize; ++i)
+                sum += offOutputs[i];
             // store the result
             t.get<0>() = sum;
         }
@@ -333,6 +391,36 @@ namespace {
         }
     };
     
+    struct NormalizeOutputsFn_UVSigmoid
+    {
+        int layerSize;
+        const real_t *normFacts; // the data for normalization
+
+        __host__ __device__ void operator() (const thrust::tuple<real_t&, int> &t) const
+        {
+            // unpack the tuple
+            int outputIdx = t.get<1>();
+
+            // calculate the pattern index
+            int patIdx = outputIdx / layerSize;
+	    int dimIdx = outputIdx % layerSize;
+
+	    if (dimIdx == 0) // skip the sigmoid part
+		return;
+	    
+            // check if we can stop the calculation
+            real_t normFact = normFacts[patIdx];
+            if (normFact == SKIP_MARKER)
+                return;
+
+            // calculate the normalized value
+            real_t x = t.get<0>() / normFact;
+	    
+            // store the result
+            t.get<0>() = x;
+        }
+    };
+
 
     struct CopyMean
     {
@@ -457,7 +545,8 @@ namespace {
 	int     layerSizeOut;
 	int     startDOut;
 	int     accessBound;  //
-
+	bool    uvSigmoid;
+	
 	real_t *outputBuff;   // save the results here
 	real_t *output;       // targets data
 	real_t *prob;   // mdn parameter (softmax)
@@ -466,17 +555,36 @@ namespace {
         __host__ __device__ void operator() (const thrust::tuple<real_t&, const int&> &values) const
         {
 	    const int outputIdx = values.get<1>();
-	    
-	    int Idx = (outputIdx * layerSize +
-		       (int)(*(output + (outputIdx * layerSizeOut + startDOut))));
 
-	    // calculate the CEE
-            if (Idx < accessBound && Idx >=0){
-                real_t targetProb = helpers::max(helpers::NumericLimits<real_t>::min(), prob[Idx]);
-		values.get<0>() = -1*log(targetProb);
+	    // target results (index in one dimension)
+	    int dim = (int)(*(output + (outputIdx * layerSizeOut + startDOut)));
+	    
+	    // pointer to m_paraVec (time * dimension + dim)
+	    int Idx = outputIdx * layerSize + dim;    
+	    
+	    real_t targetProb = 0.0;
+	    if (Idx < accessBound && Idx >=0){
+		if (uvSigmoid){
+		    if (dim > 0)
+			// voiced frame
+			targetProb = helpers::max(helpers::NumericLimits<real_t>::min(),
+						  prob[Idx] * prob[Idx - dim]);
+		    else
+			// unvoiced frame
+			// Idx - dim points to the sigmoid dimension of this frame
+			targetProb = helpers::max(helpers::NumericLimits<real_t>::min(),
+						  (real_t)1.0 - prob[Idx - dim]);
+		
+		}else{
+		    // calculate the CEE
+		    targetProb = helpers::max(helpers::NumericLimits<real_t>::min(),
+					      prob[Idx]);
+		}
 	    }else{
-                values.get<0>() = 0.0;
-            }
+		targetProb = 1.0;
+	    }
+	    
+	    values.get<0>() = -1*log(targetProb);
         }
     };
 
@@ -492,6 +600,8 @@ namespace {
 	int bufS;
 
 	int paraDim;
+
+	bool uvSigmoid;
 	// from 1 to timesteps
         __host__ __device__ void operator() (const thrust::tuple<real_t&, const int&> &values) const
         {
@@ -506,14 +616,151 @@ namespace {
         }
     };
 
+    struct quantizationMerge
+    {
+	real_t *buffer;
+	int     bufDim;
+	int     bufS;
+	int     paraDim;
+	int    *quanOpt;
+	int     quanInter;
+	bool    uvSigmoid;
+        __host__ __device__ void operator() (const thrust::tuple<real_t&, const int&> &values) const
+        {
+	    const int frameIdx = values.get<1>();
+	    int accumIdx = 0;
+	    if (quanInter > 1){
+		for (int i = 0; i < quanInter/2; i++){
+		    accumIdx = quanOpt[i*2];
+		    for (int dimIdx = (accumIdx + 1); dimIdx < quanOpt[i*2+1]; dimIdx++){
+			buffer[frameIdx * bufDim + bufS + accumIdx] +=
+			    buffer[frameIdx * bufDim + bufS + dimIdx];
+			buffer[frameIdx * bufDim + bufS + dimIdx] = 0.0;
+		    }
+		}
+	    }else if (quanInter == 1){
+		int tmp = (uvSigmoid)?1:0;
+		for (int i = tmp; i < paraDim; i++){
+		    if ((i-tmp) % quanOpt[0]){
+			accumIdx = i - ((i-tmp) % quanOpt[0]);
+			buffer[frameIdx * bufDim + bufS + accumIdx] +=
+			    buffer[frameIdx * bufDim + bufS + i];
+			buffer[frameIdx * bufDim + bufS + i] = 0.0;
+		    }
+		}
+	    }
+        }
+    };
+
+    struct setSoftVectorSoftmax
+    {
+	real_t *source;
+	real_t *target;
+
+	int     srcDim;
+	int     srcS;     
+
+	int     copyDim;  
+
+	int     tarDim;
+	int     tarS;     
+	bool    uvSigmoid;
+	real_t  threshold;
+	__host__ __device__ void operator() (const thrust::tuple<real_t&, int> &t) const
+	{
+	    int outputIdx = t.get<1>();
+	    int timeIdx   = outputIdx / copyDim;
+	    int dimIdx    = outputIdx % copyDim;
+
+	    if (uvSigmoid){
+		/* Strategy1 : 
+		if (dimIdx == 0){
+		    target[timeIdx * tarDim + tarS] = (1 - source[timeIdx * srcDim + srcS]);
+		    // The dimension for unvoiced should cleared if this frame
+		    // is more liekly to be voiced 
+		    if (target[timeIdx * tarDim + tarS] < threshold)
+			target[timeIdx * tarDim + tarS]  = 0.0;
+		}else{
+		    if (source[timeIdx * srcDim + srcS] > threshold)
+			target[timeIdx * tarDim + tarS + dimIdx]=
+			    source[timeIdx * srcDim + srcS + dimIdx];
+		    else 
+			target[timeIdx * tarDim + tarS + dimIdx]= 0.0;
+		}*/
+		if (dimIdx == 0){
+		    target[timeIdx * tarDim + tarS] = (1 - source[timeIdx * srcDim + srcS]);
+		}else{
+		    target[timeIdx * tarDim + tarS + dimIdx] =
+			source[timeIdx * srcDim + srcS + dimIdx] * source[timeIdx * srcDim + srcS];
+		}
+	    }else{
+		target[timeIdx * tarDim + tarS + dimIdx] =
+		    source[timeIdx * srcDim + srcS + dimIdx];
+	    }
+	}
+    };
+
+    // Definition for the softmax Errors
+    struct killOneHotVectorSoftmax
+    {
+	real_t *source;
+	int srcDim;
+	int srcS;
+
+	real_t *buffer;
+	int bufDim;
+	int bufS;
+	int parall;
+	int paraDim;
+	int method; 
+	// from 1 to timesteps
+        __host__ __device__ void operator() (const thrust::tuple<real_t&, const int&> &values) const
+        {
+	    const int outputIdx = values.get<1>() / paraDim;
+	    const int dimIdx    = values.get<1>() % paraDim;
+
+	    // 0: kill it, set the probability to equal
+	    if (source[(outputIdx/parall)] < 0.5)
+		if (method == 1)
+		    buffer[outputIdx * bufDim + bufS + dimIdx] = 1.0/paraDim;
+		else
+		    buffer[outputIdx * bufDim + bufS + dimIdx] = 0;
+        }
+    };
+
+    // Definition for the softmax Errors
+    struct killOneHotVectorSoftmaxOneTime
+    {
+
+	real_t *buffer;
+	int bufDim;
+	int bufS;
+	int parall;
+	int paraDim;
+	int method; 
+	// from 1 to timesteps
+        __host__ __device__ void operator() (const thrust::tuple<real_t&, const int&> &values) const
+        {
+	    const int outputIdx = values.get<1>() / paraDim;
+	    const int dimIdx    = values.get<1>() % paraDim;
+
+	    // 0: kill it, set the probability to equal
+	    if (method == 1)
+		buffer[outputIdx * bufDim + bufS + dimIdx] = 1.0/paraDim;
+	    else
+		buffer[outputIdx * bufDim + bufS + dimIdx] = 0;
+        }
+    };
+
     // Definition for the back-propagation of softmax
     struct ComputeSoftMaxBP
     {
-	int layerSizeIn;        //
-	int layerSizeOut;     // 
-	int startD;
-	int startDOut;
-	int paraDim;
+	int     layerSizeIn;        //
+	int     layerSizeOut;     // 
+	int     startD;
+	int     startDOut;
+	int     paraDim;
+	bool    uvSigmoid;
 	
 	real_t *errors;       // the error buffer of the previous layer
 	real_t *targetData;   // the ground truth value of target
@@ -532,19 +779,38 @@ namespace {
 	    if (patTypes[timeStep] == PATTYPE_NONE)
 		return 0.0;
 
-	    // target data (1-dimensional data)
-	    const real_t *data = targetData + (layerSizeOut * timeStep) + startDOut;
-	    bool hitflag = ((((*data) - dimStep)*((*data) - dimStep)) < 0.0001);
-
+	    // target index
+	    const real_t *data     = targetData + (layerSizeOut * timeStep) + startDOut;
 	    // position of the gradient data in the NN output layer side
-	    const int pos_error= layerSizeIn * timeStep + dimStep + startD;
+	    const int    pos_error = layerSizeIn * timeStep + dimStep + startD;
+	    // probability of this slot
+	    real_t      *probptr   = prob + outputIdx;
+	    bool         hitflag;
 	    
-	    real_t *probptr    = prob + outputIdx;
-	    
-	    // calculate the gradient
-	    // note: we assume the target data is a real number that has not been normalized
-	    errors[pos_error] = (hitflag)?(-1+(*probptr)):((*probptr));
-	    //return (hitflag)?(-1+(*probptr)):((*probptr));
+	    if (uvSigmoid){
+		hitflag = ((*data) > 0);   // Whether the target is voiced ?
+		if (dimStep == 0){
+		    // this is the sigmoid dimension
+		    errors[pos_error] = (hitflag)?(-1+(*probptr)):(*probptr);
+		}else{
+		    // this is the softmax dimension
+		    if (hitflag){
+			// hit this dimension ?
+			hitflag = ((((*data) - dimStep)*((*data) - dimStep)) < 0.0001);
+			errors[pos_error] = (hitflag)?(-1+(*probptr)):((*probptr));
+		    }else{
+			// this is an unvoiced frame
+			errors[pos_error] = 0;
+		    }
+		}
+	    }else{
+		// target data (1-dimensional data)
+		hitflag = ((((*data) - dimStep)*((*data) - dimStep)) < 0.0001);
+		// calculate the gradient
+		// note: we assume the target data is a real number that has not been normalized
+		errors[pos_error] = (hitflag)?(-1+(*probptr)):((*probptr));
+		//return (hitflag)?(-1+(*probptr)):((*probptr));
+	    }
 	    return 0.0;
 
 	}
@@ -1834,6 +2100,7 @@ namespace {
         int paradim;
 	int layerSizeOut;
 	int startDOut;
+	int genMethod;
 	real_t *output;       // targets data
 	const real_t *prob;   // mdn parameter (softmax)
 
@@ -1843,26 +2110,88 @@ namespace {
 	    int     outputIdx   = t.get<1>();
 	    real_t *targetClass = (output + (outputIdx*layerSizeOut+startDOut));
 	    
-	    real_t temp = 0.0;	    
-	    int pos = 0;
-	    for (int i = 0; i<paradim; i++){
-		pos = outputIdx * paradim + i;
-		if (prob[pos]>temp){
-		    temp = prob[pos];
-		    *targetClass = (real_t)i;
+	    real_t temp = 0.0; // temp for the largest prob
+	    int pos     = 0;   // idx of the prob
+
+	    if (genMethod==0){
+		// Pick the one-hot vector
+		for (int i = 0; i<paradim; i++){
+		    pos = outputIdx * paradim + i;
+		    if (prob[pos]>temp){
+			temp = prob[pos];
+			*targetClass = (real_t)i;
+		    }
 		}
+	    }else{
+		// SoftMerge
+		*targetClass = 0;
+		int j = 0;
+		for (int i = 0; i<paradim; i++){
+		    pos = outputIdx * paradim + i;
+		    if (prob[pos]>temp){
+			temp = prob[pos];
+			j = i;
+		    }
+		    *targetClass = (*targetClass) + prob[pos]*(real_t)i;
+		}
+		if (j==0){
+		    *targetClass = (real_t)j;
+		}
+		// for plain softmax, special care should be taken to handle the first dimension
+		
 	    }
         }
     };
 
+    struct SamplingSoftmax_UVSigmoid
+    {
+        int paradim;
+	int layerSizeOut;
+	int startDOut;
+	int genMethod;
+	real_t *output;       // targets data
+	const real_t *prob;   // mdn parameter (softmax)
+	real_t threshold;
+	// from 1 to timesteps
+        __host__ __device__ void operator() (const thrust::tuple<const real_t&, int> &t) const
+        {
+	    int     outputIdx   = t.get<1>();
+	    real_t *targetClass = (output + (outputIdx * layerSizeOut + startDOut));
+	    
+	    real_t temp = 0.0;	    
+	    int    pos  = 0;
+
+	    if (prob[outputIdx * paradim] < threshold){
+		*targetClass = (real_t)0.0;
+	    }else{
+		if (genMethod == 0){
+		    for (int i = 1; i<paradim; i++){
+			pos = outputIdx * paradim + i;
+			if (prob[pos]>temp){
+			    temp = prob[pos];
+			    *targetClass = (real_t)i;
+			}
+		    }
+		}else{
+		    *targetClass = 0;
+		    for (int i = 1; i<paradim; i++){
+			pos = outputIdx * paradim + i;
+			*targetClass = (*targetClass) + prob[pos]*(real_t)i;	
+		    }
+		}
+	    }
+        }
+    };
+    
     struct GetParameterSoftmax
     {
-	int NNOutputSize;
-	int paraDim;
-	int startD;
-	int endD;
+	int  NNOutputSize;
+	int  paraDim;
+	int  startD;
+	int  endD;
+	bool uvSigmoid;
 	const char *patTypes;
-	real_t *NNOutput;
+	real_t     *NNOutput;
 
         __host__ __device__ void operator() (const thrust::tuple<real_t&, int> &t) const
         {
@@ -1873,7 +2202,9 @@ namespace {
 	    int dimIdx     = outputIdx % paraDim;
 
 	    real_t *data = NNOutput + (timestep * NNOutputSize + dimIdx) + startD;
-	    *data = prob;
+	    // uvSigmoid == True && dimIdx == 0, this is the sigmoid probability 
+	    //  that this frame is voiced. 1-prob makes it the prob. to be unvoiced
+	    *data = (uvSigmoid && (dimIdx == 0))?(1-prob):prob;
         }
     };
 
@@ -2143,9 +2474,12 @@ namespace {
 
 	int tarDim;
 	int tarS;     // the first dimension to store the first dimension from source
+
+	real_t ratio;
 	
 	__host__ __device__ void operator() (const thrust::tuple<real_t&, int> &t) const
 	{
+	    /* 2017/02/22 For probablity modification
 	    int timeIdx    = t.get<1>();
 	    real_t probSum = 0.0;
 	    for (int i =0; i < copyDim; i++){
@@ -2157,6 +2491,13 @@ namespace {
 		    target[timeIdx * tarDim + tarS + i] =
 			(target[timeIdx * tarDim + tarS + i] +
 			 source[timeIdx * srcDim + srcS + i]) / probSum;
+			 }*/
+	    int timeIdx    = t.get<1>();
+	    target[timeIdx * copyDim] = (ratio     * target[timeIdx * copyDim] +
+					 (1-ratio) * (1-source[timeIdx * copyDim]));
+	    for (int i =1; i < copyDim; i++){
+		target[timeIdx * copyDim + i] = (ratio     * target[timeIdx * copyDim + i] +
+						 (1-ratio) * source[timeIdx * copyDim + i]);
 	    }
 	}
     };
@@ -2396,14 +2737,15 @@ namespace layers {
 
     template <typename TDevice>
     void MDNUnit<TDevice>::fillFeedBackData(real_vector &fillBuffer, const int bufferDim,
-					    const int dimStart, real_vector &targets)
+					    const int dimStart, real_vector &targets,
+					    const int method)
     {	
     }
 
     template <typename TDevice>
     void MDNUnit<TDevice>::fillFeedBackData(real_vector &fillBuffer, const int bufferDim,
 					    const int dimStart, real_vector &targets,
-					    const int timeStep)
+					    const int timeStep, const int method)
     {	
     }
 
@@ -2794,7 +3136,8 @@ namespace layers {
 
     template <typename TDevice>
     void MDNUnit_sigmoid<TDevice>::fillFeedBackData(real_vector &fillBuffer, const int bufferDim,
-						    const int dimStart, real_vector &targets)
+						    const int dimStart, real_vector &targets,
+						    const int method)
     {
 	internal::CopyPart fn;
 	fn.target = helpers::getRawPointer(fillBuffer);
@@ -2829,8 +3172,8 @@ namespace layers {
 
     template <typename TDevice>
     void MDNUnit_sigmoid<TDevice>::fillFeedBackData(real_vector &fillBuffer, const int bufferDim,
-					    const int dimStart, real_vector &targets,
-					    const int timeStep)
+						    const int dimStart, real_vector &targets,
+						    const int timeStep, const int method)
     {
 	internal::CopyPart fn;
 	fn.target = helpers::getRawPointer(fillBuffer);
@@ -2875,12 +3218,26 @@ namespace layers {
     template <typename TDevice>
     MDNUnit_softmax<TDevice>::MDNUnit_softmax(
 	int startDim, int endDim, int startDimOut, int endDimOut, int type, 
-	Layer<TDevice> &precedingLayer, int outputSize, const int trainable,
+	Layer<TDevice> &precedingLayer, int outputSize, bool uvSigmoid,
+	int_vector &quanMerge, const real_t &threshold,
+	const int trainable,
 	const int feedBackOpt)
         : MDNUnit<TDevice>(startDim, endDim, startDimOut, endDimOut, 
 			   type, endDim-startDim, precedingLayer,
 			   outputSize, trainable, feedBackOpt)
-    {   
+    {
+	// whether to use the UV hierarchical structure
+	m_uvSigmoid = uvSigmoid;
+
+	// the option to merge quantized data
+	m_quanMerge = quanMerge;
+	for (int i =0; i<m_quanMerge.size(); i++){
+	    if (m_quanMerge[i] < 0 || m_quanMerge[i]>=(endDim-startDim)){
+		throw std::runtime_error("Softmax quanMerge larger than dimension");
+	    }
+	}
+	m_threshold = threshold;
+	
 	// special strategy for vec is unecessary
 	m_offset.resize(this->m_precedingLayer.patTypes().size(), 0.0);
 	
@@ -2889,8 +3246,11 @@ namespace layers {
 	if ((endDimOut - startDimOut) != 1){
 	    throw std::runtime_error("Check MDN configure. SoftMax => one dimensional target");
 	}
+
 	
-	//throw std::runtime_error("WARNING: code on softmax is incomplete\n");
+	const Configuration &config = Configuration::instance();
+	m_genMethod = config.mdnSoftMaxGenMethod();
+	
 	
     }
 
@@ -2965,8 +3325,92 @@ namespace layers {
     template <typename TDevice>
     void MDNUnit_softmax<TDevice>::computeForward()
     {
-	// calculate the offset 
-	{{
+
+	if (m_uvSigmoid){
+	    // With the first dimension as sigmoid
+	    
+	    // calculate the offset
+	    {{
+		internal::CalculateOffsetFn fn;
+		fn.NNOutputSize = this->m_precedingLayer.size();
+		fn.startD       = this->m_startDim + 1;
+		fn.endD         = this->m_endDim;
+		fn.patTypes     = helpers::getRawPointer(this->m_precedingLayer.patTypes());
+		fn.NNoutputs    = helpers::getRawPointer(this->m_precedingLayer.outputs());
+
+		int n =this->m_precedingLayer.curMaxSeqLength();
+		n = n*this->m_precedingLayer.parallelSequences();
+		
+		thrust::transform(thrust::counting_iterator<int>(0),
+				  thrust::counting_iterator<int>(0)+n,
+				  this->m_offset.begin(), fn);
+	    }}	    
+
+	    // calculate the Exp
+	    {{
+		internal::CalculateExpFn_UVSigmoid fn;
+		fn.NNOutputSize = this->m_precedingLayer.size();
+		fn.startD    = this->m_startDim;
+		fn.endD      = this->m_endDim;
+		fn.patTypes  = helpers::getRawPointer(this->m_precedingLayer.patTypes());
+		fn.NNOutput  = helpers::getRawPointer(this->m_precedingLayer.outputs());
+		fn.offset    = helpers::getRawPointer(this->m_offset);
+		
+		int n = this->m_precedingLayer.curMaxSeqLength();
+		n = n * this->m_precedingLayer.parallelSequences();
+		n = n * (this->m_paraDim);
+		
+		thrust::transform(
+		   thrust::counting_iterator<int>(0),
+		   thrust::counting_iterator<int>(0)+n,
+		   this->m_paraVec.begin(),
+		   fn);
+	     }}
+
+	    // sum up
+	    {{
+		internal::SumUpOutputsFn_UVSigmoid fn;
+		fn.dimSize = this->m_paraDim;
+		fn.outputs = helpers::getRawPointer(this->m_paraVec);
+
+		int n =this->m_precedingLayer.curMaxSeqLength();
+		n = n*this->m_precedingLayer.parallelSequences();
+		// n = n*(this->m_paraDim);
+		
+		thrust::for_each(
+		   thrust::make_zip_iterator(
+				thrust::make_tuple(this->m_offset.begin(),  
+						   thrust::counting_iterator<int>(0))),
+		   thrust::make_zip_iterator(
+				thrust::make_tuple(this->m_offset.begin()+n,  
+						   thrust::counting_iterator<int>(0)+n)),
+		   fn);
+	    }}
+	
+	    // normalize
+	    {{
+		internal::NormalizeOutputsFn_UVSigmoid fn;
+		fn.layerSize = this->m_paraDim;
+		fn.normFacts = helpers::getRawPointer(this->m_offset);
+	    
+		int n =this->m_precedingLayer.curMaxSeqLength();
+		n = n*this->m_precedingLayer.parallelSequences();
+		n = n*this->m_paraDim;
+
+		thrust::for_each(
+		thrust::make_zip_iterator(
+			 thrust::make_tuple(this->m_paraVec.begin(),
+					    thrust::counting_iterator<int>(0))),
+                thrust::make_zip_iterator(
+			 thrust::make_tuple(this->m_paraVec.begin()+n, 
+					    thrust::counting_iterator<int>(0)+n)),
+                fn);
+	    }}
+	    
+	}else{
+	
+	    // calculate the offset 
+	    {{
 		internal::CalculateOffsetFn fn;
 		fn.NNOutputSize = this->m_precedingLayer.size();
 		fn.startD       = this->m_startDim;
@@ -2983,31 +3427,31 @@ namespace layers {
 		   thrust::counting_iterator<int>(0)+n,
 		   this->m_offset.begin(),
 		   fn);
-	}}	    
+	    }}	    
 
-	// calculate the Exp
-	{{
+	    // calculate the Exp
+	    {{
 		internal::CalculateExpFn fn;
 		fn.NNOutputSize = this->m_precedingLayer.size();
 		fn.startD    = this->m_startDim;
 		fn.endD      = this->m_endDim;
 		fn.patTypes  = helpers::getRawPointer(this->m_precedingLayer.patTypes());
-		fn.NNOutput    = helpers::getRawPointer(this->m_precedingLayer.outputs());
+		fn.NNOutput  = helpers::getRawPointer(this->m_precedingLayer.outputs());
 		fn.offset    = helpers::getRawPointer(this->m_offset);
 		
-		int n =this->m_precedingLayer.curMaxSeqLength();
-		n = n*this->m_precedingLayer.parallelSequences();
-		n = n*(this->m_paraDim);
+		int n = this->m_precedingLayer.curMaxSeqLength();
+		n = n * this->m_precedingLayer.parallelSequences();
+		n = n * (this->m_paraDim);
 		
 		thrust::transform(
 		   thrust::counting_iterator<int>(0),
 		   thrust::counting_iterator<int>(0)+n,
 		   this->m_paraVec.begin(),
 		   fn);
-	}}
+	     }}
 
-	// sum up
-	{{
+	    // sum up
+	    {{
 		internal::SumUpOutputsFn fn;
 		fn.dimSize = this->m_paraDim;
 		fn.outputs = helpers::getRawPointer(this->m_paraVec);
@@ -3024,28 +3468,28 @@ namespace layers {
 				thrust::make_tuple(this->m_offset.begin()+n,  
 						   thrust::counting_iterator<int>(0)+n)),
 		   fn);
-	}}
+	    }}
 	
-	// normalize
-        {{
-            internal::NormalizeOutputsFn fn;
-            fn.layerSize = this->m_paraDim;
-            fn.normFacts = helpers::getRawPointer(this->m_offset);
+	    // normalize
+	    {{
+		internal::NormalizeOutputsFn fn;
+		fn.layerSize = this->m_paraDim;
+		fn.normFacts = helpers::getRawPointer(this->m_offset);
 	    
-	    int n =this->m_precedingLayer.curMaxSeqLength();
-	    n = n*this->m_precedingLayer.parallelSequences();
-	    n = n*this->m_paraDim;
+		int n =this->m_precedingLayer.curMaxSeqLength();
+		n = n*this->m_precedingLayer.parallelSequences();
+		n = n*this->m_paraDim;
 
-            thrust::for_each(
+		thrust::for_each(
 		thrust::make_zip_iterator(
 			 thrust::make_tuple(this->m_paraVec.begin(),
 					    thrust::counting_iterator<int>(0))),
                 thrust::make_zip_iterator(
 			 thrust::make_tuple(this->m_paraVec.begin()+n, 
 					    thrust::counting_iterator<int>(0)+n)),
-                fn
-                );
-        }}
+                fn);
+	    }}
+	}
     }
 
 
@@ -3055,8 +3499,68 @@ namespace layers {
 	int ts = timeStep * this->m_precedingLayer.parallelSequences();
 	int te =       ts + this->m_precedingLayer.parallelSequences();
 
-	// calculate the offset 
-	{{
+	if (m_uvSigmoid){
+	    
+	    // calculate the offset 
+	    {{
+		internal::CalculateOffsetFn fn;
+		fn.NNOutputSize = this->m_precedingLayer.size();
+		fn.startD       = this->m_startDim + 1;
+		fn.endD         = this->m_endDim;
+		fn.patTypes     = helpers::getRawPointer(this->m_precedingLayer.patTypes());
+		fn.NNoutputs    = helpers::getRawPointer(this->m_precedingLayer.outputs());
+		thrust::transform(thrust::counting_iterator<int>(0) + ts, 
+				  thrust::counting_iterator<int>(0) + te,
+				  this->m_offset.begin() + ts, fn);
+	     }}	    
+	
+	    // calculate the Exp
+	    {{
+		internal::CalculateExpFn_UVSigmoid fn;
+		fn.NNOutputSize = this->m_precedingLayer.size();
+		fn.startD       = this->m_startDim;
+		fn.endD         = this->m_endDim;
+		fn.patTypes     = helpers::getRawPointer(this->m_precedingLayer.patTypes());
+		fn.NNOutput     = helpers::getRawPointer(this->m_precedingLayer.outputs());
+		fn.offset       = helpers::getRawPointer(this->m_offset);
+		thrust::transform(thrust::counting_iterator<int>(0) + ts * this->m_paraDim,
+				  thrust::counting_iterator<int>(0) + te * this->m_paraDim,
+				  this->m_paraVec.begin()           + ts * this->m_paraDim, fn);
+	    }}
+	
+	    // sum up
+	    {{
+		internal::SumUpOutputsFn_UVSigmoid fn;
+		fn.dimSize = this->m_paraDim;
+		fn.outputs = helpers::getRawPointer(this->m_paraVec);
+		thrust::for_each(
+		   thrust::make_zip_iterator(
+				thrust::make_tuple(this->m_offset.begin() + ts,  
+						   thrust::counting_iterator<int>(0)+ts)),
+		   thrust::make_zip_iterator(
+				thrust::make_tuple(this->m_offset.begin() + te,  
+						   thrust::counting_iterator<int>(0)+te)),
+		   fn);
+	     }}
+
+	    // normalize
+	    {{
+		internal::NormalizeOutputsFn_UVSigmoid fn;
+		fn.layerSize = this->m_paraDim;
+		fn.normFacts = helpers::getRawPointer(this->m_offset);
+		thrust::for_each(
+		thrust::make_zip_iterator(
+		   thrust::make_tuple(this->m_paraVec.begin() + ts*this->m_paraDim,
+				      thrust::counting_iterator<int>(0)+ts*this->m_paraDim)),
+                thrust::make_zip_iterator(
+		   thrust::make_tuple(this->m_paraVec.begin() + te*this->m_paraDim, 
+				      thrust::counting_iterator<int>(0)+te*this->m_paraDim)),
+                fn);
+	    }}
+	    
+	}else{
+	    // calculate the offset 
+	    {{
 		internal::CalculateOffsetFn fn;
 		fn.NNOutputSize = this->m_precedingLayer.size();
 		fn.startD       = this->m_startDim;
@@ -3066,10 +3570,10 @@ namespace layers {
 		thrust::transform(thrust::counting_iterator<int>(0) + ts, 
 				  thrust::counting_iterator<int>(0) + te,
 				  this->m_offset.begin() + ts, fn);
-	}}	    
+	     }}	    
 	
-	// calculate the Exp
-	{{
+	    // calculate the Exp
+	    {{
 		internal::CalculateExpFn fn;
 		fn.NNOutputSize = this->m_precedingLayer.size();
 		fn.startD    = this->m_startDim;
@@ -3080,10 +3584,10 @@ namespace layers {
 		thrust::transform(thrust::counting_iterator<int>(0) + ts * this->m_paraDim,
 				  thrust::counting_iterator<int>(0) + te * this->m_paraDim,
 				  this->m_paraVec.begin()           + ts * this->m_paraDim, fn);
-	}}
+	    }}
 	
-	// sum up
-	{{
+	    // sum up
+	    {{
 		internal::SumUpOutputsFn fn;
 		fn.dimSize = this->m_paraDim;
 		fn.outputs = helpers::getRawPointer(this->m_paraVec);
@@ -3095,14 +3599,14 @@ namespace layers {
 				thrust::make_tuple(this->m_offset.begin() + te,  
 						   thrust::counting_iterator<int>(0)+te)),
 		   fn);
-	}}
+	     }}
 
-	// normalize
-        {{
-            internal::NormalizeOutputsFn fn;
-            fn.layerSize = this->m_paraDim;
-            fn.normFacts = helpers::getRawPointer(this->m_offset);
-            thrust::for_each(
+	    // normalize
+	    {{
+		internal::NormalizeOutputsFn fn;
+		fn.layerSize = this->m_paraDim;
+		fn.normFacts = helpers::getRawPointer(this->m_offset);
+		thrust::for_each(
 		thrust::make_zip_iterator(
 		   thrust::make_tuple(this->m_paraVec.begin() + ts*this->m_paraDim,
 				      thrust::counting_iterator<int>(0)+ts*this->m_paraDim)),
@@ -3110,7 +3614,8 @@ namespace layers {
 		   thrust::make_tuple(this->m_paraVec.begin() + te*this->m_paraDim, 
 				      thrust::counting_iterator<int>(0)+te*this->m_paraDim)),
                 fn);
-        }}
+	    }}
+	}
 
     }
 
@@ -3123,18 +3628,20 @@ namespace layers {
     template <typename TDevice>
     void MDNUnit_softmax<TDevice>::getOutput(const real_t para,real_vector &targets)
     {
-	{{    
-	    internal::SamplingSoftmax fn;
-	    fn.paradim = this->m_paraDim;
-	    fn.startDOut = this->m_startDimOut;
-	    fn.output    = helpers::getRawPointer(targets);
-	    fn.prob      = helpers::getRawPointer(this->m_paraVec);
-	    fn.layerSizeOut = this->m_layerSizeTar;
-	    
-	    int n = this->m_precedingLayer.curMaxSeqLength();
-	    n = n*this->m_precedingLayer.parallelSequences();
+	if (m_uvSigmoid){
+	    {{    
+		internal::SamplingSoftmax_UVSigmoid fn;
+		fn.paradim      = this->m_paraDim;
+		fn.startDOut    = this->m_startDimOut;
+		fn.output       = helpers::getRawPointer(targets);
+		fn.prob         = helpers::getRawPointer(this->m_paraVec);
+		fn.layerSizeOut = this->m_layerSizeTar;
+		fn.threshold    = m_threshold;
+		fn.genMethod    = this->m_genMethod;
+		int n = this->m_precedingLayer.curMaxSeqLength();
+		n = n*this->m_precedingLayer.parallelSequences();
 		
-	    thrust::for_each(
+		thrust::for_each(
 		thrust::make_zip_iterator(
 		   thrust::make_tuple(this->m_paraVec.begin(),
 				      thrust::counting_iterator<int>(0))),
@@ -3142,7 +3649,30 @@ namespace layers {
 		   thrust::make_tuple(this->m_paraVec.begin()+n,
 				      thrust::counting_iterator<int>(0)+n)),
 		fn);
-	}}
+	    }}
+	    
+	}else{
+	    {{    
+		internal::SamplingSoftmax fn;
+		fn.paradim   = this->m_paraDim;
+		fn.startDOut = this->m_startDimOut;
+		fn.output    = helpers::getRawPointer(targets);
+		fn.prob      = helpers::getRawPointer(this->m_paraVec);
+		fn.layerSizeOut = this->m_layerSizeTar;
+		fn.genMethod    = this->m_genMethod;		
+		int n = this->m_precedingLayer.curMaxSeqLength();
+		n = n*this->m_precedingLayer.parallelSequences();
+		
+		thrust::for_each(
+		thrust::make_zip_iterator(
+		   thrust::make_tuple(this->m_paraVec.begin(),
+				      thrust::counting_iterator<int>(0))),
+		thrust::make_zip_iterator(
+		   thrust::make_tuple(this->m_paraVec.begin()+n,
+				      thrust::counting_iterator<int>(0)+n)),
+		fn);
+	    }}
+	}
 	
     }
 
@@ -3150,18 +3680,20 @@ namespace layers {
     void MDNUnit_softmax<TDevice>::getOutput(const int timeStep, 
 					     const real_t para,real_vector &targets)
     {
-	{{    
-	    internal::SamplingSoftmax fn;
-	    fn.paradim = this->m_paraDim;
-	    fn.startDOut = this->m_startDimOut;
-	    fn.output    = helpers::getRawPointer(targets);
-	    fn.prob      = helpers::getRawPointer(this->m_paraVec);
-	    fn.layerSizeOut = this->m_layerSizeTar;
-	    
-	    int fs = timeStep * this->m_precedingLayer.parallelSequences();
-	    int fe = fs       + this->m_precedingLayer.parallelSequences();
+	if (m_uvSigmoid){
+	    {{    
+		internal::SamplingSoftmax_UVSigmoid fn;
+		fn.paradim   = this->m_paraDim;
+		fn.startDOut = this->m_startDimOut;
+		fn.output    = helpers::getRawPointer(targets);
+		fn.prob      = helpers::getRawPointer(this->m_paraVec);
+		fn.layerSizeOut = this->m_layerSizeTar;
+		fn.threshold = m_threshold;
+		fn.genMethod    = this->m_genMethod;		
+		int fs = timeStep * this->m_precedingLayer.parallelSequences();
+		int fe = fs       + this->m_precedingLayer.parallelSequences();
 
-	    thrust::for_each(
+		thrust::for_each(
 		thrust::make_zip_iterator(
 		   thrust::make_tuple(this->m_paraVec.begin()+fs,
 				      thrust::counting_iterator<int>(0)+fs)),
@@ -3169,7 +3701,30 @@ namespace layers {
 		   thrust::make_tuple(this->m_paraVec.begin()+fe,
 				      thrust::counting_iterator<int>(0)+fe)),
 		fn);
-	}}
+	    }}
+	}else{
+	
+	    {{    
+		internal::SamplingSoftmax fn;
+		fn.paradim   = this->m_paraDim;
+		fn.startDOut = this->m_startDimOut;
+		fn.output    = helpers::getRawPointer(targets);
+		fn.prob      = helpers::getRawPointer(this->m_paraVec);
+		fn.layerSizeOut = this->m_layerSizeTar;
+		fn.genMethod    = this->m_genMethod;	    
+		int fs = timeStep * this->m_precedingLayer.parallelSequences();
+		int fe = fs       + this->m_precedingLayer.parallelSequences();
+
+		thrust::for_each(
+		thrust::make_zip_iterator(
+		   thrust::make_tuple(this->m_paraVec.begin()+fs,
+				      thrust::counting_iterator<int>(0)+fs)),
+		thrust::make_zip_iterator(
+		   thrust::make_tuple(this->m_paraVec.begin()+fe,
+				      thrust::counting_iterator<int>(0)+fe)),
+		fn);
+	    }}
+	}
     }
 
     template <typename TDevice>
@@ -3185,7 +3740,7 @@ namespace layers {
 		fn.endD         = this->m_endDim;
 		fn.patTypes     = helpers::getRawPointer(this->m_precedingLayer.patTypes());
 		fn.NNOutput     = targets;
-
+		fn.uvSigmoid    = m_uvSigmoid;
 
 		int n =this->m_precedingLayer.curMaxSeqLength();
 		n = n*this->m_precedingLayer.parallelSequences();
@@ -3205,7 +3760,8 @@ namespace layers {
     void MDNUnit_softmax<TDevice>::getParameter(const int timeStep, real_t *targets)
     {
 	int fs = timeStep * this->m_precedingLayer.parallelSequences() * this->m_paraDim;
-	int fe =       fs + this->m_precedingLayer.parallelSequences() * this->m_paraDim;	
+	int fe =       fs + this->m_precedingLayer.parallelSequences() * this->m_paraDim;
+	
 	{{
 		internal::GetParameterSoftmax fn;
 		fn.NNOutputSize = this->m_precedingLayer.size();
@@ -3214,6 +3770,8 @@ namespace layers {
 		fn.endD         = this->m_endDim;
 		fn.patTypes     = helpers::getRawPointer(this->m_precedingLayer.patTypes());
 		fn.NNOutput     = targets;
+		fn.uvSigmoid    = m_uvSigmoid;
+		
 		thrust::for_each(
 			 thrust::make_zip_iterator(
 			     thrust::make_tuple(this->m_paraVec.begin()+fs, 
@@ -3238,6 +3796,7 @@ namespace layers {
 	    fn.output       = helpers::getRawPointer(targets);
 	    fn.prob         = helpers::getRawPointer(this->m_paraVec);
 	    fn.outputBuff   = helpers::getRawPointer(this->m_offset);
+	    fn.uvSigmoid    = m_uvSigmoid;
 	    int n = this->m_precedingLayer.curMaxSeqLength();
 	    n = n*this->m_precedingLayer.parallelSequences();
 	    
@@ -3274,16 +3833,16 @@ namespace layers {
 		fn.paraDim      = this->m_endDim - this->m_startDim;
 		fn.layerSizeOut = this->m_layerSizeTar;
 		fn.layerSizeIn  = this->m_precedingLayer.size();
-
+		fn.uvSigmoid    = m_uvSigmoid;
 
 		fn.errors      = helpers::getRawPointer(this->m_precedingLayer.outputErrors());
 		fn.patTypes    = helpers::getRawPointer(this->m_precedingLayer.patTypes());
 		fn.targetData  = helpers::getRawPointer(targets);
 		fn.prob        = helpers::getRawPointer(this->m_paraVec);
 
-		int n =this->m_precedingLayer.curMaxSeqLength();
-		n = n*this->m_precedingLayer.parallelSequences();
-		n = n*this->m_paraDim;
+		int n = this->m_precedingLayer.curMaxSeqLength();
+		n = n * this->m_precedingLayer.parallelSequences();
+		n = n * this->m_paraDim;
 		real_vector tmp(n, -1.0);
 		thrust::transform(thrust::counting_iterator<int>(0),
 				  thrust::counting_iterator<int>(0)+n,
@@ -3308,22 +3867,27 @@ namespace layers {
 
     template <typename TDevice>
     void MDNUnit_softmax<TDevice>::fillFeedBackData(real_vector &fillBuffer, const int bufferDim,
-						    const int dimStart, real_vector &targets)
+						    const int dimStart, real_vector &targets,
+						    const int method)
     {
-	
-	if (this->m_feedBackType == MDNUNIT_FEEDBACK_OPT_0 ||
-	    this->m_feedBackType == MDNUNIT_FEEDBACK_OPT_1){
-	    /* Fatal error:
-	       setOneHotVectorSoftmax forgets to set other dimensions to zero
-	     */
-	    internal::setOneHotVectorSoftmax fn;
-	    fn.source  = helpers::getRawPointer(targets);
+
+	// Method < 0: used to schedule killing
+	if (method < 0){
+	    // used to 'kill' the feedback data by setting the feedback as uniform vectors
+	    // assume the feedback vector has been set in &fillBuffer
+	    internal::killOneHotVectorSoftmax fn;
+	    fn.source  = helpers::getRawPointer(targets); // a vector of 0/1 to kill
 	    fn.srcDim  = this->m_layerSizeTar;
 	    fn.srcS    = this->m_startDimOut;
 	    fn.buffer  = helpers::getRawPointer(fillBuffer);
 	    fn.bufDim  = bufferDim;
-	    fn.bufS    = dimStart;
+
 	    fn.paraDim = this->m_paraDim;
+	    fn.parall  = this->m_precedingLayer.parallelSequences();
+	    
+	    fn.method  = -1 * method;
+	    fn.bufS    = dimStart;
+	    
 	    int n = this->m_precedingLayer.curMaxSeqLength();
 	    n = n * this->m_precedingLayer.parallelSequences() * this->m_paraDim;
 	    thrust::for_each(
@@ -3334,17 +3898,73 @@ namespace layers {
 			thrust::make_tuple(this->m_paraVec.begin() + n, 
 					   thrust::counting_iterator<int>(0) + n)),
 		fn);
+
+	// Method > 0: normal 
 	}else{
-	    internal::CopyPart fn;
-	    fn.target = helpers::getRawPointer(fillBuffer);
-	    fn.tarDim = bufferDim;
-	    fn.tarS   = dimStart;
-	    fn.source = helpers::getRawPointer(this->m_paraVec);
-	    fn.srcDim = this->m_paraDim;
-	    fn.srcS   = 0;
-	    fn.copyDim= this->m_paraDim;
+	
+	    if (this->m_feedBackType == MDNUNIT_FEEDBACK_OPT_0 ||
+		this->m_feedBackType == MDNUNIT_FEEDBACK_OPT_1){
+		/* Fatal error:
+		   setOneHotVectorSoftmax forgets to set other dimensions to zero
+		*/
+		internal::setOneHotVectorSoftmax fn;
+		fn.source  = helpers::getRawPointer(targets);
+		fn.srcDim  = this->m_layerSizeTar;
+		fn.srcS    = this->m_startDimOut;
+		fn.buffer  = helpers::getRawPointer(fillBuffer);
+		fn.bufDim  = bufferDim;
+		fn.bufS    = dimStart;
+		fn.paraDim = this->m_paraDim;
+		fn.uvSigmoid = m_uvSigmoid;
+		int n = this->m_precedingLayer.curMaxSeqLength();
+		n = n * this->m_precedingLayer.parallelSequences() * this->m_paraDim;
+		thrust::for_each(
+		thrust::make_zip_iterator(
+			thrust::make_tuple(this->m_paraVec.begin(), 
+					   thrust::counting_iterator<int>(0))),
+		thrust::make_zip_iterator(
+			thrust::make_tuple(this->m_paraVec.begin() + n, 
+					   thrust::counting_iterator<int>(0) + n)),
+		fn);
+	    }else{
+		internal::setSoftVectorSoftmax fn;
+		fn.target    = helpers::getRawPointer(fillBuffer);
+		fn.tarDim    = bufferDim;
+		fn.tarS      = dimStart;
+		fn.source    = helpers::getRawPointer(this->m_paraVec);
+		fn.srcDim    = this->m_paraDim;
+		fn.srcS      = 0;
+		fn.copyDim   = this->m_paraDim;
+		fn.uvSigmoid = m_uvSigmoid;
+		fn.threshold = m_threshold;
+		int n = this->m_precedingLayer.curMaxSeqLength();
+		n = n * this->m_precedingLayer.parallelSequences() * fn.copyDim;
+		
+		thrust::for_each(
+		thrust::make_zip_iterator(
+			thrust::make_tuple(this->m_paraVec.begin(), 
+					   thrust::counting_iterator<int>(0))),
+		thrust::make_zip_iterator(
+			thrust::make_tuple(this->m_paraVec.begin() + n, 
+					   thrust::counting_iterator<int>(0) + n)),
+		fn);
+	    }
+	}
+
+	if (m_quanMerge.size()){
+	    // merge the result
+	    internal::quantizationMerge fn;
+	    fn.buffer    = helpers::getRawPointer(fillBuffer);
+	    fn.bufDim    = bufferDim;
+	    fn.bufS      = dimStart;
+	    fn.paraDim   = this->m_paraDim;
+	    fn.quanOpt   = helpers::getRawPointer(m_quanMerge);
+	    fn.quanInter = m_quanMerge.size();
+	    fn.uvSigmoid = m_uvSigmoid;
 	    int n = this->m_precedingLayer.curMaxSeqLength();
-	    n = n * this->m_precedingLayer.parallelSequences() * fn.copyDim ;
+	    n = n * this->m_precedingLayer.parallelSequences();
+
+	    
 	    thrust::for_each(
 		thrust::make_zip_iterator(
 			thrust::make_tuple(this->m_paraVec.begin(), 
@@ -3353,19 +3973,27 @@ namespace layers {
 			thrust::make_tuple(this->m_paraVec.begin() + n, 
 					   thrust::counting_iterator<int>(0) + n)),
 		fn);
+	    /*Cpu::real_vector temp2 = fillBuffer;
+	    for (int i = 0; i<128*400; i++){
+		if ((i%128)==0) printf("%3d: ",i)/128;
+		if (temp2[i]>0.2) printf("1 ");
+		else printf("  ");
+		if ((i%128)==127) printf("\n");
+		}*/
+
 	}
     }
 
     template <typename TDevice>
     void MDNUnit_softmax<TDevice>::fillFeedBackData(real_vector &fillBuffer, const int bufferDim,
-					    const int dimStart, real_vector &targets,
-					    const int timeStep)
+						    const int dimStart, real_vector &targets,
+						    const int timeStep, const int method)
     {
 	int ts = timeStep * this->m_precedingLayer.parallelSequences();
 	int te = ts + this->m_precedingLayer.parallelSequences();
-	
-	if (this->m_feedBackType == MDNUNIT_FEEDBACK_OPT_0){
-	    internal::CopyPart fn;
+
+	if (method <= 0){
+	    internal::setSoftVectorSoftmax fn;
 	    fn.target = helpers::getRawPointer(fillBuffer);
 	    fn.tarDim = bufferDim;
 	    fn.tarS   = dimStart;
@@ -3373,7 +4001,8 @@ namespace layers {
 	    fn.srcDim = this->m_paraDim;
 	    fn.srcS   = 0;
 	    fn.copyDim= this->m_paraDim;
-	    
+	    fn.uvSigmoid = m_uvSigmoid;
+	    fn.threshold = 0.5; //m_threshold;
 	    thrust::for_each(
 		thrust::make_zip_iterator(
 			thrust::make_tuple(this->m_paraVec.begin() + ts*fn.copyDim, 
@@ -3382,8 +4011,30 @@ namespace layers {
 			thrust::make_tuple(this->m_paraVec.begin() + te*fn.copyDim, 
 					   thrust::counting_iterator<int>(0)+te*fn.copyDim)),
 		fn);
+
+	    if (method < 0){
+	    // used to 'kill' the feedback data by setting the feedback as uniform vectors
+	    // assume the feedback vector has been set in &fillBuffer
+	    internal::killOneHotVectorSoftmaxOneTime fn;
+	    fn.buffer  = helpers::getRawPointer(fillBuffer);
+	    fn.bufDim  = bufferDim;
+
+	    fn.paraDim = this->m_paraDim;
+	    fn.parall  = this->m_precedingLayer.parallelSequences();
 	    
-	}else{
+	    fn.method  = -1 * method;
+	    fn.bufS    = dimStart;
+	    
+	    thrust::for_each(
+	      thrust::make_zip_iterator(
+		thrust::make_tuple(this->m_paraVec.begin() + ts*this->m_paraDim, 
+				   thrust::counting_iterator<int>(0) + ts*this->m_paraDim)),
+	      thrust::make_zip_iterator(
+		thrust::make_tuple(this->m_paraVec.begin() + te*this->m_paraDim, 
+				   thrust::counting_iterator<int>(0) + te*this->m_paraDim)),
+		fn);
+	    }
+	}else if (method == 1){
 	    internal::setOneHotVectorSoftmax fn;
 	    fn.source = helpers::getRawPointer(targets);
 	    fn.srcDim = this->m_layerSizeTar;
@@ -3392,22 +4043,50 @@ namespace layers {
 	    fn.bufDim = bufferDim;
 	    fn.bufS   = dimStart;
 	    fn.paraDim= this->m_paraDim;
+	    fn.uvSigmoid = m_uvSigmoid;
 	    thrust::for_each(
 		thrust::make_zip_iterator(
-			thrust::make_tuple(this->m_paraVec.begin() + ts * this->m_paraDim, 
-					   thrust::counting_iterator<int>(0)+ ts*this->m_paraDim)),
+		   thrust::make_tuple(this->m_paraVec.begin() + ts * this->m_paraDim, 
+				      thrust::counting_iterator<int>(0)+ ts*this->m_paraDim)),
 		thrust::make_zip_iterator(
-			thrust::make_tuple(this->m_paraVec.begin() + te * this->m_paraDim, 
-					   thrust::counting_iterator<int>(0)+ te*this->m_paraDim)),
-		fn);
-	    
+		   thrust::make_tuple(this->m_paraVec.begin() + te * this->m_paraDim, 
+				      thrust::counting_iterator<int>(0)+ te*this->m_paraDim)),
+		fn);   
 	}
+
+	if (m_quanMerge.size()){
+	    // merge the result
+	    internal::quantizationMerge fn;
+	    fn.buffer    = helpers::getRawPointer(fillBuffer);
+	    fn.bufDim    = bufferDim;
+	    fn.bufS      = dimStart;
+	    fn.paraDim   = this->m_paraDim;
+	    fn.quanOpt   = helpers::getRawPointer(m_quanMerge);
+	    fn.quanInter = m_quanMerge.size();
+	    fn.uvSigmoid = m_uvSigmoid;
+	    
+	    thrust::for_each(
+		thrust::make_zip_iterator(
+			thrust::make_tuple(this->m_paraVec.begin() + ts, 
+					   thrust::counting_iterator<int>(0) + ts)),
+		thrust::make_zip_iterator(
+			thrust::make_tuple(this->m_paraVec.begin() + te, 
+					   thrust::counting_iterator<int>(0) + te)),
+		fn);
+	}
+
     }
 
     template <typename TDevice>
     int MDNUnit_softmax<TDevice>::feedBackDim()
     {
 	return (this->m_endDim - this->m_startDim);
+	/*if (m_quanMerge.size()){
+	    // for U/V sigmoid, the first dimension should not be merged
+	    return m_quanMerge.size()/2 + (m_uvSigmoid?1:0);
+	}else{
+	    
+	}*/
     }
 
     template <typename TDevice>
@@ -3417,7 +4096,8 @@ namespace layers {
     {
 	int ts = timeStep * this->m_precedingLayer.parallelSequences();
 	int te = ts + this->m_precedingLayer.parallelSequences();
-	
+
+	/* 2017/02/22 Method for shift the probability vector for feedback
 	if (this->m_feedBackType == MDNUNIT_FEEDBACK_OPT_0){
 	    internal::ProbBiasSoftmax fn;
 	    fn.target = helpers::getRawPointer(secondOutput);
@@ -3438,6 +4118,27 @@ namespace layers {
 					   thrust::counting_iterator<int>(0)+te)),
 		fn);
 	    
+		}*/
+	if (bufferDim == 0 && dimStart == 0){
+	    internal::ProbBiasSoftmax fn;
+	    fn.target = helpers::getRawPointer(this->m_paraVec);
+	    fn.tarDim = bufferDim;
+	    fn.tarS   = dimStart;
+	    
+	    fn.source = helpers::getRawPointer(biasDataVec);
+	    fn.srcDim = bufferDim;
+	    fn.srcS   = dimStart;
+	    fn.copyDim= this->m_paraDim;
+	    fn.ratio  = 0.5;
+	    thrust::for_each(
+		thrust::make_zip_iterator(
+			thrust::make_tuple(this->m_paraVec.begin() + ts, 
+					   thrust::counting_iterator<int>(0)+ts)),
+		thrust::make_zip_iterator(
+			thrust::make_tuple(this->m_paraVec.begin() + te, 
+					   thrust::counting_iterator<int>(0)+te)),
+		fn);
+	    		
 	}
     }
 
@@ -4759,7 +5460,8 @@ namespace layers {
 
     template <typename TDevice>
     void MDNUnit_mixture<TDevice>::fillFeedBackData(real_vector &fillBuffer, const int bufferDim,
-						    const int dimStart, real_vector &targets)
+						    const int dimStart, real_vector &targets,
+						    const int method)
     {
 	internal::CopyPart fn;
 	fn.target = helpers::getRawPointer(fillBuffer);
@@ -4798,7 +5500,7 @@ namespace layers {
     template <typename TDevice>
     void MDNUnit_mixture<TDevice>::fillFeedBackData(real_vector &fillBuffer, const int bufferDim,
 					    const int dimStart, real_vector &targets,
-					    const int timeStep)
+						    const int timeStep, const int method)
     {
 	internal::CopyPart fn;
 	fn.target = helpers::getRawPointer(fillBuffer);
@@ -5922,7 +6624,8 @@ namespace layers {
             template <typename TDevice>
     void MDNUnit_mixture_dyn<TDevice>::fillFeedBackData(real_vector &fillBuffer,
 							const int bufferDim,
-							const int dimStart, real_vector &targets)
+							const int dimStart, real_vector &targets,
+							const int method)
     {
 	internal::CopyPart fn;
 	fn.target = helpers::getRawPointer(fillBuffer);
@@ -5962,7 +6665,8 @@ namespace layers {
     void MDNUnit_mixture_dyn<TDevice>::fillFeedBackData(real_vector &fillBuffer,
 							const int bufferDim,
 							const int dimStart, real_vector &targets,
-							const int timeStep)
+							const int timeStep,
+							const int method)
     {
 	internal::CopyPart fn;
 	fn.target = helpers::getRawPointer(fillBuffer);

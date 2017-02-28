@@ -119,6 +119,10 @@ namespace layers {
 	 */
 	virtual real_vector& secondOutputs(const bool flagTrain);
 
+	// export
+	virtual void exportLayer(const helpers::JsonValue &layersArray, 
+				 const helpers::JsonAllocator &allocator) const;
+
 
     };
 
