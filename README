@@ -17,7 +17,12 @@ New features added:
 4. Autoregressive output layer, with both real and complex poles in the AR model
 
 5. Multi-stream network (based on weight mask)
-  
+   
+6. Output feedback loops (for Quantized F0 model)
+
+7. Batch normalization
+   (simply add "batchnorm": 1 to feedforward layers in network.jsn)
+
 Other features:
 1. initialize selected layers using a trained network
 2. AdaGrad

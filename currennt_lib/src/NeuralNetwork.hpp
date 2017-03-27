@@ -114,6 +114,8 @@ public:
      */
     void loadSequences(const data_sets::DataSetFraction &fraction);
 
+    void restoreTarget(const data_sets::DataSetFraction &fraction);
+    
     /**
      * Computes the forward pass
      */

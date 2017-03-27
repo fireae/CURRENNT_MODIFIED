@@ -27,6 +27,7 @@
 
 #include <boost/shared_ptr.hpp>
 #include <vector>
+
 /******************************************************************************************//**
  * Factory class for creating layers
  *

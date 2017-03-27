@@ -16,6 +16,7 @@
  * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
  * GNU General Public License for more details.
  *
+ *
  * You should have received a copy of the GNU General Public License
  * along with CURRENNT.  If not, see <http://www.gnu.org/licenses/>.
  *****************************************************************************/
@@ -27,7 +28,8 @@
 #include "layers/PostOutputLayer.hpp"
 #include "layers/FeedBackLayer.hpp"
 #include "helpers/JsonClasses.hpp"
-
+#include "MacroDefine.hpp"
+#include "helpers/misFuncs.hpp"
 #include <vector>
 #include <stdexcept>
 #include <cassert>
@@ -37,7 +39,6 @@
 #include <boost/random/uniform_real_distribution.hpp>
 #include <boost/random/mersenne_twister.hpp>
 
-#define NN_SCHEDULE_MIN 0.000
 
 template <typename TDevice>
 NeuralNetwork<TDevice>::NeuralNetwork(
@@ -52,6 +53,9 @@ NeuralNetwork<TDevice>::NeuralNetwork(
 {
     try {
 
+	//
+	const Configuration &config = Configuration::instance();
+	
         // check the layers and weight sections
         if (!jsonDoc->HasMember("layers"))
             throw std::runtime_error("Missing section 'layers'");
@@ -78,8 +82,8 @@ NeuralNetwork<TDevice>::NeuralNetwork(
         // extract the layers
         for (rapidjson::Value::ValueIterator layerChild = layersSection.Begin(); 
 	     layerChild != layersSection.End(); 
-	     ++layerChild, cnt++)
-	{
+	     ++layerChild, cnt++){
+	    
             printf("\nLayer (%d)", cnt);
 	    
 	    // check the layer child type
@@ -92,11 +96,13 @@ NeuralNetwork<TDevice>::NeuralNetwork(
 	    
             std::string layerType = (*layerChild)["type"].GetString();
 	    printf(" %s ", layerType.c_str());
-	    
+
             // override input/output sizes
-            if (inputSizeOverride > 0 && layerType == "input")
-	    {
-              (*layerChild)["size"].SetInt(inputSizeOverride);
+            if (inputSizeOverride > 0 && layerType == "input"){
+		// with WE 
+		if (config.weUpdate() && config.trainingMode())
+		    inputSizeOverride += (config.weDim() - 1);
+		(*layerChild)["size"].SetInt(inputSizeOverride);
             }
 	    
 	    /*  Does not work yet, need another way to identify a) postoutput layer (last!) and 
@@ -329,6 +335,17 @@ void NeuralNetwork<TDevice>::loadSequences(const data_sets::DataSetFraction &fra
     }
 }
 
+template <typename TDevice>
+void NeuralNetwork<TDevice>::restoreTarget(const data_sets::DataSetFraction &fraction)
+{
+    const Configuration &config = Configuration::instance();
+
+    if (config.scheduleSampOpt() == NN_FEEDBACK_SC_SOFT ||
+	config.scheduleSampOpt() == NN_FEEDBACK_SC_MAXONEHOT){
+        m_layers[m_layers.size()-1]->loadSequences(fraction);
+    }
+}
+
 
 template <typename TDevice>
 void NeuralNetwork<TDevice>::computeForwardPass(const int curMaxSeqLength,
@@ -372,7 +389,7 @@ void NeuralNetwork<TDevice>::computeForwardPass(const int curMaxSeqLength,
 	if (olm != NULL){
 	    olm->retrieveFeedBackData();
 	}else if (scheduleSampOpt > 0){
-	    printf("\n\n Schedule sampling (back-off) is not implemented for non-MDN network\n\n");
+	    printf("\n\n Schedule sampling is not implemented for non-MDN network\n\n");
 	    throw std::runtime_error(std::string("To be implemented"));
 	}else{
 	    
@@ -381,15 +398,15 @@ void NeuralNetwork<TDevice>::computeForwardPass(const int curMaxSeqLength,
 	//
 	int methodCode;
 	switch (scheduleSampOpt){
-	case 0:
+	case NN_FEEDBACK_GROUND_TRUTH:
 	    {
 		// Case0: use ground truth directly
 		BOOST_FOREACH (boost::shared_ptr<layers::Layer<TDevice> > &layer, m_layers)
 		    layer->computeForwardPass();
 		break;
 	    }
-	case 1:
-	case 2:
+	case NN_FEEDBACK_DROPOUT_1N:
+	case NN_FEEDBACK_DROPOUT_ZERO:
 	    {
 		// Case 1 & 2: schedule back-off, using either 1/N (case 1) or zero (case 2)
 		real_t threshold = ((real_t)scheduleSampPara)/100;
@@ -399,16 +416,15 @@ void NeuralNetwork<TDevice>::computeForwardPass(const int curMaxSeqLength,
 		for (size_t i = 0; i < curMaxSeqLength; ++i){
 		    if (dist(*gen) > threshold){
 			randNum.push_back(0);
-			//printf("h ");
 		    }else{
 			randNum.push_back(1);
-			//printf("m ");
 		    }
 		}
-		// specify the method code
-		methodCode = -1 * ((scheduleSampOpt==1)? 1 : 2);
 		
-		// Kill the feedback data
+		// specify the method code
+		methodCode = scheduleSampOpt;
+		
+		// drop out the feedback data
 		typename TDevice::real_vector temp = randNum;
 		olm->retrieveFeedBackData(temp, methodCode);
 
@@ -417,12 +433,12 @@ void NeuralNetwork<TDevice>::computeForwardPass(const int curMaxSeqLength,
 		    layer->computeForwardPass();
 		break;
 	    }
-	case 3:
-	case 4:
+	case NN_FEEDBACK_SC_SOFT:
+	case NN_FEEDBACK_SC_MAXONEHOT:
 	    {
 		// Case 3 & 4: use soft vector as feedback (case 3) or one-hot (case 4)
 		real_t sampThreshold;
-		methodCode = ((scheduleSampOpt==3)? 0 : 1);
+		methodCode = scheduleSampOpt;
 		
 		// Forward computation for layers below Feedback
 		int cnt = 0;
@@ -435,12 +451,12 @@ void NeuralNetwork<TDevice>::computeForwardPass(const int curMaxSeqLength,
 		// Determine the threshold 
 		if (scheduleSampPara > 0){
 		    // randomly use the generated sample
-		    //sampThreshold = ((real_t)scheduleSampPara /
+		    // sampThreshold = ((real_t)scheduleSampPara /
 		    // (scheduleSampPara + exp((real_t)uttCnt / scheduleSampPara)));
 		    // sampThreshold = 1.0 - ((real_t)uttCnt/scheduleSampPara);
 		    sampThreshold = pow(scheduleSampPara/100.0, uttCnt);
-		    sampThreshold = ((sampThreshold  < NN_SCHEDULE_MIN) ?
-				     NN_SCHEDULE_MIN : sampThreshold);
+		    sampThreshold = ((sampThreshold  < NN_FEEDBACK_SCHEDULE_MIN) ?
+				     NN_FEEDBACK_SCHEDULE_MIN : sampThreshold);
 		}else{
 		    sampThreshold = (-1.0 * (real_t)scheduleSampPara / 100.0);
 		}
@@ -465,12 +481,20 @@ void NeuralNetwork<TDevice>::computeForwardPass(const int curMaxSeqLength,
 			if (olm != NULL){
 			    olm->getOutput(timeStep, 0.0001); 
 			    olm->retrieveFeedBackData(timeStep, methodCode);
+			    
+			    /******** Fatal Error *******/
+			    // After getOutput, the targets will be overwritten by generated data.
+			    // But the target will be used by calculateError and computeBackWard.
+			    // Thus, targets of the natural data should be re-written
+			    // This is now implemented as this->restoreTarget(frac)
+			    
 			}    
 		    }else{
 			//printf("\n %d MISS", timeStep);
 		    }
 		}
 
+		
 		break;
 	    }
 	}
@@ -518,29 +542,29 @@ void NeuralNetwork<TDevice>::computeForwardPassGen(const int curMaxSeqLength,
 	
 	// determine the sampling parameter
 	switch (scheduleSampOpt){
-	case 0:
-	case 3:
+	case NN_FEEDBACK_GROUND_TRUTH:
+	case NN_FEEDBACK_SC_SOFT:
 	    // always uses the soft vector (default option)
 	    sampThreshold  = 1;
-	    methodCode = 0;
+	    methodCode     = NN_FEEDBACK_GROUND_TRUTH;
 	    break;
-	case 4:
+	case NN_FEEDBACK_SC_MAXONEHOT:
 	    if (scheduleSampPara > 0){
 		sampThreshold = 1;
-		methodCode = 0;
+		methodCode = NN_FEEDBACK_GROUND_TRUTH;
 	    }else{
 		sampThreshold = (-1.0 * (real_t)scheduleSampPara / 100.0);
-		methodCode = 1;
+		methodCode = NN_FEEDBACK_SC_MAXONEHOT;
 	    }
 	    
 	    // use the one-hot best
 	    break;
-	case 1:
-	    methodCode = -1;
+	case NN_FEEDBACK_DROPOUT_1N:
+	    methodCode = NN_FEEDBACK_DROPOUT_1N;
 	    sampThreshold = ((real_t)scheduleSampPara)/100;
 	    break;					    
-	case 2:
-	    methodCode = -2;
+	case NN_FEEDBACK_DROPOUT_ZERO:
+	    methodCode = NN_FEEDBACK_DROPOUT_ZERO;
 	    sampThreshold = ((real_t)scheduleSampPara)/100;
 	    break;
 	    //

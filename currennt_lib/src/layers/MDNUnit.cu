@@ -39,7 +39,7 @@
 #include "../helpers/max.cuh"
 #include "../helpers/safeExp.cuh"
 #include "../helpers/JsonClasses.hpp"
-
+#include "../MacroDefine.hpp"
 #include "../activation_functions/Tanh.cuh"
 #include "../activation_functions/Logistic.cuh"
 #include "../activation_functions/Identity.cuh"
@@ -721,7 +721,7 @@ namespace {
 
 	    // 0: kill it, set the probability to equal
 	    if (source[(outputIdx/parall)] < 0.5)
-		if (method == 1)
+		if (method == NN_FEEDBACK_DROPOUT_1N)
 		    buffer[outputIdx * bufDim + bufS + dimIdx] = 1.0/paraDim;
 		else
 		    buffer[outputIdx * bufDim + bufS + dimIdx] = 0;
@@ -745,7 +745,7 @@ namespace {
 	    const int dimIdx    = values.get<1>() % paraDim;
 
 	    // 0: kill it, set the probability to equal
-	    if (method == 1)
+	    if (method == NN_FEEDBACK_DROPOUT_1N)
 		buffer[outputIdx * bufDim + bufS + dimIdx] = 1.0/paraDim;
 	    else
 		buffer[outputIdx * bufDim + bufS + dimIdx] = 0;
@@ -2101,6 +2101,7 @@ namespace {
 	int layerSizeOut;
 	int startDOut;
 	int genMethod;
+	real_t  randomSeed;
 	real_t *output;       // targets data
 	const real_t *prob;   // mdn parameter (softmax)
 
@@ -2113,7 +2114,7 @@ namespace {
 	    real_t temp = 0.0; // temp for the largest prob
 	    int pos     = 0;   // idx of the prob
 
-	    if (genMethod==0){
+	    if (genMethod == NN_SOFTMAX_GEN_BEST){
 		// Pick the one-hot vector
 		for (int i = 0; i<paradim; i++){
 		    pos = outputIdx * paradim + i;
@@ -2122,7 +2123,7 @@ namespace {
 			*targetClass = (real_t)i;
 		    }
 		}
-	    }else{
+	    }else if (genMethod == NN_SOFTMAX_GEN_SOFT){
 		// SoftMerge
 		*targetClass = 0;
 		int j = 0;
@@ -2138,20 +2139,31 @@ namespace {
 		    *targetClass = (real_t)j;
 		}
 		// for plain softmax, special care should be taken to handle the first dimension
-		
+	    }else if (genMethod == NN_SOFTMAX_GEN_SAMP){
+		real_t probAccum = 0.0;
+		for (int i = 0; i<paradim; i++){
+		    pos = outputIdx * paradim + i;
+		    probAccum += prob[pos];
+		    if (randomSeed < probAccum){
+			*targetClass = (real_t)i;
+			break;
+		    }
+		}
 	    }
         }
     };
 
     struct SamplingSoftmax_UVSigmoid
     {
-        int paradim;
-	int layerSizeOut;
-	int startDOut;
-	int genMethod;
-	real_t *output;       // targets data
-	const real_t *prob;   // mdn parameter (softmax)
+        int    paradim;
+	int    layerSizeOut;
+	int    startDOut;
+	int    genMethod;
 	real_t threshold;
+	real_t randomSeed;
+	real_t       *output;       // targets data
+	const real_t *prob;         // mdn parameter (softmax)
+
 	// from 1 to timesteps
         __host__ __device__ void operator() (const thrust::tuple<const real_t&, int> &t) const
         {
@@ -2164,7 +2176,7 @@ namespace {
 	    if (prob[outputIdx * paradim] < threshold){
 		*targetClass = (real_t)0.0;
 	    }else{
-		if (genMethod == 0){
+		if (genMethod == NN_SOFTMAX_GEN_BEST){
 		    for (int i = 1; i<paradim; i++){
 			pos = outputIdx * paradim + i;
 			if (prob[pos]>temp){
@@ -2172,11 +2184,21 @@ namespace {
 			    *targetClass = (real_t)i;
 			}
 		    }
-		}else{
+		}else if (genMethod == NN_SOFTMAX_GEN_SOFT){
 		    *targetClass = 0;
 		    for (int i = 1; i<paradim; i++){
 			pos = outputIdx * paradim + i;
 			*targetClass = (*targetClass) + prob[pos]*(real_t)i;	
+		    }
+		}else if (genMethod == NN_SOFTMAX_GEN_SAMP){
+		    real_t probAccum = 0.0;
+		    for (int i = 1; i<paradim; i++){
+			pos = outputIdx * paradim + i;
+			probAccum += prob[pos];
+			if (randomSeed < probAccum){
+			    *targetClass = (real_t)i;
+			    break;
+			}
 		    }
 		}
 	    }
@@ -2748,7 +2770,7 @@ namespace layers {
 					    const int timeStep, const int method)
     {	
     }
-
+    
     template <typename TDevice>
     int MDNUnit<TDevice>::feedBackDim()
     {
@@ -3628,6 +3650,8 @@ namespace layers {
     template <typename TDevice>
     void MDNUnit_softmax<TDevice>::getOutput(const real_t para,real_vector &targets)
     {
+	
+	
 	if (m_uvSigmoid){
 	    {{    
 		internal::SamplingSoftmax_UVSigmoid fn;
@@ -3638,6 +3662,7 @@ namespace layers {
 		fn.layerSizeOut = this->m_layerSizeTar;
 		fn.threshold    = m_threshold;
 		fn.genMethod    = this->m_genMethod;
+		fn.randomSeed   = 0.0;
 		int n = this->m_precedingLayer.curMaxSeqLength();
 		n = n*this->m_precedingLayer.parallelSequences();
 		
@@ -3659,7 +3684,8 @@ namespace layers {
 		fn.output    = helpers::getRawPointer(targets);
 		fn.prob      = helpers::getRawPointer(this->m_paraVec);
 		fn.layerSizeOut = this->m_layerSizeTar;
-		fn.genMethod    = this->m_genMethod;		
+		fn.genMethod    = this->m_genMethod;
+		fn.randomSeed   = 0.0;
 		int n = this->m_precedingLayer.curMaxSeqLength();
 		n = n*this->m_precedingLayer.parallelSequences();
 		
@@ -3680,6 +3706,22 @@ namespace layers {
     void MDNUnit_softmax<TDevice>::getOutput(const int timeStep, 
 					     const real_t para,real_vector &targets)
     {
+
+	real_t randomSeed;
+	if (this->m_genMethod == NN_SOFTMAX_GEN_SAMP){
+	    // Prepare random number
+	    static boost::mt19937 *gen = NULL;
+	    if (!gen) {
+		gen = new boost::mt19937;
+		gen->seed(timeStep);
+	    }
+	    boost::random::uniform_real_distribution<real_t> dist(0, 1);
+	    randomSeed = dist(*gen);
+	    
+	}else{
+	    randomSeed = 0.0;
+	}
+	
 	if (m_uvSigmoid){
 	    {{    
 		internal::SamplingSoftmax_UVSigmoid fn;
@@ -3687,9 +3729,12 @@ namespace layers {
 		fn.startDOut = this->m_startDimOut;
 		fn.output    = helpers::getRawPointer(targets);
 		fn.prob      = helpers::getRawPointer(this->m_paraVec);
+		
 		fn.layerSizeOut = this->m_layerSizeTar;
-		fn.threshold = m_threshold;
-		fn.genMethod    = this->m_genMethod;		
+		fn.threshold    = m_threshold;
+		fn.genMethod    = this->m_genMethod;
+		fn.randomSeed   = randomSeed;
+		
 		int fs = timeStep * this->m_precedingLayer.parallelSequences();
 		int fe = fs       + this->m_precedingLayer.parallelSequences();
 
@@ -3870,9 +3915,12 @@ namespace layers {
 						    const int dimStart, real_vector &targets,
 						    const int method)
     {
-
-	// Method < 0: used to schedule killing
-	if (method < 0){
+	
+	// Schedule killing (data dropout)
+	//      only used after filling the feedback data in the normal way
+	//      only used by fillFeedBackData(..., real_vector& randNum, const int method)
+	if (method == NN_FEEDBACK_DROPOUT_1N || method == NN_FEEDBACK_DROPOUT_ZERO){
+	    
 	    // used to 'kill' the feedback data by setting the feedback as uniform vectors
 	    // assume the feedback vector has been set in &fillBuffer
 	    internal::killOneHotVectorSoftmax fn;
@@ -3885,7 +3933,7 @@ namespace layers {
 	    fn.paraDim = this->m_paraDim;
 	    fn.parall  = this->m_precedingLayer.parallelSequences();
 	    
-	    fn.method  = -1 * method;
+	    fn.method  = method;
 	    fn.bufS    = dimStart;
 	    
 	    int n = this->m_precedingLayer.curMaxSeqLength();
@@ -3899,7 +3947,8 @@ namespace layers {
 					   thrust::counting_iterator<int>(0) + n)),
 		fn);
 
-	// Method > 0: normal 
+	// Fill the feedback data in the normal way
+	//     only used by fillFeedBackData(..., real_vector& targets, 0)
 	}else{
 	
 	    if (this->m_feedBackType == MDNUNIT_FEEDBACK_OPT_0 ||
@@ -3926,7 +3975,9 @@ namespace layers {
 			thrust::make_tuple(this->m_paraVec.begin() + n, 
 					   thrust::counting_iterator<int>(0) + n)),
 		fn);
+		
 	    }else{
+		// No longer used
 		internal::setSoftVectorSoftmax fn;
 		fn.target    = helpers::getRawPointer(fillBuffer);
 		fn.tarDim    = bufferDim;
@@ -3951,6 +4002,7 @@ namespace layers {
 	    }
 	}
 
+	// 
 	if (m_quanMerge.size()){
 	    // merge the result
 	    internal::quantizationMerge fn;
@@ -3992,7 +4044,9 @@ namespace layers {
 	int ts = timeStep * this->m_precedingLayer.parallelSequences();
 	int te = ts + this->m_precedingLayer.parallelSequences();
 
-	if (method <= 0){
+	// 
+	if (method == NN_FEEDBACK_DROPOUT_1N   || method == NN_FEEDBACK_DROPOUT_ZERO ||
+	    method == NN_FEEDBACK_GROUND_TRUTH || method == NN_FEEDBACK_SC_SOFT){
 	    internal::setSoftVectorSoftmax fn;
 	    fn.target = helpers::getRawPointer(fillBuffer);
 	    fn.tarDim = bufferDim;
@@ -4012,29 +4066,30 @@ namespace layers {
 					   thrust::counting_iterator<int>(0)+te*fn.copyDim)),
 		fn);
 
-	    if (method < 0){
-	    // used to 'kill' the feedback data by setting the feedback as uniform vectors
-	    // assume the feedback vector has been set in &fillBuffer
-	    internal::killOneHotVectorSoftmaxOneTime fn;
-	    fn.buffer  = helpers::getRawPointer(fillBuffer);
-	    fn.bufDim  = bufferDim;
+	    if (method == NN_FEEDBACK_DROPOUT_1N || method == NN_FEEDBACK_DROPOUT_ZERO){
+		// used to 'kill' the feedback data by setting the feedback as uniform vectors
+		// assume the feedback vector has been set in &fillBuffer
+		internal::killOneHotVectorSoftmaxOneTime fn;
+		fn.buffer  = helpers::getRawPointer(fillBuffer);
+		fn.bufDim  = bufferDim;
 
-	    fn.paraDim = this->m_paraDim;
-	    fn.parall  = this->m_precedingLayer.parallelSequences();
+		fn.paraDim = this->m_paraDim;
+		fn.parall  = this->m_precedingLayer.parallelSequences();
+		
+		fn.method  = method;
+		fn.bufS    = dimStart;
 	    
-	    fn.method  = -1 * method;
-	    fn.bufS    = dimStart;
-	    
-	    thrust::for_each(
-	      thrust::make_zip_iterator(
-		thrust::make_tuple(this->m_paraVec.begin() + ts*this->m_paraDim, 
-				   thrust::counting_iterator<int>(0) + ts*this->m_paraDim)),
-	      thrust::make_zip_iterator(
-		thrust::make_tuple(this->m_paraVec.begin() + te*this->m_paraDim, 
-				   thrust::counting_iterator<int>(0) + te*this->m_paraDim)),
-		fn);
+		thrust::for_each(
+		  thrust::make_zip_iterator(
+		    thrust::make_tuple(this->m_paraVec.begin() + ts*this->m_paraDim, 
+				       thrust::counting_iterator<int>(0) + ts*this->m_paraDim)),
+		  thrust::make_zip_iterator(
+		    thrust::make_tuple(this->m_paraVec.begin() + te*this->m_paraDim, 
+				       thrust::counting_iterator<int>(0) + te*this->m_paraDim)),
+		  fn);
 	    }
-	}else if (method == 1){
+	    
+	}else if (method == NN_FEEDBACK_SC_MAXONEHOT){
 	    internal::setOneHotVectorSoftmax fn;
 	    fn.source = helpers::getRawPointer(targets);
 	    fn.srcDim = this->m_layerSizeTar;

@@ -57,6 +57,12 @@ namespace layers {
 	int               m_weNoiseStartDim;
 	int               m_weNoiseEndDim;
 	real_t            m_weNoiseDev;
+
+	/* Add 170326 Add external input*/
+	Cpu::int_vector   m_extInputDim;
+	std::vector<std::string>       m_extInputDir;
+	std::vector<std::string>       m_extInputExt;
+	
 	
     public:
         /**

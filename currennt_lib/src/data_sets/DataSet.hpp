@@ -64,6 +64,11 @@ namespace data_sets {
 	    int            auxDataTyp;
 	    std::streampos auxDataBegin;
 	    
+	    long int       beginInUtt;       // the relative position of the start of the seq
+	                                     // in the utterance
+	    // Add 170327, support to the external input data
+	    int            exInputDim;
+	    std::streampos exInputBegin;
         };
 
     private:
@@ -101,8 +106,8 @@ namespace data_sets {
         Cpu::real_vector m_outputMeans;
         Cpu::real_vector m_outputStdevs;
 
-        std::fstream m_cacheFile;
-        std::string m_cacheFileName;
+        std::fstream     m_cacheFile;
+        std::string      m_cacheFileName;
 
         std::vector<sequence_t> m_sequences;
 
@@ -116,12 +121,17 @@ namespace data_sets {
 	int    m_totalTxtLength;               // the total length of txt data for this fraction
 	bool   m_hasTxtData;                   // whether contains the txt data?
 	
-	// Ada 1111: Support to the auxillary data (external data not in .nc format)
+	// Add 1111: Support to the auxillary data (external data not in .nc format)
 	std::string m_auxDirPath;              // path to the directory where auxillary data exist
 	std::string m_auxFileExt;              // extension of the auxillary data type
 	int         m_auxDataTyp;              // the binary data type of the auxillary data
 	int         m_auxDataDim;              // dimension of the auxillary data
-	
+
+	// Add 170327: external input file
+	std::vector<std::string> m_exInputDir;
+	std::vector<std::string> m_exInputExt;
+	Cpu::int_vector          m_exInputDim;
+	bool                     m_exInputFlag;
 
     public:
         /**

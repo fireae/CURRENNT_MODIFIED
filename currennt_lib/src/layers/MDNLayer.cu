@@ -1002,6 +1002,19 @@ namespace layers {
 	return this->m_secondOutput;
     }
 
+
+    // The three functions retrieveFeedBackData
+    // 1. retrieveFeedBackData(): only used in computeForward()
+    //                            put training output as the feedback data
+    // 2. retrieveFeedBackData(randNum, method): only used in computeForward() after the 1st one
+    //                            set the feedback data to zero or 1/N
+    // 3. retrieveFeedBackData(timeStep, method): used both in training and inference stages
+    //           in training:  for schedule sampling in computeForward()
+    //                         by olm -> retrieveFeedBackData(timeStep, methodCode)
+    //           in inference: for all methods in computeForwardPassGen()
+    //                         by olm -> retrieveFeedBackData(timeStep, methodCode)
+    //                            olm -> retrieveFeedBackData(timeStep, 0)
+    //      
     template <typename TDevice>
     void MDNLayer<TDevice>::retrieveFeedBackData()
     {
@@ -1021,10 +1034,10 @@ namespace layers {
     {
 	int dimStart = 0;
 	int cnt      = 0;
-
+	
 	// The code here is dirty
 	BOOST_FOREACH (boost::shared_ptr<MDNUnit<TDevice> > &mdnUnit, m_mdnUnits){
-
+	    // method = -1 or -2 (zero or 1/N killing)
 	    mdnUnit->fillFeedBackData(this->m_secondOutput,  m_secondOutputDim,  dimStart,
 				      randNum, method);
 	    dimStart += mdnUnit->feedBackDim();
@@ -1057,7 +1070,7 @@ namespace layers {
 	*/
 	
     }
-    
+
     template <typename TDevice>
     void MDNLayer<TDevice>::loadSequences(const data_sets::DataSetFraction &fraction)
     {

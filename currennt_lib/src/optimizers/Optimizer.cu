@@ -68,6 +68,7 @@ namespace optimizers {
             // compute forward pass and calculate the error
             m_neuralNetwork.loadSequences(*frac);
             m_neuralNetwork.computeForwardPass(frac->maxSeqLength(), (m_curEpoch-1));
+	    m_neuralNetwork.restoreTarget(*frac);
             error += (m_neuralNetwork.calculateError()/ds.totalSequences());
 	    
 	    // check for NaN

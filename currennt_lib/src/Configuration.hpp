@@ -166,6 +166,11 @@ private:
 
     real_t   m_mdnUVSigThreshold;
     int      m_mdnSoftMaxGenMethod;
+
+    /* Add 20170326 external input*/
+    std::string m_exInputDir;
+    std::string m_exInputExt;
+    std::string m_exInputDim;
     
     unsigned m_truncSeqLength;
     unsigned m_parallelSequences;
@@ -662,6 +667,11 @@ public:
     const real_t& mdnUVSigThreshold() const;
 
     const int& mdnSoftMaxGenMethod() const;
+
+    const std::string& exInputDir() const;
+    const std::string& exInputExt() const;
+    const std::string& exInputDim() const;
+    
 };
 
 

@@ -484,6 +484,15 @@ Configuration::Configuration(int argc, const char *argv[])
 	("probDataDim",                   
 	 po::value(&m_probDataDim)       ->default_value(-1),
 	 "Probabilistic data dimension")
+	("ExtInputDir",
+	 po::value(&m_exInputDir) ->default_value(""),
+	 "External input directory")
+	("ExtInputExt",
+	 po::value(&m_exInputExt) ->default_value(""),
+	 "External inut extension")
+	("ExtInputDim",
+	 po::value(&m_exInputDim) ->default_value(""),
+	 "External input dimension")
         ;
 
     po::options_description weightsInitializationOptions("Weight initialization options");
@@ -752,10 +761,7 @@ Configuration::Configuration(int argc, const char *argv[])
 	    std::cout << "Parallel training will be turned off." << std::endl;
 	    m_parallelSequences = 1;
 	}
-	if (m_truncSeqLength > 0){
-	    std::cout << "No truncating on utterance." << std::endl;
-	    m_truncSeqLength    = 0;
-	}
+	
 	std::cout << std::endl;
     }
     
@@ -1281,3 +1287,18 @@ const int& Configuration::mdnSoftMaxGenMethod() const
 {
     return m_mdnSoftMaxGenMethod;
 }
+
+
+const std::string& Configuration::exInputDir() const
+{
+    return m_exInputDir;
+}
+const std::string& Configuration::exInputExt() const
+{
+    return m_exInputExt;
+}
+const std::string& Configuration::exInputDim() const
+{
+    return m_exInputDim;
+}
+

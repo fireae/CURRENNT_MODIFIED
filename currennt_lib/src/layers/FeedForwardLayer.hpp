@@ -37,6 +37,24 @@ namespace layers {
     template <typename TDevice, typename TActFn>
     class FeedForwardLayer : public TrainableLayer<TDevice>
     {
+	typedef typename TDevice::real_vector real_vector;
+	typedef typename TDevice::int_vector  int_vector;
+	typedef typename TDevice::bool_vector bool_vector;
+	typedef typename TDevice::pattype_vector pattype_vector;
+
+	bool m_batchNorm;            // whether to use batch normalization
+	real_vector m_stats;         // mean and variance of each batch
+	real_vector m_outNormed;     // normed data output without being scaled
+	
+	real_t      m_stdConst;      // const floor for the var
+	real_t      m_batchCnt;
+	bool        m_trainFlag;
+	int         m_preEpoch;
+	real_t      m_batchSize;     //
+
+	real_vector m_oneVector;     // all-one vector
+	real_vector m_buff;
+
     public:
         /**
          * Constructs the Layer
@@ -76,7 +94,12 @@ namespace layers {
 	 * 
 	 */
 	virtual void computeForwardPass(const int timeStep);
-	
+
+
+	// export
+	virtual void exportLayer(const helpers::JsonValue &layersArray, 
+				 const helpers::JsonAllocator &allocator) const;
+
     };
 
 } // namespace layers

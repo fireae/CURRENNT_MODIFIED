@@ -22,6 +22,7 @@
 
 #include "InputLayer.hpp"
 #include "../Configuration.hpp"
+#include "../helpers/misFuncs.hpp"
 
 #include <boost/random/normal_distribution.hpp>
 #include <boost/random/uniform_real_distribution.hpp>
@@ -41,36 +42,33 @@
 #include <thrust/iterator/counting_iterator.h>
 #include <thrust/execution_policy.h>
 
+
+
+
 namespace internal {
 namespace {
 
     struct ReadInput
     {
 	const real_t *sourceW;
-	real_t *targetW;
-	real_t *weBank;
-	int sourceDim;     // 
-	int targetDim;     //
-	int weDim;         //
-	int weIdxDim;      // sourceDim - 1
-
+	real_t       *targetW;
+	const real_t *index;
+	int           sourceDim;
+	int           targetDim;
+	int           startDim;
+	
 	__host__ __device__ void operator() (const int idx) const
 	{
 	    int dim  = (idx % targetDim);
 	    int time = (idx / targetDim);
-	    
-	    int sourcePos;
-	    if (dim >= weIdxDim){
-		sourcePos = time * sourceDim + weIdxDim;
-		int whicWe = (int)(*(sourceW + sourcePos));
-		sourcePos = whicWe * weDim + (dim - sourceDim + 1);
-		*(targetW + idx) = *(weBank  + sourcePos);
-	    }else{
-		sourcePos = time * sourceDim + dim;
-		*(targetW + idx) = *(sourceW + sourcePos);
-	    }
+	    int sourcePos = index[time] * sourceDim + dim;
+	    int targetPos = time * targetDim + dim + startDim;
+	    *(targetW + targetPos) = *(sourceW + sourcePos);
 	}
     };
+
+    
+    
 }
 }
 
@@ -78,7 +76,9 @@ namespace {
 namespace layers {
 
     template <typename TDevice>
-    InputLayer<TDevice>::InputLayer(const helpers::JsonValue &layerChild, int parallelSequences, int maxSeqLength)
+    InputLayer<TDevice>::InputLayer(const helpers::JsonValue &layerChild,
+				    int parallelSequences,
+				    int maxSeqLength)
         : Layer<TDevice>(layerChild, parallelSequences, maxSeqLength)
 	, m_weDim(-1)
 	, m_flagWeUpdate(false)
@@ -87,6 +87,16 @@ namespace layers {
 	m_weMask.clear();
 	m_weMaskFlag = false;
 
+	const Configuration &config = Configuration::instance();
+	if (config.exInputDir().size()){
+	    ParseIntOpt(config.exInputDim(), m_extInputDim);
+	    ParseStrOpt(config.exInputDir(), m_extInputDir);
+	    ParseStrOpt(config.exInputExt(), m_extInputExt);
+	}else{
+	    m_extInputDir.clear();
+	    m_extInputDim.clear();
+	    m_extInputExt.clear();
+	}
     }
 
     template <typename TDevice>
@@ -104,6 +114,7 @@ namespace layers {
     template <typename TDevice>
     void InputLayer<TDevice>::loadSequences(const data_sets::DataSetFraction &fraction)
     {
+	
 	if (m_flagWeUpdate){
 	    if (m_weIDDim > fraction.inputPatternSize()){
 		throw std::runtime_error("WE dimension is larger than input data dimension");
@@ -111,18 +122,27 @@ namespace layers {
 	    if (this->size() != fraction.inputPatternSize()-1+m_weDim){
 		throw std::runtime_error("Input's dimension -1 + weDim != input layer size");
 	    }
-	}else if (fraction.inputPatternSize() != this->size()) {
-            throw std::runtime_error(std::string("Input layer size of ") + 
-				     boost::lexical_cast<std::string>(this->size()) + 
-				     " != data input pattern size of " + 
-				     boost::lexical_cast<std::string>(fraction.inputPatternSize()));
+	}else if (m_extInputDir.size()){
+	    // no need to check again
+	    
+	}else{
+	    if (fraction.inputPatternSize() != this->size())
+		throw std::runtime_error(
+		   std::string("Input layer size of ") + 
+		   boost::lexical_cast<std::string>(this->size()) + 
+		   " != data input pattern size of " + 
+		   boost::lexical_cast<std::string>(fraction.inputPatternSize()));
         }
 
         Layer<TDevice>::loadSequences(fraction);
 	
 	/* Add 16-02-22 Wang: for WE updating */
 	// thrust::copy(fraction.inputs().begin(),fraction.inputs().end(),this->_outputs().begin());
-	
+
+	// Three possible cases
+	// 1. external word vectors 
+	// 2. external input features
+	// 3. normal input
 	if (m_flagWeUpdate){
 	    
 	    // load in the embedded vectors from weBank
@@ -155,8 +175,8 @@ namespace layers {
 		thrust::copy(m_weBufferInput.begin(),
 			     m_weBufferInput.begin()+n,
 			     this->_outputs().begin());
-	    }}*/
-	    
+	    }}
+	    */
 
 	    //Code based on CPU sequential method
 	    Cpu::real_vector tempInput;
@@ -216,11 +236,12 @@ namespace layers {
 		std::cout << tempVec.size() << std::endl;
 	    }
 
-	}else
+	}else{
 	    // if no we is utilized, just copy the input
 	    thrust::copy(fraction.inputs().begin(),
 			 fraction.inputs().end(),
 			 this->_outputs().begin());
+	}
     }
 
     template <typename TDevice>

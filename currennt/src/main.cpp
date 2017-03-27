@@ -222,13 +222,14 @@ int trainerMain(const Configuration &config)
         inputSize  = trainingSet->inputPatternSize();
         outputSize = trainingSet->outputPatternSize();
 
+	/* Move 17-03-26: inside neuralNetwork */
 	/* Add 16-02-22 Wang: for WE updating */
 	// NeuralNetwork<TDevice> neuralNetwork(netDoc, parallelSequences, 
 	//    maxSeqLength, inputSize, outputSize);
 	//
-	if (config.weUpdate() && config.trainingMode()){
-	    inputSize = inputSize - 1 + config.weDim(); // change input size 
-	}
+	//if (config.weUpdate() && config.trainingMode()){
+	//    inputSize = inputSize - 1 + config.weDim(); // change input size 
+	//}
 
 	// Re-Modify 03-02
 	/* Don't need this anymore. 
