@@ -310,11 +310,10 @@ int trainerMain(const Configuration &config)
 	    neuralNetwork.readMVForOutput(*dataMV);
 	}
 	
-	// step2: initialize for MDN 
-	/* As data has been normalized, no need to read MV for MDN
-	  if (config.trainingMode() && config.continueFile().empty())
-	  neuralNetwork.initOutputForMDN(*dataMV);
-	*/
+	// step2: initialize for MDN (if exists)
+	if (config.trainingMode() && config.continueFile().empty())
+	    neuralNetwork.initOutputForMDN(*dataMV);
+
 	// Note: config.continueFile().empty() make sure it is the first epoch
 
 
