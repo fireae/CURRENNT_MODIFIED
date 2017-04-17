@@ -656,11 +656,13 @@ namespace data_sets {
                 frac->m_patTypes[timestep * m_parallelSequences + i] = patType;
 		frac->m_fracTotalLength = frac->m_fracTotalLength+1;
             }
+	    
         }
-        /*std::cout << "inputs for data fraction: ";
+
+        /* std::cout << "inputs for data fraction: ";
         thrust::copy(frac->m_inputs.begin(), frac->m_inputs.end(), 
 	std::ostream_iterator<real_t>(std::cout, ";"));
-        std::cout << std::endl;*/
+        std::cout << std::endl; */
 
         return frac;
     }
@@ -692,6 +694,8 @@ namespace data_sets {
 	, m_totalTxtLength   (0)
 	, m_maxTxtLength     (0)
 	, m_txtDataPatternSize(0)
+	, m_exInputFlag      (false)
+	, m_auxDirPath       ("")
     {
     }
 
@@ -734,6 +738,9 @@ namespace data_sets {
 	    ParseIntOpt(config.exInputDim(), m_exInputDim);
 	    m_exInputFlag = true;
 	}else{
+	    m_exInputDir.clear();
+	    m_exInputExt.clear();
+	    m_exInputDim.clear();
 	    m_exInputFlag = false;
 	}
 	
@@ -997,12 +1004,13 @@ namespace data_sets {
                 m_threadData->finished  = false;
                 m_threadData->terminate = false;
                 m_threadData->thread    = boost::thread(&DataSet::_nextFracThreadFn, this);
+		nc_close(ncid);
             }
             catch (const std::exception&) {
                 nc_close(ncid);
                 throw;
             }
-
+	    
             // append sequence structs from this nc file
             m_sequences.insert(m_sequences.end(), sequences.begin(), sequences.end());
 

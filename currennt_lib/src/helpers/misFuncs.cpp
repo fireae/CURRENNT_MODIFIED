@@ -33,6 +33,11 @@
 #include <boost/algorithm/string.hpp>
 #include <boost/lexical_cast.hpp>
 
+#include "../Configuration.hpp"
+#include <boost/random/normal_distribution.hpp>
+#include <boost/random/uniform_real_distribution.hpp>
+#include <boost/random/mersenne_twister.hpp>
+
 /* ***** Functions for string process ***** */
 void ParseStrOpt(const std::string stringOpt, std::vector<std::string> &optVec){
     std::vector<std::string> tempArgs;
@@ -56,3 +61,15 @@ int SumCpuIntVec(Cpu::int_vector &temp){
 	result += temp[i];
     return result;
 }
+
+real_t GetRandomNumber(){
+    static boost::mt19937 *gen = NULL;
+    if (!gen) {
+	gen = new boost::mt19937;
+	gen->seed(Configuration::instance().randomSeed());
+    }
+    boost::random::uniform_real_distribution<real_t> dist(0, 1);
+    return dist(*gen); 
+}
+
+

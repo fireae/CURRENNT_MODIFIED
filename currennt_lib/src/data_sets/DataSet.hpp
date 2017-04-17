@@ -64,7 +64,7 @@ namespace data_sets {
 	    int            auxDataTyp;
 	    std::streampos auxDataBegin;
 	    
-	    long int       beginInUtt;       // the relative position of the start of the seq
+	    int            beginInUtt;       // the relative position of the start of the seq
 	                                     // in the utterance
 	    // Add 170327, support to the external input data
 	    int            exInputDim;

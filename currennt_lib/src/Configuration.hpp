@@ -171,6 +171,10 @@ private:
     std::string m_exInputDir;
     std::string m_exInputExt;
     std::string m_exInputDim;
+
+    /* Add 20170404 */
+    int         m_verbose;
+
     
     unsigned m_truncSeqLength;
     unsigned m_parallelSequences;
@@ -671,7 +675,8 @@ public:
     const std::string& exInputDir() const;
     const std::string& exInputExt() const;
     const std::string& exInputDim() const;
-    
+
+    const int& verboseLevel() const;
 };
 
 

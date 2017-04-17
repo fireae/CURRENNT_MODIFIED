@@ -72,7 +72,7 @@ namespace layers{
     {
 	typedef typename TDevice::real_vector real_vector;
 	typedef typename Cpu::real_vector cpu_real_vector;
-
+	
     protected:
 	/* w.r.t to the input side*/
 	const int   m_startDim;            // 
@@ -93,14 +93,14 @@ namespace layers{
 	                                   // range of the data in the output data vector
 	const int   m_layerSizeTar;        // dimension of the target data vector (all)
 	real_t     *m_targetPtr;           // pointer to the target data
-	                                   // 
+	
 	// other
 	const int   m_type;                // type of this unit
 	real_vector m_mdnOutput;           // control the output method of processing (sampling)
 	real_vector m_varScale;            // the ratio to scale each dimension of the variance 
 	                                   // (used for mixture unit)
 	// 
-	const int  m_trainable;            // a type flag for trainable MDNUnit
+	const int   m_trainable;           // a type flag for trainable MDNUnit
 	                                   // 0: sigmoid, softmax, mixture
 	                                   // 1: mixture with dynamic link, tied
 	                                   // 2: mixture with dynamic link, predicted by the NN
@@ -205,6 +205,7 @@ namespace layers{
     {
 	typedef typename TDevice::real_vector real_vector;
 	typedef typename Cpu::real_vector cpu_real_vector;
+	typedef typename TDevice::pattype_vector pattype_vector;
 	
     public:
 
@@ -220,7 +221,7 @@ namespace layers{
 
 	virtual void computeForward(const int timeStep);
 	
-	virtual void getOutput(const real_t para,real_vector &targets);
+	virtual void getOutput(const real_t para, real_vector &targets);
 
 	virtual void getOutput(const int timeStep, const real_t para, real_vector &targets); 
 	
@@ -260,7 +261,7 @@ namespace layers{
 	typedef typename TDevice::real_vector real_vector;
 	typedef typename TDevice::int_vector  int_vector;
 	typedef typename Cpu::real_vector cpu_real_vector;
-
+	typedef typename TDevice::pattype_vector pattype_vector;
     protected:
 	real_vector     m_offset;
 	cpu_real_vector m_tmpProb;
@@ -333,6 +334,7 @@ namespace layers{
     {
 	typedef typename TDevice::real_vector real_vector;
 	typedef typename Cpu::real_vector cpu_real_vector;
+	typedef typename TDevice::pattype_vector pattype_vector;
 	
     protected:
 	// data
@@ -403,7 +405,8 @@ namespace layers{
     {	
 	typedef typename TDevice::real_vector real_vector;
 	typedef typename Cpu::real_vector cpu_real_vector;
-
+	typedef typename TDevice::pattype_vector pattype_vector;
+	
     protected:
 	int          m_weightStart;         // where is the first parameter of this unit is 
 	                                    //  the shared weight vector offered by MDNLayer ?
@@ -512,7 +515,7 @@ namespace layers{
     {	
 	typedef typename TDevice::real_vector real_vector;
 	typedef typename Cpu::real_vector cpu_real_vector;
-
+	typedef typename TDevice::pattype_vector pattype_vector;
     protected:
 	int        m_a_pos;                 // the start position of the trainable a
 	int        m_b_pos;                 // the start position of the trainable b

@@ -38,6 +38,7 @@
 void ParseStrOpt(const std::string stringOpt, std::vector<std::string> &optVec);
 void ParseIntOpt(const std::string stringOpt, Cpu::int_vector &optVec);
 
+real_t GetRandomNumber();
 
 int SumCpuIntVec(Cpu::int_vector &temp);
 #endif

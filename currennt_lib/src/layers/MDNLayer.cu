@@ -909,7 +909,8 @@ namespace layers {
 				      this->m_probBiasVec,  timeStep);
 		}
 		mdnUnit->getOutput(timeStep, ((para>0)?(para):(0.0001)), (this->_targets()));
-		mdnUnit->getParameter(timeStep, helpers::getRawPointer(this->m_mdnParaVec));
+		mdnUnit->getParameter(timeStep,
+				      helpers::getRawPointer(this->m_mdnParaVec));
 	    }
 	}else{
 	    throw std::runtime_error("Frame-wise EM generation is not implemented");

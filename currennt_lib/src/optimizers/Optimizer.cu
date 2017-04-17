@@ -70,6 +70,9 @@ namespace optimizers {
             m_neuralNetwork.computeForwardPass(frac->maxSeqLength(), (m_curEpoch-1));
 	    m_neuralNetwork.restoreTarget(*frac);
             error += (m_neuralNetwork.calculateError()/ds.totalSequences());
+
+	    if (Configuration::instance().verboseLevel())
+		std::cerr << "Fraction " << uttCnt << ", error " << error << std::endl;
 	    
 	    // check for NaN
 	    if (error != error){
@@ -477,6 +480,8 @@ namespace optimizers {
             ++m_curEpoch;
 
             // train one epoch and update the weights
+	    if (Configuration::instance().verboseLevel())
+		std::cerr << "Start training:" << std::endl;
             m_curTrainingError = _processDataSet(m_trainingSet, true, &m_curTrainingClassError);
 	    
 	    // Add 0511
@@ -502,7 +507,8 @@ namespace optimizers {
 	    
             // calculate the validation error and store the weights if we a new lowest error
             if (!m_validationSet.empty() && m_curEpoch % m_validateEvery == 0) {
-		
+		if (Configuration::instance().verboseLevel())
+		    std::cerr << "Start validation:" << std::endl;
                 m_curValidationError = _processDataSet(m_validationSet, false, 
 						       &m_curValidationClassError);
                 m_curValidationErrorPerFrame = (m_curValidationError * 

@@ -146,6 +146,9 @@ Configuration::Configuration(int argc, const char *argv[])
         ("random_seed",        
 	 po::value(&m_randomSeed)       ->default_value(0u),            
 	 "sets the seed for the random number generator (0 = auto)")
+	("verbose",        
+	 po::value(&m_verbose)       ->default_value(0),            
+	 "information output level: 0 (default), 1")
         ;
 
     po::options_description feedForwardOptions("Forward pass options");
@@ -1302,3 +1305,7 @@ const std::string& Configuration::exInputDim() const
     return m_exInputDim;
 }
 
+const int& Configuration::verboseLevel() const
+{
+    return m_verbose;
+}

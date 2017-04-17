@@ -341,7 +341,8 @@ void NeuralNetwork<TDevice>::restoreTarget(const data_sets::DataSetFraction &fra
     const Configuration &config = Configuration::instance();
 
     if (config.scheduleSampOpt() == NN_FEEDBACK_SC_SOFT ||
-	config.scheduleSampOpt() == NN_FEEDBACK_SC_MAXONEHOT){
+	config.scheduleSampOpt() == NN_FEEDBACK_SC_MAXONEHOT ||
+	config.scheduleSampOpt() == NN_FEEDBACK_SC_RADONEHOT){
         m_layers[m_layers.size()-1]->loadSequences(fraction);
     }
 }
@@ -384,7 +385,7 @@ void NeuralNetwork<TDevice>::computeForwardPass(const int curMaxSeqLength,
 	int scheduleSampPara= config.scheduleSampPara();
 	
 	// Prepare the ground truth 
-	layers::MDNLayer<TDevice> *olm;
+	/*layers::MDNLayer<TDevice> *olm;
 	olm = outMDNLayer();
 	if (olm != NULL){
 	    olm->retrieveFeedBackData();
@@ -393,7 +394,8 @@ void NeuralNetwork<TDevice>::computeForwardPass(const int curMaxSeqLength,
 	    throw std::runtime_error(std::string("To be implemented"));
 	}else{
 	    
-	}
+	}*/
+	this->postOutputLayer().retrieveFeedBackData();
 
 	//
 	int methodCode;
@@ -421,13 +423,9 @@ void NeuralNetwork<TDevice>::computeForwardPass(const int curMaxSeqLength,
 		    }
 		}
 		
-		// specify the method code
-		methodCode = scheduleSampOpt;
-		
 		// drop out the feedback data
 		typename TDevice::real_vector temp = randNum;
-		olm->retrieveFeedBackData(temp, methodCode);
-
+		this->postOutputLayer().retrieveFeedBackData(temp, scheduleSampOpt);
 		// ComputeForward
 		BOOST_FOREACH (boost::shared_ptr<layers::Layer<TDevice> > &layer, m_layers)
 		    layer->computeForwardPass();
@@ -435,6 +433,7 @@ void NeuralNetwork<TDevice>::computeForwardPass(const int curMaxSeqLength,
 	    }
 	case NN_FEEDBACK_SC_SOFT:
 	case NN_FEEDBACK_SC_MAXONEHOT:
+	case NN_FEEDBACK_SC_RADONEHOT:
 	    {
 		// Case 3 & 4: use soft vector as feedback (case 3) or one-hot (case 4)
 		real_t sampThreshold;
@@ -451,10 +450,11 @@ void NeuralNetwork<TDevice>::computeForwardPass(const int curMaxSeqLength,
 		// Determine the threshold 
 		if (scheduleSampPara > 0){
 		    // randomly use the generated sample
-		    // sampThreshold = ((real_t)scheduleSampPara /
-		    // (scheduleSampPara + exp((real_t)uttCnt / scheduleSampPara)));
+		    sampThreshold =
+			(1.0 / (1.0 + exp((uttCnt - NN_FEEDBACK_SCHEDULE_SIG) * 1.0 /
+					  scheduleSampPara)));
 		    // sampThreshold = 1.0 - ((real_t)uttCnt/scheduleSampPara);
-		    sampThreshold = pow(scheduleSampPara/100.0, uttCnt);
+		    //sampThreshold = pow(scheduleSampPara/100.0, uttCnt);
 		    sampThreshold = ((sampThreshold  < NN_FEEDBACK_SCHEDULE_MIN) ?
 				     NN_FEEDBACK_SCHEDULE_MIN : sampThreshold);
 		}else{
@@ -478,23 +478,21 @@ void NeuralNetwork<TDevice>::computeForwardPass(const int curMaxSeqLength,
 		    // 
 		    if (dist(*gen) > sampThreshold){
 			//printf("\n %d HIT", timeStep);
+			layers::MDNLayer<TDevice> *olm;
+			olm = outMDNLayer();
 			if (olm != NULL){
 			    olm->getOutput(timeStep, 0.0001); 
 			    olm->retrieveFeedBackData(timeStep, methodCode);
-			    
 			    /******** Fatal Error *******/
 			    // After getOutput, the targets will be overwritten by generated data.
 			    // But the target will be used by calculateError and computeBackWard.
 			    // Thus, targets of the natural data should be re-written
-			    // This is now implemented as this->restoreTarget(frac)
-			    
+			    // This is now implemented as this->restoreTarget(frac)	    
 			}    
 		    }else{
 			//printf("\n %d MISS", timeStep);
 		    }
 		}
-
-		
 		break;
 	    }
 	}
@@ -583,15 +581,14 @@ void NeuralNetwork<TDevice>::computeForwardPassGen(const int curMaxSeqLength,
 	    
 	    // if the output is MDN, we need to do one step further to get the output
 	    olm = outMDNLayer();
-	    if (olm != NULL){
+	    if (olm != NULL)
 		olm->getOutput(timeStep, generationOpt); // infer the output from MDN
-		if (dist(*gen) < sampThreshold){
-		    olm->retrieveFeedBackData(timeStep, 0);
-		}else{
-		    olm->retrieveFeedBackData(timeStep, methodCode);
-		    printf("%d ", timeStep);
-		}
 		
+	    if (dist(*gen) < sampThreshold){
+		this->postOutputLayer().retrieveFeedBackData(timeStep, 0);
+	    }else{
+		this->postOutputLayer().retrieveFeedBackData(timeStep, methodCode);
+		printf("%d ", timeStep);
 	    }
 	}
 	/*olm = outMDNLayer();

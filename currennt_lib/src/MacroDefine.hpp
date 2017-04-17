@@ -34,13 +34,14 @@
 
 // 
 #define NN_FEEDBACK_SCHEDULE_MIN 0.000 // Minimal value for the schedule sampling prob parameter
-
+#define NN_FEEDBACK_SCHEDULE_SIG 20    // K in 1/(1+exp((x-K))/Para)
 // Schedule sampling method code
 #define NN_FEEDBACK_GROUND_TRUTH 0     // use ground truth directly
 #define NN_FEEDBACK_DROPOUT_1N   1     // dropout, set to 1/N
 #define NN_FEEDBACK_DROPOUT_ZERO 2     // dropout, set to zero
 #define NN_FEEDBACK_SC_SOFT      3     // schedule sampling, use soft vector
 #define NN_FEEDBACK_SC_MAXONEHOT 4     // schedule sampling, use one hot vector of the max prob
+#define NN_FEEDBACK_SC_RADONEHOT 5     // schedule sampling, use one random output
 
 // Softmax generation method
 #define NN_SOFTMAX_GEN_BEST      0

@@ -39,6 +39,7 @@
 #include "../helpers/max.cuh"
 #include "../helpers/safeExp.cuh"
 #include "../helpers/JsonClasses.hpp"
+#include "../helpers/misFuncs.hpp"
 #include "../MacroDefine.hpp"
 #include "../activation_functions/Tanh.cuh"
 #include "../activation_functions/Logistic.cuh"
@@ -345,6 +346,7 @@ namespace {
 	
         int dimSize;            // sum over this number of dimension
         const real_t *outputs;  // data
+	const char *patTypes;
         __host__ __device__ void operator() (const thrust::tuple<real_t&, int> &t) const
         {
             // unpack the tuple
@@ -354,10 +356,14 @@ namespace {
             const real_t *offOutputs = &outputs[patIdx * dimSize];
 	    // sum up the outputs
             real_t sum = 0;
-            for (int i = 1; i < dimSize; ++i)
-                sum += offOutputs[i];
-            // store the result
-            t.get<0>() = sum;
+	    if (patTypes[patIdx] == PATTYPE_NONE){
+		t.get<0>() = SKIP_MARKER;
+	    }else{
+		for (int i = 1; i < dimSize; ++i)
+		    sum += offOutputs[i];
+		// store the result
+		t.get<0>() = sum;
+	    }
         }
     };
 
@@ -395,7 +401,7 @@ namespace {
     {
         int layerSize;
         const real_t *normFacts; // the data for normalization
-
+	const char   *patTypes;
         __host__ __device__ void operator() (const thrust::tuple<real_t&, int> &t) const
         {
             // unpack the tuple
@@ -410,7 +416,7 @@ namespace {
 	    
             // check if we can stop the calculation
             real_t normFact = normFacts[patIdx];
-            if (normFact == SKIP_MARKER)
+            if (patTypes[patIdx] == PATTYPE_NONE)
                 return;
 
             // calculate the normalized value
@@ -550,9 +556,12 @@ namespace {
 	real_t *outputBuff;   // save the results here
 	real_t *output;       // targets data
 	real_t *prob;   // mdn parameter (softmax)
+
+	const char   *patTypes;
 	
 	// from 1 to timesteps
-        __host__ __device__ void operator() (const thrust::tuple<real_t&, const int&> &values) const
+        __host__ __device__ void operator() (const thrust::tuple<real_t&,
+					     const int&> &values) const
         {
 	    const int outputIdx = values.get<1>();
 
@@ -561,6 +570,11 @@ namespace {
 	    
 	    // pointer to m_paraVec (time * dimension + dim)
 	    int Idx = outputIdx * layerSize + dim;    
+
+	    if (patTypes[outputIdx] == PATTYPE_NONE){
+		values.get<0>() = 0.0;
+		return;
+	    }
 	    
 	    real_t targetProb = 0.0;
 	    if (Idx < accessBound && Idx >=0){
@@ -584,7 +598,7 @@ namespace {
 		targetProb = 1.0;
 	    }
 	    
-	    values.get<0>() = -1*log(targetProb);
+	    values.get<0>() = -1.0*log(targetProb);
         }
     };
 
@@ -2615,7 +2629,7 @@ namespace layers {
 	// Full transformation matrices for different mixtures
 	return featureDim * (featureDim + 1)  * mixNum;
 	#endif
-    }		    
+    }
     
     /************************************************
      * MDNUnit Definition
@@ -2642,7 +2656,7 @@ namespace layers {
 	m_paraVec.resize(m_paraDim * n, 0.0);
 	
 	m_oneVector.resize(m_paraDim * (n+1), 1.0);
-	
+
 	/*
 	 here, I assume the each dimension of the same kind of parameter 
 	 should be adjacent to each other.
@@ -2781,8 +2795,7 @@ namespace layers {
     void MDNUnit<TDevice>::biasProb(real_vector &secondOutput, const int dimStart,
 				    const int bufferDim,
 				    real_vector &biasDataVec,  const int timeStep)
-    {
-	
+    {	
     }
 	
     
@@ -3241,8 +3254,7 @@ namespace layers {
     MDNUnit_softmax<TDevice>::MDNUnit_softmax(
 	int startDim, int endDim, int startDimOut, int endDimOut, int type, 
 	Layer<TDevice> &precedingLayer, int outputSize, bool uvSigmoid,
-	int_vector &quanMerge, const real_t &threshold,
-	const int trainable,
+	int_vector &quanMerge, const real_t &threshold, const int trainable,
 	const int feedBackOpt)
         : MDNUnit<TDevice>(startDim, endDim, startDimOut, endDimOut, 
 			   type, endDim-startDim, precedingLayer,
@@ -3254,7 +3266,7 @@ namespace layers {
 	// the option to merge quantized data
 	m_quanMerge = quanMerge;
 	for (int i =0; i<m_quanMerge.size(); i++){
-	    if (m_quanMerge[i] < 0 || m_quanMerge[i]>=(endDim-startDim)){
+	    if (m_quanMerge[i] < 0 || m_quanMerge[i] >= (endDim-startDim)){
 		throw std::runtime_error("Softmax quanMerge larger than dimension");
 	    }
 	}
@@ -3264,15 +3276,12 @@ namespace layers {
 	m_offset.resize(this->m_precedingLayer.patTypes().size(), 0.0);
 	
 	// assume ont softmax unit only corresponds to one dimension of the output
-	
 	if ((endDimOut - startDimOut) != 1){
 	    throw std::runtime_error("Check MDN configure. SoftMax => one dimensional target");
 	}
-
 	
 	const Configuration &config = Configuration::instance();
-	m_genMethod = config.mdnSoftMaxGenMethod();
-	
+	m_genMethod = config.mdnSoftMaxGenMethod();	
 	
     }
 
@@ -3392,9 +3401,9 @@ namespace layers {
 	    // sum up
 	    {{
 		internal::SumUpOutputsFn_UVSigmoid fn;
-		fn.dimSize = this->m_paraDim;
-		fn.outputs = helpers::getRawPointer(this->m_paraVec);
-
+		fn.dimSize  = this->m_paraDim;
+		fn.outputs  = helpers::getRawPointer(this->m_paraVec);
+		fn.patTypes = helpers::getRawPointer(this->m_precedingLayer.patTypes());
 		int n =this->m_precedingLayer.curMaxSeqLength();
 		n = n*this->m_precedingLayer.parallelSequences();
 		// n = n*(this->m_paraDim);
@@ -3414,7 +3423,7 @@ namespace layers {
 		internal::NormalizeOutputsFn_UVSigmoid fn;
 		fn.layerSize = this->m_paraDim;
 		fn.normFacts = helpers::getRawPointer(this->m_offset);
-	    
+		fn.patTypes = helpers::getRawPointer(this->m_precedingLayer.patTypes());
 		int n =this->m_precedingLayer.curMaxSeqLength();
 		n = n*this->m_precedingLayer.parallelSequences();
 		n = n*this->m_paraDim;
@@ -3555,6 +3564,7 @@ namespace layers {
 		internal::SumUpOutputsFn_UVSigmoid fn;
 		fn.dimSize = this->m_paraDim;
 		fn.outputs = helpers::getRawPointer(this->m_paraVec);
+		fn.patTypes = helpers::getRawPointer(this->m_precedingLayer.patTypes());
 		thrust::for_each(
 		   thrust::make_zip_iterator(
 				thrust::make_tuple(this->m_offset.begin() + ts,  
@@ -3570,6 +3580,8 @@ namespace layers {
 		internal::NormalizeOutputsFn_UVSigmoid fn;
 		fn.layerSize = this->m_paraDim;
 		fn.normFacts = helpers::getRawPointer(this->m_offset);
+		fn.patTypes  = helpers::getRawPointer(this->m_precedingLayer.patTypes());
+		
 		thrust::for_each(
 		thrust::make_zip_iterator(
 		   thrust::make_tuple(this->m_paraVec.begin() + ts*this->m_paraDim,
@@ -3601,7 +3613,7 @@ namespace layers {
 		fn.startD    = this->m_startDim;
 		fn.endD      = this->m_endDim;
 		fn.patTypes  = helpers::getRawPointer(this->m_precedingLayer.patTypes());
-		fn.NNOutput    = helpers::getRawPointer(this->m_precedingLayer.outputs());
+		fn.NNOutput  = helpers::getRawPointer(this->m_precedingLayer.outputs());
 		fn.offset    = helpers::getRawPointer(this->m_offset);
 		thrust::transform(thrust::counting_iterator<int>(0) + ts * this->m_paraDim,
 				  thrust::counting_iterator<int>(0) + te * this->m_paraDim,
@@ -3708,19 +3720,11 @@ namespace layers {
     {
 
 	real_t randomSeed;
-	if (this->m_genMethod == NN_SOFTMAX_GEN_SAMP){
-	    // Prepare random number
-	    static boost::mt19937 *gen = NULL;
-	    if (!gen) {
-		gen = new boost::mt19937;
-		gen->seed(timeStep);
-	    }
-	    boost::random::uniform_real_distribution<real_t> dist(0, 1);
-	    randomSeed = dist(*gen);
-	    
-	}else{
+	if (this->m_genMethod == NN_SOFTMAX_GEN_SAMP)
+	    randomSeed = GetRandomNumber();	    
+	else
 	    randomSeed = 0.0;
-	}
+	
 	
 	if (m_uvSigmoid){
 	    {{    
@@ -3841,6 +3845,8 @@ namespace layers {
 	    fn.output       = helpers::getRawPointer(targets);
 	    fn.prob         = helpers::getRawPointer(this->m_paraVec);
 	    fn.outputBuff   = helpers::getRawPointer(this->m_offset);
+	    fn.patTypes     = helpers::getRawPointer(this->m_precedingLayer.patTypes());
+	    
 	    fn.uvSigmoid    = m_uvSigmoid;
 	    int n = this->m_precedingLayer.curMaxSeqLength();
 	    n = n*this->m_precedingLayer.parallelSequences();
@@ -4039,7 +4045,8 @@ namespace layers {
     template <typename TDevice>
     void MDNUnit_softmax<TDevice>::fillFeedBackData(real_vector &fillBuffer, const int bufferDim,
 						    const int dimStart, real_vector &targets,
-						    const int timeStep, const int method)
+						    const int timeStep,
+						    const int method)
     {
 	int ts = timeStep * this->m_precedingLayer.parallelSequences();
 	int te = ts + this->m_precedingLayer.parallelSequences();
@@ -4089,7 +4096,8 @@ namespace layers {
 		  fn);
 	    }
 	    
-	}else if (method == NN_FEEDBACK_SC_MAXONEHOT){
+	}else if (method == NN_FEEDBACK_SC_MAXONEHOT ||
+		  method == NN_FEEDBACK_SC_RADONEHOT){
 	    internal::setOneHotVectorSoftmax fn;
 	    fn.source = helpers::getRawPointer(targets);
 	    fn.srcDim = this->m_layerSizeTar;
@@ -4306,7 +4314,7 @@ namespace layers {
 		    wInit.push_back(dist1(*gen));
 		
 		// set w to uniform distribution, set b to mean+variance
-		// w starts at precedingSize * startDim
+		// w starts from precedingSize * startDim
 		thrust::copy(wInit.begin(),
 			     wInit.end(),
 			     tLayer->weights().begin()+
@@ -5554,7 +5562,7 @@ namespace layers {
 
     template <typename TDevice>
     void MDNUnit_mixture<TDevice>::fillFeedBackData(real_vector &fillBuffer, const int bufferDim,
-					    const int dimStart, real_vector &targets,
+						    const int dimStart, real_vector &targets,
 						    const int timeStep, const int method)
     {
 	internal::CopyPart fn;

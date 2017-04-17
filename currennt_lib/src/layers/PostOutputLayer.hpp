@@ -43,23 +43,26 @@ namespace layers {
         Layer<TDevice> &m_precedingLayer;
 	
 	/* Add 0401 for weighted MSE */
-	real_vector m_outputMseWeights;  // vector for MSE output weights
+	real_vector     m_outputMseWeights;  // vector for MSE output weights
 	cpu_real_vector m_outputMseWeightsCPU; //
-	bool        m_flagMseWeight;     // whether to use m_flagMseWeight
+	bool            m_flagMseWeight;     // whether to use m_flagMseWeight
 	
 	/* Add 1012 for mean and variance vector */
-	real_vector m_targetDataMV;      // [mean, variance]
+	real_vector     m_targetDataMV;      // [mean, variance]
+
+	// Add 170411 for feedback
+	real_vector     m_feedBackOutput;    // Buffer for the feedback data
 	
     protected:
-        real_vector& _targets();
-        real_vector& _actualOutputs();
-        real_vector& _outputErrors();
+        real_vector&    _targets();
+        real_vector&    _actualOutputs();
+        real_vector&    _outputErrors();
 	
 	/* Add 0401 for weighted MSE */
-	real_vector& _mseWeight();
+	real_vector&     _mseWeight();
 	cpu_real_vector& _mseWeightCPU();
 	/* Add 1012 for */
-	real_vector& _mvVector();
+	real_vector&     _mvVector();
 	
     public:
         /**
@@ -117,6 +120,12 @@ namespace layers {
 	/**
 	 * Functions to retrieve the feedback data
 	 */
+	virtual void retrieveFeedBackData();
+
+	virtual void retrieveFeedBackData(real_vector& randNum, const int method);
+
+	virtual void retrieveFeedBackData(const int timeStep, const int method=0);
+
 	virtual real_vector& secondOutputs(const bool flagTrain);
 
 	// export
