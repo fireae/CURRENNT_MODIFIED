@@ -110,11 +110,14 @@ namespace {
 		    else{
 			output[outputIdx] = input2[(timeStep - lookBackTime) * dimInput2 +
 						   dimIdx + dimInput2Start];
+			
+			// crossBoundary should be deleted
 			if (crossBoundary == 3 &&
 			    input2[(timeStep - lookBackTime) * dimInput2 + dimInput2Start] > 0.98){
 			    output[outputIdx] = 0.0;
 			    // Set the feedback to zero if previous frame is silence
 			}
+			//
 		    }
 		    
 		}else{
@@ -381,28 +384,32 @@ namespace layers{
 		// special case where lookback is not used
 		m_lookBack.clear();
 	    }else{
+		// when lookback is explicitly specified
 		cpu_int_vector tempOpt;
 		ParseLookBackStep(m_lookBackStr, tempOpt);
 		m_lookBack = tempOpt;
 	    }
 	}else{
-	    m_lookBack.resize(1,1); // default only look back 1 step
+	    // default only look back 1 step
+	    m_lookBack.resize(1,1); 
 	}
 
-	// get aggregate information
+	// get aggregation information
 	m_aggStr         = ((layerChild->HasMember("aggregate")) ? 
 			    ((*layerChild)["aggregate"].GetString()) : (""));
 	m_crossBoundary  = (layerChild->HasMember("aggregate_cross_boundary") ? 
 			    (*layerChild)["aggregate_cross_boundary"].GetInt() : 0);
 
 	if (m_aggStr.size()){
+	    // configuratio for F0 aggregation
 	    cpu_int_vector tempOpt;
 	    ParseLookBackStep(m_aggStr, tempOpt);
 	    m_aggOpt = tempOpt;
 	    m_boundaryInfo.resize(m_aggOpt.size() * precedingLayer.maxSeqLength(), 0);
 	    m_aggOptSyn      = config.aggregateOpt();
 	}else{
-	    m_aggOpt.clear(); // default, don't use aggregate
+	    // default, don't use aggregate
+	    m_aggOpt.clear(); 
 	}
     }
 
@@ -475,6 +482,12 @@ namespace layers{
 
 	// read in the boundary information
 	if (m_aggStr.size()){
+	    //
+	    if (this->parallelSequences()>1){
+		printf("Please use parallel_sequences = 1\n");
+		throw std::runtime_error("Not implemented: F0 aggregation for parallel training");
+	    }
+	    
 	    if (fraction.auxDataDim()>0){
 		if (m_aggOpt.size() > CHAR_BIT)
 		    throw std::runtime_error("Aggregate information is larger than CHAR_BIT");
@@ -516,7 +529,6 @@ namespace layers{
         if (s.empty()) s = "feedback";
         return s;
     }
-
 
     // computeForward: 
     //  in training stage, target data are known

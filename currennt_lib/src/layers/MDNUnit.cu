@@ -68,19 +68,19 @@
 #define PI_DEFINITION 3.141215
 
 
+// obsolete, replaced by config->m_varInitPara
 // VARADJUST: parameter for initializing the mean of mixture Gaussian
-// The meean of differerent mixtures will be initialized with equal interval
+// The mean of different mixtures will be initialized with equal interval
 // between [-VARADJUST VARADJUST] * var + data_mean
 // EX, for 4 mixtures, [-2, 2] => [-1.5, -0.5, 0.5, 1.5]*var
 // Note: 2.0 may be too large
 //       change it to 0.8
-// #define VARADJUST 0.8 // obsolete, replaced by config->m_varInitPara
+// #define VARADJUST 0.8    
 
 //#define DEBUG_LOCAL 1     // I turn on DEBUG_LOCAL for debugging
 //#define ALTER_TIEVAR 1    // Whether tied variance for all mixtures (not useful anymore)
 
-#define DEBUG_LOCAL_LOCAL 1     // I turn on DEBUG_LOCAL for debugging
-#define MIXTUREDYNDIAGONAL 1// Whether the transformation matrix in mixture_dyn should diagonal?
+#define MIXTUREDYNDIAGONAL 1 // Set the transformation matrix in mixture_dyn to be diagonal
 
 
 namespace internal {
@@ -96,17 +96,25 @@ namespace {
 	real_t *target;
 
 	int srcDim;
-	int srcS;     // the first dimension to be copied in source
+	int srcS;     // the first dimension to be copied in source stream
 
-	int copyDim;  // the dim of segment to be copied
+	int copyDim;  // dimension of the data to be copied
 
 	int tarDim;
-	int tarS;     // the first dimension to store the first dimension from source
+	int tarS;     // the first dimension to store the copied data in target stream
+
+	const char *patTypes;     // 
+	
 	__host__ __device__ void operator() (const thrust::tuple<real_t&, int> &t) const
 	{
 	    int outputIdx = t.get<1>();
 	    int timeIdx   = outputIdx / copyDim;
 	    int dimIdx    = outputIdx % copyDim;
+
+	    // skip dummy frame (for parallel sentence processing)
+	    if (patTypes != NULL && patTypes[timeIdx] == PATTYPE_NONE)
+		return;
+	    
 	    target[timeIdx * tarDim + tarS + dimIdx] = source[timeIdx * srcDim + srcS + dimIdx];
 	}
     };
@@ -115,15 +123,18 @@ namespace {
     // copy the data from t.get<0> to the memory block started from Output 
     struct CopySimple
     {
-	real_t *Output;           // output address to store data
+	real_t     *Output;           // output address to store data
+	int         paraDim;
+	
 	const char *patTypes;     // sentence termination check
-	int paraDim;
-
+	
         __host__ __device__ void operator() (const thrust::tuple<real_t&, int> &t) const
         {
             // unpack the tuple
             int outputIdx = t.get<1>();
 	    int timeIdx   = outputIdx / paraDim;
+
+	    // skip dummy frame (for parallel sentence processing)
 	    if (patTypes[timeIdx] == PATTYPE_NONE)
                 return;
 
@@ -149,6 +160,7 @@ namespace {
 	int NNOutputSize;
 	int startD;
 	int endD;
+	
 	const char *patTypes;
 	const real_t *NNoutput;
 
@@ -316,6 +328,8 @@ namespace {
 	
         int dimSize;            // sum over this number of dimension
         const real_t *outputs;  // data
+	const char   *patTypes;
+	
         __host__ __device__ void operator() (const thrust::tuple<real_t&, int> &t) const
         {
             // unpack the tuple
@@ -330,11 +344,14 @@ namespace {
 
 	    // sum up the outputs
             real_t sum = 0;
-            for (int i = 0; i < dimSize; ++i)
-                sum += offOutputs[i];
-
-            // store the result
-            t.get<0>() = sum;
+	    if (patTypes[patIdx] == PATTYPE_NONE){
+		t.get<0>() = SKIP_MARKER;
+	    }else{
+		for (int i = 0; i < dimSize; ++i)
+		    sum += offOutputs[i];
+		// store the result
+		t.get<0>() = sum;
+	    }
         }
     };
 
@@ -347,6 +364,7 @@ namespace {
         int dimSize;            // sum over this number of dimension
         const real_t *outputs;  // data
 	const char *patTypes;
+	
         __host__ __device__ void operator() (const thrust::tuple<real_t&, int> &t) const
         {
             // unpack the tuple
@@ -375,7 +393,8 @@ namespace {
 
         int layerSize;
         const real_t *normFacts; // the data for normalization
-
+	const char   *patTypes;
+	
         __host__ __device__ void operator() (const thrust::tuple<real_t&, int> &t) const
         {
             // unpack the tuple
@@ -386,6 +405,10 @@ namespace {
 
             // check if we can stop the calculation
             real_t normFact = normFacts[patIdx];
+	    
+            if (patTypes[patIdx] == PATTYPE_NONE)
+                return;
+
             if (normFact == SKIP_MARKER)
                 return;
 
@@ -616,11 +639,16 @@ namespace {
 	int paraDim;
 
 	bool uvSigmoid;
+	const char *patTypes;
 	// from 1 to timesteps
         __host__ __device__ void operator() (const thrust::tuple<real_t&, const int&> &values) const
         {
 	    const int outputIdx = values.get<1>() / paraDim;
 	    const int dimIdx    = values.get<1>() % paraDim;
+
+	    if (patTypes[outputIdx] == PATTYPE_NONE){
+		return;
+	    }
 	    
 	    int targetDimIdx = (int)(source[(outputIdx * srcDim + srcS)]);
 	    if (dimIdx== targetDimIdx)
@@ -680,12 +708,16 @@ namespace {
 	int     tarS;     
 	bool    uvSigmoid;
 	real_t  threshold;
+	const char *patTypes;
 	__host__ __device__ void operator() (const thrust::tuple<real_t&, int> &t) const
 	{
 	    int outputIdx = t.get<1>();
 	    int timeIdx   = outputIdx / copyDim;
 	    int dimIdx    = outputIdx % copyDim;
 
+	    if (patTypes[timeIdx] == PATTYPE_NONE)
+		return;
+	    
 	    if (uvSigmoid){
 		/* Strategy1 : 
 		if (dimIdx == 0){
@@ -702,8 +734,10 @@ namespace {
 			target[timeIdx * tarDim + tarS + dimIdx]= 0.0;
 		}*/
 		if (dimIdx == 0){
+		    // the probability to be unvoiced (the original softmax is for voiced case)
 		    target[timeIdx * tarDim + tarS] = (1 - source[timeIdx * srcDim + srcS]);
 		}else{
+		    // the probability for voiced event = P(voiced) * P(F0_event)
 		    target[timeIdx * tarDim + tarS + dimIdx] =
 			source[timeIdx * srcDim + srcS + dimIdx] * source[timeIdx * srcDim + srcS];
 		}
@@ -1102,7 +1136,8 @@ namespace {
 	int trainableAPos;      // w, the w predicted by the network, I name it as a now
 	int trainableBPos;      // b, the b which is predicted by the network
 	int stepBack;           // how many steps to look back ?
-
+	int paral;
+	
 	real_t   *linearPart;   // w, where w is trainable but shared across time steps
 	real_t   *biasPart;     // b, where b is trainable but shared across time steps
 	real_t   *targets;      // o_t-1
@@ -1110,6 +1145,8 @@ namespace {
 	
 	bool      tieVar;
 
+	const char *patTypes;
+	
 	// from 1 to timesteps * num_mixture
 	__host__ __device__ void operator() (const thrust::tuple<const real_t&, int> &t) const
 	{
@@ -1119,9 +1156,12 @@ namespace {
 	    int featIndex = temp %  featureDim; 
 	    int timeStep  = idx  / (featureDim * mixNum);
 	    int mixIndex  = temp /  featureDim;
+
+	    if (patTypes[timeStep] == PATTYPE_NONE)
+		return;
 	    
-	    if (timeStep < stepBack){
-		// skip the first time step
+	    if (timeStep < stepBack * paral){
+		// skip the first time step (for parallel sequences, it skipped the first block)
 		return;
 	    }
 	    
@@ -1129,8 +1169,9 @@ namespace {
 	    // Add to the mean value
 	    pos_mean = (totalTime * mixNum + 
 			timeStep  * featureDim * mixNum + 
-			mixIndex  * featureDim + featIndex); 
-	    pos_data = ((timeStep - stepBack)  * layerSizeOut) + startDOut + featIndex;
+			mixIndex  * featureDim + featIndex);
+	    // Pointer to the previous step of this utterance
+	    pos_data = ((timeStep - stepBack * paral)  * layerSizeOut) + startDOut + featIndex;
 	    
 	    /********************* FATAL ERROR *******************
 	     * b can only be added once when stepBack==1
@@ -1144,7 +1185,7 @@ namespace {
 		int pos_a, pos_b;
 		int backOrder = (trainableBPos - trainableAPos) / featureDim;
 		pos_a = totalTime * trainableAPos + timeStep * backOrder * featureDim + 
-		    (stepBack - 1) * featureDim + featIndex;
+		    (stepBack - 1) * paral * featureDim + featIndex;
 		pos_b = totalTime * trainableBPos + timeStep * featureDim + featIndex;
 		*(mdnPara + pos_mean) = ((*(mdnPara   + pos_mean))  + 
 					 ((*(mdnPara  + pos_a)) * (*(targets+pos_data))) + 
@@ -1220,13 +1261,16 @@ namespace {
 	int startDOut;
 	int layerSizeOut;
 	int backOrder;
-
+	int paral;
+	
 	real_t   *gradBuf;
 	real_t   *target;       // x
 	real_t   *mdnPara;      // 
 	real_t   *postPbuff;
 	bool      tieVar;
 
+	const char *patTypes;
+	
 	// from 1 to timesteps * num_mixture
 	__host__ __device__ void operator() (const thrust::tuple<const real_t&, int> &t) const
 	{
@@ -1238,9 +1282,12 @@ namespace {
 	    int timeStep  = temp2 % totalTime;
 	    int backStep  = temp2 / totalTime + 1;
 
-
+	    // skip the dummy node (for parallel mode)
+	    if (patTypes[timeStep] == PATTYPE_NONE)
+		return;
+	    
 	    // skip the first time step
-	    if (timeStep < backStep)
+	    if (timeStep < backStep * paral)
 		return;
 	    
 	    // set the pointer
@@ -1264,7 +1311,7 @@ namespace {
 	     * : how could I just use pos_dataShift as pos_data ??? 
 	     ************************************************************/
 	    pos_data = (layerSizeOut * (timeStep)) + startDOut + featIndex;
-	    pos_dataShift = (layerSizeOut * (timeStep - backStep)) + startDOut + featIndex;
+	    pos_dataShift = (layerSizeOut * (timeStep - backStep * paral)) + startDOut + featIndex;
 	    
 	    // Note, dimension -> backstep -> mixture -> time
 	    pos_buffW = (timeStep * mixNum + mixIndex) * featureDim * backOrder +
@@ -2118,6 +2165,7 @@ namespace {
 	real_t  randomSeed;
 	real_t *output;       // targets data
 	const real_t *prob;   // mdn parameter (softmax)
+	const char *patTypes;
 
 	// from 1 to timesteps
         __host__ __device__ void operator() (const thrust::tuple<const real_t&, int> &t) const
@@ -2127,6 +2175,8 @@ namespace {
 	    
 	    real_t temp = 0.0; // temp for the largest prob
 	    int pos     = 0;   // idx of the prob
+	    if (patTypes[outputIdx] == PATTYPE_NONE)
+		return;
 
 	    if (genMethod == NN_SOFTMAX_GEN_BEST){
 		// Pick the one-hot vector
@@ -2177,7 +2227,8 @@ namespace {
 	real_t randomSeed;
 	real_t       *output;       // targets data
 	const real_t *prob;         // mdn parameter (softmax)
-
+	const char *patTypes;
+	
 	// from 1 to timesteps
         __host__ __device__ void operator() (const thrust::tuple<const real_t&, int> &t) const
         {
@@ -2187,6 +2238,9 @@ namespace {
 	    real_t temp = 0.0;	    
 	    int    pos  = 0;
 
+	    if (patTypes[outputIdx] == PATTYPE_NONE)
+		return;
+	    
 	    if (prob[outputIdx * paradim] < threshold){
 		*targetClass = (real_t)0.0;
 	    }else{
@@ -2237,6 +2291,9 @@ namespace {
 	    int timestep   = outputIdx / paraDim;
 	    int dimIdx     = outputIdx % paraDim;
 
+	    if (patTypes[timestep] == PATTYPE_NONE)
+		return;
+	    
 	    real_t *data = NNOutput + (timestep * NNOutputSize + dimIdx) + startD;
 	    // uvSigmoid == True && dimIdx == 0, this is the sigmoid probability 
 	    //  that this frame is voiced. 1-prob makes it the prob. to be unvoiced
@@ -2256,7 +2313,7 @@ namespace {
 	real_t *paraPtr;
 	real_t *targets;
 	real_t *mdnPara;
-	
+	const char *patTypes;
 	// from timesteps * featureDim
 	__host__ __device__ void operator() (const thrust::tuple<real_t&, int> &t) const
 	{
@@ -2266,6 +2323,9 @@ namespace {
 	    int timeStep = idx / (featureDim);
 	    int dimStep  = idx % (featureDim);
 
+	    if (patTypes[timeStep] == PATTYPE_NONE)
+		return;
+	    
 	    const real_t *mixture = mdnPara + timeStep*mixtureNum;
 	    real_t tmp = 0.0;
 	    int flag = 0;
@@ -3178,7 +3238,7 @@ namespace layers {
 	fn.target = helpers::getRawPointer(fillBuffer);
 	fn.tarDim = bufferDim;
 	fn.tarS   = dimStart;
-	
+	fn.patTypes     = helpers::getRawPointer(this->m_precedingLayer.patTypes());
 	
 	if (this->m_feedBackType == MDNUNIT_FEEDBACK_OPT_0 ||
 	    this->m_feedBackType == MDNUNIT_FEEDBACK_OPT_1){
@@ -3214,7 +3274,7 @@ namespace layers {
 	fn.target = helpers::getRawPointer(fillBuffer);
 	fn.tarDim = bufferDim;
 	fn.tarS   = dimStart;
-	
+	fn.patTypes     = helpers::getRawPointer(this->m_precedingLayer.patTypes());
 	
 	if (this->m_feedBackType == MDNUNIT_FEEDBACK_OPT_0){
 	    fn.source = helpers::getRawPointer(this->m_paraVec);
@@ -3486,7 +3546,7 @@ namespace layers {
 		internal::SumUpOutputsFn fn;
 		fn.dimSize = this->m_paraDim;
 		fn.outputs = helpers::getRawPointer(this->m_paraVec);
-
+		fn.patTypes = helpers::getRawPointer(this->m_precedingLayer.patTypes());
 		int n =this->m_precedingLayer.curMaxSeqLength();
 		n = n*this->m_precedingLayer.parallelSequences();
 		// n = n*(this->m_paraDim);
@@ -3506,7 +3566,7 @@ namespace layers {
 		internal::NormalizeOutputsFn fn;
 		fn.layerSize = this->m_paraDim;
 		fn.normFacts = helpers::getRawPointer(this->m_offset);
-	    
+		fn.patTypes = helpers::getRawPointer(this->m_precedingLayer.patTypes());
 		int n =this->m_precedingLayer.curMaxSeqLength();
 		n = n*this->m_precedingLayer.parallelSequences();
 		n = n*this->m_paraDim;
@@ -3625,6 +3685,7 @@ namespace layers {
 		internal::SumUpOutputsFn fn;
 		fn.dimSize = this->m_paraDim;
 		fn.outputs = helpers::getRawPointer(this->m_paraVec);
+		fn.patTypes = helpers::getRawPointer(this->m_precedingLayer.patTypes());
 		thrust::for_each(
 		   thrust::make_zip_iterator(
 				thrust::make_tuple(this->m_offset.begin() + ts,  
@@ -3640,6 +3701,7 @@ namespace layers {
 		internal::NormalizeOutputsFn fn;
 		fn.layerSize = this->m_paraDim;
 		fn.normFacts = helpers::getRawPointer(this->m_offset);
+		fn.patTypes = helpers::getRawPointer(this->m_precedingLayer.patTypes());
 		thrust::for_each(
 		thrust::make_zip_iterator(
 		   thrust::make_tuple(this->m_paraVec.begin() + ts*this->m_paraDim,
@@ -3675,6 +3737,8 @@ namespace layers {
 		fn.threshold    = m_threshold;
 		fn.genMethod    = this->m_genMethod;
 		fn.randomSeed   = 0.0;
+		fn.patTypes = helpers::getRawPointer(this->m_precedingLayer.patTypes());
+		
 		int n = this->m_precedingLayer.curMaxSeqLength();
 		n = n*this->m_precedingLayer.parallelSequences();
 		
@@ -3698,6 +3762,8 @@ namespace layers {
 		fn.layerSizeOut = this->m_layerSizeTar;
 		fn.genMethod    = this->m_genMethod;
 		fn.randomSeed   = 0.0;
+		fn.patTypes = helpers::getRawPointer(this->m_precedingLayer.patTypes());
+		
 		int n = this->m_precedingLayer.curMaxSeqLength();
 		n = n*this->m_precedingLayer.parallelSequences();
 		
@@ -3733,6 +3799,7 @@ namespace layers {
 		fn.startDOut = this->m_startDimOut;
 		fn.output    = helpers::getRawPointer(targets);
 		fn.prob      = helpers::getRawPointer(this->m_paraVec);
+		fn.patTypes = helpers::getRawPointer(this->m_precedingLayer.patTypes());
 		
 		fn.layerSizeOut = this->m_layerSizeTar;
 		fn.threshold    = m_threshold;
@@ -3760,7 +3827,9 @@ namespace layers {
 		fn.output    = helpers::getRawPointer(targets);
 		fn.prob      = helpers::getRawPointer(this->m_paraVec);
 		fn.layerSizeOut = this->m_layerSizeTar;
-		fn.genMethod    = this->m_genMethod;	    
+		fn.genMethod    = this->m_genMethod;
+		fn.patTypes = helpers::getRawPointer(this->m_precedingLayer.patTypes());
+		
 		int fs = timeStep * this->m_precedingLayer.parallelSequences();
 		int fe = fs       + this->m_precedingLayer.parallelSequences();
 
@@ -3971,6 +4040,8 @@ namespace layers {
 		fn.bufS    = dimStart;
 		fn.paraDim = this->m_paraDim;
 		fn.uvSigmoid = m_uvSigmoid;
+		fn.patTypes     = helpers::getRawPointer(this->m_precedingLayer.patTypes());
+		
 		int n = this->m_precedingLayer.curMaxSeqLength();
 		n = n * this->m_precedingLayer.parallelSequences() * this->m_paraDim;
 		thrust::for_each(
@@ -3994,6 +4065,7 @@ namespace layers {
 		fn.copyDim   = this->m_paraDim;
 		fn.uvSigmoid = m_uvSigmoid;
 		fn.threshold = m_threshold;
+		fn.patTypes     = helpers::getRawPointer(this->m_precedingLayer.patTypes()); 
 		int n = this->m_precedingLayer.curMaxSeqLength();
 		n = n * this->m_precedingLayer.parallelSequences() * fn.copyDim;
 		
@@ -4064,6 +4136,8 @@ namespace layers {
 	    fn.copyDim= this->m_paraDim;
 	    fn.uvSigmoid = m_uvSigmoid;
 	    fn.threshold = 0.5; //m_threshold;
+	    fn.patTypes     = helpers::getRawPointer(this->m_precedingLayer.patTypes());
+	    
 	    thrust::for_each(
 		thrust::make_zip_iterator(
 			thrust::make_tuple(this->m_paraVec.begin() + ts*fn.copyDim, 
@@ -4107,6 +4181,8 @@ namespace layers {
 	    fn.bufS   = dimStart;
 	    fn.paraDim= this->m_paraDim;
 	    fn.uvSigmoid = m_uvSigmoid;
+	    fn.patTypes     = helpers::getRawPointer(this->m_precedingLayer.patTypes());
+	    
 	    thrust::for_each(
 		thrust::make_zip_iterator(
 		   thrust::make_tuple(this->m_paraVec.begin() + ts * this->m_paraDim, 
@@ -4216,7 +4292,7 @@ namespace layers {
         : MDNUnit<TDevice>(startDim, endDim, startDimOut, endDimOut, 
 			   type, (endDim-startDim), precedingLayer,
 			   outputSize, trainable, feedBackOpt)
-	, m_numMixture    (type) // I forget why I used type to name m_numMixture
+	, m_numMixture    (type) // Why did I use type as m_numMixture ?
 	, m_featureDim    (featureDim)
 	, m_varFloor      (0.0)
 	, m_tieVar        (tieVar)
@@ -4231,6 +4307,8 @@ namespace layers {
 	// for BP variance accumulation (only used for tied variance)
 	if (m_tieVar)
 	    m_varBP.resize(this->m_precedingLayer.patTypes().size()*(endDim-startDim)*type, 0.0);
+	else
+	    m_varBP.clear();
 			 
     }
 
@@ -4318,8 +4396,7 @@ namespace layers {
 		thrust::copy(wInit.begin(),
 			     wInit.end(),
 			     tLayer->weights().begin()+
-			     this->m_startDim*tLayer->precedingLayer().size()
-			     );
+			     this->m_startDim*tLayer->precedingLayer().size());
 		
 		// for bias 
 		Cpu::real_vector biasInit;
@@ -4416,7 +4493,7 @@ namespace layers {
 		internal::SumUpOutputsFn fn;
 		fn.dimSize   = this->m_numMixture;
 		fn.outputs   = helpers::getRawPointer(this->m_paraVec);
-
+		fn.patTypes  = helpers::getRawPointer(this->m_precedingLayer.patTypes());
 		int n =        this->m_precedingLayer.curMaxSeqLength();
 		    n = n *    this->m_precedingLayer.parallelSequences();
 		// n = n*(this->m_paraDim);
@@ -4436,7 +4513,7 @@ namespace layers {
 		internal::NormalizeOutputsFn fn;
 		fn.layerSize = this->m_numMixture;
 		fn.normFacts = helpers::getRawPointer(this->m_offset);
-		
+		fn.patTypes = helpers::getRawPointer(this->m_precedingLayer.patTypes());
 		int n = this->m_precedingLayer.curMaxSeqLength();
 		    n = n * this->m_precedingLayer.parallelSequences()*this->m_numMixture;
 
@@ -4572,6 +4649,8 @@ namespace layers {
 		internal::SumUpOutputsFn fn;
 		fn.dimSize   = this->m_numMixture;
 		fn.outputs   = helpers::getRawPointer(this->m_paraVec);
+		fn.patTypes = helpers::getRawPointer(this->m_precedingLayer.patTypes());
+		
 		thrust::for_each(
 		   thrust::make_zip_iterator(
 				 thrust::make_tuple(this->m_offset.begin() + ts,  
@@ -4587,6 +4666,7 @@ namespace layers {
 		internal::NormalizeOutputsFn fn;
 		fn.layerSize = this->m_numMixture;
 		fn.normFacts = helpers::getRawPointer(this->m_offset);
+		fn.patTypes = helpers::getRawPointer(this->m_precedingLayer.patTypes());
 		thrust::for_each(
 		    thrust::make_zip_iterator(
 			  thrust::make_tuple(
@@ -4971,7 +5051,8 @@ namespace layers {
 		fn.targets      = helpers::getRawPointer(targets);
 		fn.mdnPara      = helpers::getRawPointer(this->m_paraVec);
 		fn.tieVar       = this->m_tieVar;
-
+		fn.patTypes     = helpers::getRawPointer(this->m_precedingLayer.patTypes());
+		
 		thrust::for_each(
   			 thrust::make_zip_iterator(
 			     thrust::make_tuple(temp2.begin(), 
@@ -5063,7 +5144,8 @@ namespace layers {
 		fn.targets      = helpers::getRawPointer(targets);
 		fn.mdnPara      = helpers::getRawPointer(this->m_paraVec);
 		fn.tieVar       = this->m_tieVar;
-
+		fn.patTypes     = helpers::getRawPointer(this->m_precedingLayer.patTypes());
+		
 		thrust::for_each(
   			 thrust::make_zip_iterator(
 			     thrust::make_tuple(temp2.begin()+fs, 
@@ -5530,7 +5612,7 @@ namespace layers {
 	fn.target = helpers::getRawPointer(fillBuffer);
 	fn.tarDim = bufferDim;
 	fn.tarS   = dimStart;
-	
+	fn.patTypes     = helpers::getRawPointer(this->m_precedingLayer.patTypes());
 	
 	if (this->m_feedBackType == MDNUNIT_FEEDBACK_OPT_0 ||
 	    this->m_feedBackType == MDNUNIT_FEEDBACK_OPT_1){
@@ -5569,7 +5651,8 @@ namespace layers {
 	fn.target = helpers::getRawPointer(fillBuffer);
 	fn.tarDim = bufferDim;
 	fn.tarS   = dimStart;
-		
+	fn.patTypes     = helpers::getRawPointer(this->m_precedingLayer.patTypes());
+	
 	if (this->m_feedBackType == MDNUNIT_FEEDBACK_OPT_0){
 	    // skip the mixture weight part
 	    int shift = (this->m_precedingLayer.curMaxSeqLength() * 
@@ -5630,7 +5713,7 @@ namespace layers {
 	
 	
 	// initialize the dataBuff, which has the same wides as output of this MDNUnit
-	m_maxTime      = precedingLayer.maxSeqLength();
+	m_maxTime      = precedingLayer.maxSeqLength() * precedingLayer.parallelSequences();
 	
 	#ifdef MIXTUREDYNDIAGONAL
 	// to save the intermediate results, such as the gradients
@@ -5876,6 +5959,7 @@ namespace layers {
     void MDNUnit_mixture_dyn<TDevice>::computeForward()
     {
 	// do the normal feedforward for the MDN part
+	// Mixture weight, mean, and std
 	this->MDNUnit_mixture<TDevice>::computeForward();
 	
 	// prepare the AR parameter
@@ -5890,6 +5974,7 @@ namespace layers {
 	this->MDNUnit_mixture<TDevice>::computeForward(timeStep);
 	
 	// AR parameter only need to be transformed for one time
+	// Assume timeStep starts from zero
 	if (timeStep < 1)
 	    this->transformARParameter();
     }
@@ -5907,7 +5992,7 @@ namespace layers {
 
              #ifdef MIXTUREDYNDIAGONAL		
 	     // Regressio on the time axis 
-	     // one step to calculate wo_t1 + b, change the mean value
+	     // one step to calculate wo _t1 + b, change the mean value
 	     {{
 		if (this->m_dynDirection == MDNUNIT_TYPE_1_DIRECT){
 		    
@@ -5920,7 +6005,9 @@ namespace layers {
 			fn2.totalTime    = this->m_totalTime;
 			fn2.tieVar       = this->m_tieVar;
 			fn2.targets      = helpers::getRawPointer(targets);
-		    
+			fn2.paral        = this->m_paral;
+			fn2.patTypes  = helpers::getRawPointer(this->m_precedingLayer.patTypes());
+			
 			// Block 1025x05
 			if (this->m_tanhReg){
 			    // the m_wTransBuff stores [1 a_1 ... a_N], 
@@ -6013,13 +6100,16 @@ namespace layers {
 		fn2.totalTime    = this->m_totalTime;
 		fn2.startDOut    = this->m_startDimOut;
 		fn2.layerSizeOut = this->m_layerSizeTar;
-		    
+		fn2.paral        = this->m_precedingLayer.parallelSequences();
+		
 		fn2.gradBuf      = helpers::getRawPointer(this->m_dataBuff);
 		fn2.target       = helpers::getRawPointer(targets);
 		fn2.mdnPara      = helpers::getRawPointer(this->m_paraVec);
 		fn2.postPbuff    = helpers::getRawPointer(this->m_tmpPat);
 		fn2.tieVar       = this->m_tieVar;
 		fn2.backOrder    = this->m_backOrder;
+
+		fn2.patTypes     = helpers::getRawPointer(this->m_precedingLayer.patTypes());
 		
 		int n =  this->m_backOrder  * this->m_totalTime * 
 		    this->m_numMixture * this->m_featureDim;
@@ -6407,6 +6497,8 @@ namespace layers {
 			fn2.mixNum       = this->m_numMixture;
 			fn2.totalTime    = this->m_totalTime;
 			fn2.targets      = helpers::getRawPointer(targets);
+			fn2.paral        = this->m_paral;
+			fn2.patTypes  = helpers::getRawPointer(this->m_precedingLayer.patTypes());
 			
 			/*if (this->m_tanhReg && this->m_backOrder < 0){
 			    
@@ -6491,7 +6583,8 @@ namespace layers {
 	    fn.targets      = helpers::getRawPointer(targets);
 	    fn.mdnPara      = helpers::getRawPointer(this->m_paraVec);
 	    fn.tieVar       = this->m_tieVar;
-
+	    fn.patTypes     = helpers::getRawPointer(this->m_precedingLayer.patTypes());
+	    
 	    startPos    = i     * datapointerperFrame;
 	    endPos      = (i+1) * datapointerperFrame;
 	    thrust::for_each(
@@ -6568,7 +6661,9 @@ namespace layers {
 			fn2.mixNum       = this->m_numMixture;
 			fn2.totalTime    = this->m_totalTime;
 			fn2.targets      = helpers::getRawPointer(targets);
-						      
+			fn2.paral        = this->m_paral;
+			fn2.patTypes  = helpers::getRawPointer(this->m_precedingLayer.patTypes());
+			
 		       if(this->m_tanhReg){
 			    fn2.linearPart= helpers::getRawPointer(this->m_wTransBuff) + 
 				stepBack * this->m_featureDim;
@@ -6612,7 +6707,8 @@ namespace layers {
 	    fn.targets      = helpers::getRawPointer(targets);
 	    fn.mdnPara      = helpers::getRawPointer(this->m_paraVec);
 	    fn.tieVar       = this->m_tieVar;
-
+	    fn.patTypes     = helpers::getRawPointer(this->m_precedingLayer.patTypes());
+	    
 	    startPos    = i     * datapointerperFrame;
 	    endPos      = (i+1) * datapointerperFrame;
 	    thrust::for_each(
@@ -6694,7 +6790,7 @@ namespace layers {
 	fn.target = helpers::getRawPointer(fillBuffer);
 	fn.tarDim = bufferDim;
 	fn.tarS   = dimStart;
-	
+	fn.patTypes     = helpers::getRawPointer(this->m_precedingLayer.patTypes());
 	
 	if (this->m_feedBackType == MDNUNIT_FEEDBACK_OPT_0 ||
 	    this->m_feedBackType == MDNUNIT_FEEDBACK_OPT_1){
@@ -6735,7 +6831,8 @@ namespace layers {
 	fn.target = helpers::getRawPointer(fillBuffer);
 	fn.tarDim = bufferDim;
 	fn.tarS   = dimStart;
-		
+	fn.patTypes     = helpers::getRawPointer(this->m_precedingLayer.patTypes());
+	
 	if (this->m_feedBackType == MDNUNIT_FEEDBACK_OPT_0){
 	    // skip the mixture weight part
 	    int shift = (this->m_precedingLayer.curMaxSeqLength() * 
@@ -6997,8 +7094,9 @@ namespace layers {
 		    fn2.layerSizeOut = this->m_layerSizeTar;
 		    fn2.mixNum       = this->m_numMixture;
 		    fn2.totalTime    = totalTime;
-		    
+		    fn2.paral        = this->m_precedingLayer.parallelSequences();
 		    fn2.targets      = helpers::getRawPointer(targets);
+		    fn2.patTypes  = helpers::getRawPointer(this->m_precedingLayer.patTypes());
 		    
 		    fn2.linearPart   = NULL;
 		    fn2.biasPart     = NULL;
@@ -7079,12 +7177,14 @@ namespace layers {
 		    fn2.layerSizeOut = this->m_layerSizeTar;
 		    fn2.mixNum       = this->m_numMixture;
 		    fn2.totalTime    = totalTime;
-		
+		    fn2.paral        = this->m_precedingLayer.parallelSequences();
 		    fn2.targets      = helpers::getRawPointer(targets);
 		    fn2.mdnPara      = helpers::getRawPointer(this->m_paraVec);
 		    fn2.trainableAPos= this->m_a_pos;
 		    fn2.trainableBPos= this->m_b_pos;
-		
+		    
+		    fn2.patTypes  = helpers::getRawPointer(this->m_precedingLayer.patTypes());
+		    
 		    fn2.linearPart   = NULL;
 		    fn2.biasPart     = NULL;
 		    fn2.stepBack     = stepBack;
@@ -7108,7 +7208,8 @@ namespace layers {
 		fn.targets      = helpers::getRawPointer(targets);
 		fn.mdnPara      = helpers::getRawPointer(this->m_paraVec);
 		fn.tieVar       = this->m_tieVar;
-
+		fn.patTypes     = helpers::getRawPointer(this->m_precedingLayer.patTypes());
+		
 		startPos    = i     * datapointerperFrame;
 		endPos      = (i+1) * datapointerperFrame;
 		thrust::for_each(

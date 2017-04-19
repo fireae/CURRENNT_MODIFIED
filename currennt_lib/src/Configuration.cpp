@@ -740,7 +740,13 @@ Configuration::Configuration(int argc, const char *argv[])
 	std::cout << "\n\t\tRandom seed: " << m_randomSeed << std::endl;
 	
     }
+
+    if (m_mseWeightPath.size()>0){
+	std::cout << "\tUsing MSE Weight: " << m_mseWeightPath  << std::endl;
+    }
+
     
+    // Checking 
     /* Add 16-02-22 Wang: for WE updating */
     if (m_weUpdate){
 	// for checking:
@@ -754,17 +760,12 @@ Configuration::Configuration(int argc, const char *argv[])
 	}
     }
 
-    if (m_mseWeightPath.size()>0){
-	std::cout << "\tUsing MSE Weight: " << m_mseWeightPath  << std::endl;
-    }
-
     if (m_auxDataDir.size() > 0){
 	std::cout << "\tUsing auxilary data. ";
 	if (m_parallelSequences > 1){
 	    std::cout << "Parallel training will be turned off." << std::endl;
 	    m_parallelSequences = 1;
-	}
-	
+	}	
 	std::cout << std::endl;
     }
     
