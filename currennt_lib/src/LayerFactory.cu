@@ -43,7 +43,7 @@
 #include "layers/SkipAddLayer.hpp"
 #include "layers/SkipParaLayer.hpp"
 #include "layers/MDNLayer.hpp"
-//#include "layers/CNNLayer.hpp"        // obsolete
+#include "layers/CNNLayer.hpp"
 //#include "layers/LstmLayerCharW.hpp"  // obsolete
 #include "layers/RnnLayer.hpp"
 #include "layers/ParaLayer.hpp"
@@ -91,7 +91,8 @@ layers::Layer<TDevice>* LayerFactory<TDevice>::createLayer(
     	return new FeedBackLayer<TDevice>(layerChild, weightsSection, *precedingLayer);
     else if (layerType == "batchnorm")
     	return new BatchNormLayer<TDevice>(layerChild, weightsSection, *precedingLayer);
-    
+    else if (layerType == "cnn")
+        return new CNNLayer<TDevice>(layerChild, weightsSection, *precedingLayer);    
     /*
     // not implemented yet
     else if (layerType == "lstmw")
@@ -100,10 +101,7 @@ layers::Layer<TDevice>* LayerFactory<TDevice>::createLayer(
     else if (layerType == "blstmw")
     	return new LstmLayerCharW<TDevice>(layerChild, weightsSection, *precedingLayer, 
 					   chaDim, maxTxtLength, true);
-    else if (layerType == "cnn")
-        return new CNNLayer<TDevice>(layerChild, weightsSection, *precedingLayer);
     */
-    
     // 
     else if (layerType == "sse"                       || layerType == "weightedsse"  || 
 	     layerType == "rmse"                      || layerType == "ce"  || 

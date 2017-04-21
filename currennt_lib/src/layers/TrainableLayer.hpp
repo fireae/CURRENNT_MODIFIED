@@ -78,17 +78,6 @@ namespace layers {
             Layer<TDevice>           &precedingLayer
             );
 
-	// overload for CNN
-	TrainableLayer(
-            const helpers::JsonValue &layerChild,
-            const helpers::JsonValue &weightsSection,
-	    int                       inputWeightsPerBlock, 
-            int                       internalWeightsPerBlock,
-            int                       weightSize, 
-            int                       outputSize,
-            Layer<TDevice>           &precedingLayer
-            );
-
         /**
          * Destructs the Layer
          */

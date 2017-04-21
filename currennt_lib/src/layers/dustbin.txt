@@ -1255,3 +1255,316 @@ Block1226x04
 		    shiftDim += (m_oneHotDim[i]-1);
 		}
 	    }
+
+
+-------
+Block 20170421x01
+    /*
+    struct ConvolutionCore
+    {
+        int    curLayerSize;
+	int    preLayerSize;
+	
+	real_t *sourceData;
+	real_t *targetBuff;
+	real_t *weight;
+
+	int    *maxPoolingIdxBuf;   // pooling idx (buffer)
+	int    *winSizeBuf;         // size of window (buffer)
+	int    *conRangeBuf;        // convolution range (buffer)
+	int    *weightIdx;
+	
+	const char *patTypes;
+	int   paral;                
+	int   maxSeqLength;         // max length of one utterance
+	
+        __host__ __device__ void operator() (const thrust::tuple<int&, int> &t) const
+        {
+	    
+            // unpack the tuple
+            int outputIdx = t.get<1>();
+
+            // calculate the pattern index
+            int timeIdx = outputIdx / curLayerSize;   // 
+	    int dimIdx  = outputIdx % curLayerSize;   // also the window index
+
+	    if (patTypes[timeIdx] == PATTYPE_NONE)
+		return;
+
+	    //
+	    int winSize = winSizeBuf[dimIdx];
+	    int winConv = conRangeBuf[dimIdx];
+	    int wIdx    = weightIdx[dimIdx];
+	    
+	    int sIdx = 0;
+	    int eIdx = 0;
+
+	    real_t maxValue  = -1 * helpers::NumericLimits<real_t>::max();
+	    real_t tmpResult = 0.0;
+	    
+	    for (int conShift = -1 * winConv; conShift <= winConv; conShift++){
+		sIdx = timeIdx - winSize * paral + conShift * paral;
+		eIdx = timeIdx + winSize * paral + conShift * paral;
+		    
+		tmpResult = 0.0;
+
+		for (int j = sIdx; j <= eIdx; j +=  paral){
+		    
+		    // out of the data range
+		    if (j < 0 || j >= (maxSeqLength*paral) || patTypes[j] == PATTYPE_NONE)
+			continue;
+		    
+		    // Convolution
+		    for (int i = 0; i < preLayerSize; i++)
+			tmpResult += (sourceData[j * preLayerSize + i] *
+				      weight[wIdx + (j-sIdx)/paral * preLayerSize + i]);
+		}
+		if (tmpResult > maxValue){
+		    maxValue = tmpResult;
+		    t.get<0>() = conShift;
+		}
+	    }
+	    targetBuff[outputIdx] = cell_act_fn_t::fn(maxValue);
+        }
+    };
+    struct GradientPreLayer
+    {
+	int     preLayerSize;
+	int     curLayerSize;
+
+	real_t *curErrorBuf;
+	real_t *preErrorBuf;
+	real_t *weight;
+	
+	int    *maxPoolingIdxBuf;   // pooling idx (buffer)
+	int    *winSizeBuf;         // size of window (buffer)
+	int    *weightIdx;
+	int    *conRangeBuf;
+	
+	const char *patTypes;
+	
+	int     paral;
+	int     maxSeqLength;
+	
+	__host__ __device__ void operator() (const thrust::tuple<int&, int> &t) const
+	{
+	    int outputIdx = t.get<1>();    
+            // calculate the pattern index
+            int timeIdx = outputIdx / preLayerSize;   // 
+	    int dimIdx  = outputIdx % preLayerSize;   // also the window index
+	    
+	    int paralIdx= timeIdx   % paral;          // which utterance in the parallel block ?
+	    int timeIdx2= timeIdx   / paral;          // which time block ?
+	    
+	    if (patTypes[timeIdx] == PATTYPE_NONE){
+		preErrorBuf[outputIdx] = 0.0;
+		return;
+	    }
+	    
+	    int winSize = 0;  // window size 
+	    int wIdx    = 0;  // index to the first weight of one window matrix
+	    int winShift= 0;  // index of the max pooling
+	    
+	    int sIdx    = 0;
+	    int eIdx    = 0;
+	    int wShift  = 0;  // tmp
+	    	    
+	    for (int k = 0; k < curLayerSize; k++){
+
+		// determine the possible time range
+		winSize  = winSizeBuf[k];
+		winShift = conRangeBuf[k];
+		wIdx     = weightIdx[k];
+
+		// time range (of parallel block)
+		sIdx = timeIdx2 - winSize - winShift; // minimum timeIdx to cover the current time
+		eIdx = timeIdx2 + winSize + winShift; // maximum timeidx to cover the current time
+
+		for (int t = (sIdx * paral + paralIdx); t <= (eIdx * paral + paralIdx);
+		     t += paral){
+		    
+		    // skip the dummy node
+		    if (patTypes[t] == PATTYPE_NONE)
+			continue;
+		    
+		    winShift = maxPoolingIdxBuf[t * curLayerSize + k]; // maxpooling shift
+		    
+		    sIdx = t + winShift * paral - winSize * paral;
+		    eIdx = t + winShift * paral + winSize * paral;
+		    
+		    if (timeIdx >= sIdx && timeIdx <= eIdx){
+			// which column of the weight 
+			wShift = ((timeIdx - (t + winShift * paral)) / paral) + winSize;
+			
+			preErrorBuf[outputIdx] += (curErrorBuf[t * curLayerSize + k] *
+						   weight[wIdx + wShift * preLayerSize + dimIdx]);
+		    }
+		}
+	    }
+	   
+	}
+    };
+    
+    struct GradientWeight
+    {
+	int     preLayerSize;
+	int     curLayerSize;
+
+	real_t *curErrorBuf;
+	real_t *preOutput;
+	real_t *weightErrorBuf;
+	
+	int    *maxPoolingIdxBuf;   // pooling idx (buffer)
+	int    *winSizeBuf;         // size of window (buffer)
+	int    *weightIdx;
+
+	const char *patTypes;
+	
+	int     paral;
+	int     maxSeqLength;
+	
+	__host__ __device__ void operator() (const thrust::tuple<int&, int> &t) const
+	{
+	    
+	    int outputIdx = t.get<1>();
+	    int dimIdx = 0;
+	    int colIdx = 0;
+	    int rowIdx = 0;
+	    
+	    for (int i = 0; i < curLayerSize; i++){
+		if (outputIdx < weightIdx[i+1]){
+		    dimIdx = i;
+		    colIdx = (outputIdx - weightIdx[i]) / preLayerSize;
+		    rowIdx = (outputIdx - weightIdx[i]) % preLayerSize;
+		}
+	    }
+
+	    int winShift= 0;  // index of the max pooling
+	    int dataIdx = 0;
+	    int winSize = winSizeBuf[dimIdx];
+	    
+	    for (int t = 0; t < maxSeqLength * paral; t++){
+		// skip the dummy node
+		if (patTypes[t] == PATTYPE_NONE)
+		    continue;
+		
+		winShift = maxPoolingIdxBuf[t * curLayerSize + dimIdx];
+		dataIdx  = t + (colIdx - winSize) * paral + winShift * paral;
+		
+		if (dataIdx < 0 || dataIdx >= (maxSeqLength * paral) ||
+		    patTypes[dataIdx] == PATTYPE_NONE)
+		    continue;
+		
+		weightErrorBuf[weightIdx[dimIdx] + colIdx * preLayerSize + rowIdx] +=
+		    (curErrorBuf[t * curLayerSize + dimIdx] *
+		     preOutput[dataIdx * preLayerSize + rowIdx]);
+	    }
+	}
+    };
+    */
+
+------
+Block 20170421x02
+	/*
+	internal::ConvolutionCore fn;
+	fn.curLayerSize     = this->size();
+	fn.preLayerSize     = this->precedingLayer().size();
+
+	fn.sourceData       = helpers::getRawPointer(this->precedingLayer().outputs());
+	fn.targetBuff       = helpers::getRawPointer(this->outputs());
+	fn.weight           = helpers::getRawPointer(this->weights());
+	
+	fn.maxPoolingIdxBuf = helpers::getRawPointer(m_maxIdxBuffer);
+	fn.winSizeBuf       = helpers::getRawPointer(m_winWidth_D);
+	fn.conRangeBuf      = helpers::getRawPointer(m_winConRange_D);
+	fn.weightIdx        = helpers::getRawPointer(m_weightIdx);
+
+	fn.patTypes         = helpers::getRawPointer(this->patTypes());
+	fn.paral            = this->precedingLayer().parallelSequences();
+	fn.maxSeqLength     = this->curMaxSeqLength();
+	    
+	int n =this->precedingLayer().curMaxSeqLength();
+	n = n*this->precedingLayer().parallelSequences();
+	n = n*this->size();
+
+	thrust::for_each(
+	     thrust::make_zip_iterator(
+			thrust::make_tuple(m_maxIdxBuffer.begin(),
+					   thrust::counting_iterator<int>(0))),
+	     thrust::make_zip_iterator(
+			thrust::make_tuple(m_maxIdxBuffer.begin()+n, 
+					   thrust::counting_iterator<int>(0)+n)),
+	     fn);
+	*/
+
+
+
+-------
+Block 20170421x03
+	/*
+	// Gradient to the previous layer
+	{{
+		
+	   internal::GradientPreLayer fn;
+	   fn.curLayerSize     = this->size();
+	   fn.preLayerSize     = this->precedingLayer().size();
+
+	   fn.preErrorBuf      = helpers::getRawPointer(this->precedingLayer().outputErrors());
+	   fn.curErrorBuf      = helpers::getRawPointer(this->outputErrors());
+	   fn.weight           = helpers::getRawPointer(this->weights());
+	
+	   fn.maxPoolingIdxBuf = helpers::getRawPointer(m_maxIdxBuffer);
+	   fn.winSizeBuf       = helpers::getRawPointer(m_winWidth_D);
+	   fn.weightIdx        = helpers::getRawPointer(m_weightIdx);
+	   fn.conRangeBuf      = helpers::getRawPointer(m_winConRange_D);
+	   
+	   fn.patTypes         = helpers::getRawPointer(this->patTypes());
+	   fn.paral            = this->precedingLayer().parallelSequences();
+	   fn.maxSeqLength     = this->curMaxSeqLength();
+
+	   int n =this->precedingLayer().curMaxSeqLength();
+	   n = n*this->precedingLayer().parallelSequences();
+	   n = n*this->precedingLayer().size();
+
+	   thrust::for_each(
+	     thrust::make_zip_iterator(
+			thrust::make_tuple(m_maxIdxBuffer.begin(),
+					   thrust::counting_iterator<int>(0))),
+	     thrust::make_zip_iterator(
+			thrust::make_tuple(m_maxIdxBuffer.begin() + n, 
+					   thrust::counting_iterator<int>(0) + n)),
+	     fn);
+	}}
+
+	thrust::fill(this->_weightUpdates().begin(),
+		     this->_weightUpdates().end(), 0.0);
+	{{
+	   internal::GradientWeight fn;
+	   fn.curLayerSize     = this->size();
+	   fn.preLayerSize     = this->precedingLayer().size();
+
+	   fn.curErrorBuf      = helpers::getRawPointer(this->outputErrors());
+	   fn.preOutput        = helpers::getRawPointer(this->precedingLayer().outputs());
+	   fn.weightErrorBuf   = helpers::getRawPointer(this->_weightUpdates());
+	
+	   fn.maxPoolingIdxBuf = helpers::getRawPointer(m_maxIdxBuffer);
+	   fn.winSizeBuf       = helpers::getRawPointer(m_winWidth_D);
+	   fn.weightIdx        = helpers::getRawPointer(m_weightIdx);
+
+	   fn.patTypes         = helpers::getRawPointer(this->patTypes());
+	   fn.paral            = this->precedingLayer().parallelSequences();
+	   fn.maxSeqLength     = this->curMaxSeqLength();
+
+	   int n = m_weightIdx[m_winWidth_H.size()];
+	   
+	   thrust::for_each(
+	     thrust::make_zip_iterator(
+			thrust::make_tuple(m_maxIdxBuffer.begin(),
+					   thrust::counting_iterator<int>(0))),
+	     thrust::make_zip_iterator(
+			thrust::make_tuple(m_maxIdxBuffer.begin() + n, 
+					   thrust::counting_iterator<int>(0) + n)),
+	     fn);
+	}}
+	*/
+

@@ -32,79 +32,40 @@
 #include "TrainableLayer.hpp"
 #include <boost/shared_ptr.hpp>
 
-
 namespace layers {
-
-    /******************************************************************************************//*
-     * CNN unit (the component for one feature Map) 
-     *
-     *
-     *********************************************************************************************/
-    template <typename TDevice>
-    class CNNUnit
-    {
-	typedef typename TDevice::real_vector real_vector;
-	typedef typename Cpu::real_vector cpu_real_vector;
-    protected:
-	
-	// CNN filter parameter
-	const int m_filterW;         //
-	const int m_filterH;         //
-	const int m_strideW;         // stride along width
-	const int m_strideH;         // stride along height
-	const int m_poolW;           // pooling along width
-	const int m_poolH;           // pooling along height
-	const int m_paddW;           // padding length for width
-	const int m_paddH;           // padding length for height
-	
-	int m_inputW;                //
-	int m_inputH;                //
-	int m_inputC;                // number of channel of input
-	
-	// Note: CNN, # weight != layersize * preceding_layersize 
-	//            
-	const int m_weightDim;      // weight of this CNN layer
-	const int m_outputDim;      // size of output
-	
-	Layer<TDevice> &m_precedingLayer;
-	real_vector    m_featOutput;       // output of this feature map
-	
-    public:
-	
-	CNNUnit(const int width,   const int height,
-		const int strideW, const int strideH,
-		const int poolW,   const int poolH,
-		const int paddW,   const int paddH,
-		const int weiDim,  const int outDim,
-		Layer<TDevice> &precedingLayer);
-
-	virtual ~CNNUnit();
-
-	virtual void computeForwardPass();
-	
-	virtual void computeBackwardPass();
-
-    };
 
     /******************************************************************************************//**
      * CNN layer 
-     *  including the normal convolutional layer and pooling layer
-     *
-     *  CNNFeatureUnit: a feature unit corresponds to a feature map
-     *     ^
-     *     |
-     *  CNNLayer
      *********************************************************************************************/
     template <typename TDevice>
     class CNNLayer : public TrainableLayer<TDevice>
     {
 	typedef typename TDevice::real_vector real_vector;
 	typedef typename Cpu::real_vector cpu_real_vector;
+	typedef typename TDevice::int_vector int_vector;
+	typedef typename Cpu::int_vector cpu_int_vector;
 
     protected:
-	std::vector<boost::shared_ptr<CNNUnit<TDevice> > > m_CNNUnit;
-	const int m_weightDim;      // weight of this CNN layer
-	const int m_outputDim;      // size of output
+	cpu_int_vector  m_winWidth_H;     // filter dimension (width of the filter window)
+	int_vector      m_winWidth_D;     // 
+	std::string     m_winWidth_Opt;   //
+
+	int_vector      m_winWidth_Cum;   // cumsum of the filter dimension
+	
+	cpu_int_vector  m_winConRange_H;  // filter convolution range
+	int_vector      m_winConRange_D;
+	std::string     m_winConRange_Opt;
+
+	cpu_int_vector  m_winInterval_H;  // interval between window 
+	int_vector      m_winInterval_D;
+	std::string     m_winInterval_Opt;
+
+	int_vector      m_maxIdxBuffer;   //
+	int_vector      m_weightIdx;      // idx to access the weight of each window filter
+
+	real_vector     m_conBuffer;      // data buffer
+	int             m_winTotalL;      // sum of the width of filter
+	int             m_numMatrixW;     // total number of weights of filter
 	
     public:
 	// initializer and destructor
@@ -117,13 +78,16 @@ namespace layers {
 	virtual const std::string& type() const;
 	
 	virtual void computeForwardPass();
+
+	virtual void computeForwardPass(const int timeStep);
 	
 	virtual void computeBackwardPass();
 
         virtual void loadSequences(const data_sets::DataSetFraction &fraction);
 
-	virtual void mergeOutput();
-	
+	// export
+	virtual void exportLayer(const helpers::JsonValue &layersArray, 
+				 const helpers::JsonAllocator &allocator) const;
     };
     
     

@@ -25,14 +25,6 @@
  * along with CURRENNT.  If not, see <http://www.gnu.org/licenses/>.
  *****************************************************************************/
 
-/*
-  
-  Incomplete implementation
-  
-*/
-
-
-
 
 #ifdef _MSC_VER
 #   pragma warning (disable: 4244) // thrust/iterator/iterator_adaptor.h(121): warning C4244: '+=' : conversion from '__int64' to 'int', possible loss of data
@@ -47,6 +39,7 @@
 #include "../helpers/max.cuh"
 #include "../helpers/safeExp.cuh"
 #include "../helpers/JsonClasses.hpp"
+#include "../helpers/misFuncs.hpp"
 
 #include "../activation_functions/Tanh.cuh"
 #include "../activation_functions/Logistic.cuh"
@@ -70,163 +63,174 @@
 
 #include <fstream>
 #include <cmath>
+#include <vector>
+#include <stdexcept>
 
 #define DEBUG_LOCAL_CNN 1
 
-
-#define CNNOPTIONSPLITER1 "#"
-#define CNNOPTIONSPLITER2 "_"
-
-namespace interal{
+namespace internal{
 namespace{
+
+    typedef activation_functions::Tanh     cell_act_fn_t;
+
+    //
+    // dubstin.txt 20170421x01
+    
+    struct ConvolutionCore
+    {
+
+	real_t *dataBuffer;
+	real_t *targetBuff;
+	real_t *biasWeight;
+	
+	int    *winSizeCum;
+	int    *winHalfSize;
+	int    *winTapInter;
+	
+	int     curLayerSize; 
+	int     winTotalLength;
+	
+	const char *patTypes;
+	int   paral;                
+	int   maxSeqLength;         // max length of one utterance
+	
+        __host__ __device__ void operator() (const thrust::tuple<int&, int> &t) const
+        {
+	    
+            // unpack the tuple
+            int outputIdx = t.get<1>();
+
+            // calculate the pattern index
+            int timeIdx = outputIdx / curLayerSize;   //
+	    int dimIdx  = outputIdx % curLayerSize;   // which filter
+
+	    if (patTypes[timeIdx] == PATTYPE_NONE)
+		return;
+
+	    int dimS  = winSizeCum[dimIdx];     //
+	    int dimE  = winSizeCum[dimIdx+1];   // 
+	    int winHS = winHalfSize[dimIdx];    // half window size
+	    int inter = winTapInter[dimIdx];    // tap interval
+	    
+	    // location of the element to be added;
+	    int dTmp     = dimS + winHS;
+	    int tTmp     = timeIdx;
+	    int maxValue = 0;
+	    
+	    for (int shift = -1 * winHS; shift <= winHS; shift += 1){
+		dTmp = (dimS + winHS) + shift;
+		tTmp = timeIdx + shift * inter * paral;
+		
+		if (tTmp < 0                       || tTmp >= (maxSeqLength * paral) ||
+		    patTypes[tTmp] == PATTYPE_NONE ||
+		    dTmp < dimS                    || dTmp >= dimE)
+		    continue;
+
+		// accumulate the feature
+		maxValue += dataBuffer[tTmp * winTotalLength + dTmp];
+	    }
+
+	    // add bias and pass through the activation function
+	    targetBuff[outputIdx] = cell_act_fn_t::fn(maxValue + biasWeight[dimIdx]);
+        }
+    };
+
+
+    struct ConvolutionCoreGra
+    {
+
+	real_t *dataBuffer;
+	real_t *GradBuffer;
+
+	int    *winSizeCum;
+	int    *winHalfSize;
+	int    *winTapInter;
+	
+	int     curLayerSize; 
+	int     winTotalLength;
+	
+	const char *patTypes;
+	int   paral;                
+	int   maxSeqLength;         // max length of one utterance
+	
+        __host__ __device__ void operator() (const thrust::tuple<int&, int> &t) const
+        {
+	    
+            // unpack the tuple
+            int outputIdx = t.get<1>();
+
+            // calculate the pattern index
+            int timeIdx = outputIdx / curLayerSize;   //
+	    int dimIdx  = outputIdx % curLayerSize;   // which filter
+
+	    if (patTypes[timeIdx] == PATTYPE_NONE)
+		return;
+
+	    int dimS  = winSizeCum[dimIdx];     //
+	    int dimE  = winSizeCum[dimIdx+1];   // 
+	    int winHS = winHalfSize[dimIdx];    // half window size
+	    int inter = winTapInter[dimIdx];    // tap interval
+	    
+	    // location of the element to be added;
+	    int dTmp  = dimS + winHS;
+	    int tTmp  = timeIdx;
+	    
+	    for (int shift = -1 * winHS; shift <= winHS; shift += 1){
+		dTmp = (dimS + winHS) + shift;
+		tTmp = timeIdx + shift * inter * paral;
+		
+		if (tTmp < 0                       || tTmp >= (maxSeqLength * paral) ||
+		    patTypes[tTmp] == PATTYPE_NONE ||
+		    dTmp < dimS                    || dTmp >= dimE)
+		    continue;
+		
+		// copy the gradient
+		dataBuffer[tTmp * winTotalLength + dTmp] = GradBuffer[outputIdx];
+	    }
+        }
+    };
+        
+    struct ComputeDeltaFn
+    {
+        __host__ __device__ void operator() (const thrust::tuple<real_t&, const real_t&> &t) const
+        {
+            real_t delta = cell_act_fn_t::deriv(t.get<1>()) * t.get<0>();
+            t.get<0>() = delta;
+        }
+    };
 
     
 } // namespace 
 } // namespace internal
 
 namespace CNNTools{
-    
-    // calculate the dimension of output features for each feature map (without pooling)
-    int featureDim(const int inputDim, const int filterDim, 
-		   const int stride, const int paddDim)
-    {
-	return (int)std::floor(inputDim - filterDim + 2*paddDim)+1;
+
+    int winWidth(int opt){
+	return (opt * 2 + 1);
     }
     
-    // calculate the dimension after pooling
-    int featureDimAfterPool(const int featureDim, const int pool, const int border)
-    {
-	if (border > 0)
-	    return std::ceil(featureDim/pool);
-	else
-	    return std::floor(featureDim/pool);
+    int winTotalLength(Cpu::int_vector &opt){
+	int cnt =0;
+	for (int i=0; i < opt.size(); i++){
+	    cnt += winWidth(opt[i]);
+	}
+	return cnt;
     }
     
-    // parse the option line
-    std::vector<std::vector<int> > parseOption(const std::string options, 
-					      const std::string layerName)
-    {
-	std::vector<std::string> featureOptions;
-	boost::split(featureOptions, options, boost::is_any_of(CNNOPTIONSPLITER1));
-	if (featureOptions.size() ==0){
-	    featureOptions.push_back(options);
+    int getCNNWeight(const std::string winWidthOpt){
+	Cpu::int_vector tmp;
+	if (winWidthOpt.size() > 0){
+	    ParseIntOpt(winWidthOpt, tmp);
+	    return ((int)std::ceil(winTotalLength(tmp)/(float)tmp.size()));
+	}else{
+	    return 0;
 	}
-	std::vector<std::vector<int> > parsedOption;
-	std::vector<int> tmpOptions;
-	std::vector<std::string> featureOpt;
-	for (int i =0; i<featureOptions.size(); i++){
-	    
-	    boost::split(featureOpt, featureOptions[i], boost::is_any_of(CNNOPTIONSPLITER2));
-	    // fixed format: filterW, filterH, strideW, strideH, poolW, poolH, padW, padH
-	    if (featureOpt.size() != 10){
-		printf("filterW_filterH_strideW_strideH_padW_padH_poolW_poolH_borW_borH\n");
-		throw std::runtime_error(std::string("In valid configuration CNN")+layerName);
-	    }
-	    for (int j=0; j<featureOpt.size(); j++){
-		try {
-		    tmpOptions.push_back(boost::lexical_cast<int>(featureOpt[j]));
-		} catch( boost::bad_lexical_cast const& ) {
-		    printf("Invalid format: filterW_filterH_strideW_strideH_poolW_poolH_padW_padH");
-		    throw std::runtime_error(std::string("In valid configuration CNN: not number")
-					     +layerName);
-	    	}
-	    }
-	    parsedOption.push_back(tmpOptions);
-	    tmpOptions.clear();
-	}
-	return parsedOption;
     }
-	
-    int getOutFeatDim(const helpers::JsonValue &layerChild,
-		     const helpers::JsonValue &weightsSection,
-		     int preLayerSize)
-    {
-	std::string layerName = layerChild->HasMember("name") ? (*layerChild)["name"].GetString()  : "";
-	std::string option    = layerChild->HasMember("size") ? (*layerChild)["size"].GetString()  : "";
-	if (option.size() ==0){
-	    throw std::runtime_error(std::string("Error configuration CNN: void size option"));
-	}
-	std::vector<std::vector<int> > options = parseOption(option, layerName);
-	int featureOutDim = 0;
-	for (int i = 0; i<options.size(); i++){
-	    std::vector<int> tmp = options[i];
-	    featureOutDim += featureDimAfterPool(featureDim(preLayerSize, tmp[0], tmp[2], tmp[4]),
-					     tmp[6], tmp[8]);
-	}
-	return featureOutDim;
-    }
-    
-    int getWeightDim(const helpers::JsonValue &layerChild,
-		     const helpers::JsonValue &weightsSection,
-		     int preLayerSize)
-    {
-	std::string layerName = layerChild->HasMember("name") ? (*layerChild)["name"].GetString()  : "";
-	std::string option    = layerChild->HasMember("size") ? (*layerChild)["size"].GetString()  : "";
-	if (option.size() ==0){
-	    throw std::runtime_error(std::string("Error configuration CNN: void size option"));
-	}
-	std::vector<std::vector<int> > options = parseOption(option, layerName);
-	int weightDim = 0;
-	for (int i = 0; i<options.size(); i++){
-	    // the filter size + one bias
-	    weightDim += (options[i][0]*options[i][1] + 1);
-	}
-	return weightDim;
-    }
+
 }
 
 namespace layers {
-    
-
-    
-    /*****************************************************************************************
-     * CNN feature unit
-     *****************************************************************************************/
-    template <typename TDevice>
-    CNNUnit<TDevice>::CNNUnit(const int fWidth,  const int fHeight,
-			      const int strideW, const int strideH,
-			      const int poolW,   const int poolH,
-			      const int paddW,   const int paddH,
-			      const int weiDim,  const int outDim,
-			      Layer<TDevice> &precedingLayer)
-	: m_filterW   (fWidth)
-	, m_filterH   (fHeight)
-	, m_strideW   (strideW)
-	, m_strideH   (strideH)
-	, m_poolW     (poolW)
-	, m_poolH     (poolH)
-	, m_paddW     (paddW)
-	, m_paddH     (paddH)
-	, m_weightDim (weiDim)
-	, m_outputDim (outDim)
-	, m_precedingLayer (precedingLayer)
-    {
-	// initializing
-	
-	// the size of m_featureOutput must be determined for each fraction of data
-	//  in loadSequence stage
-	// const int inputW,  const int inputH, const int inputC,
-	m_inputW = m_inputH = m_inputC = -1;  
-	
-	
-    }
-
-    template <typename TDevice>
-    CNNUnit<TDevice>::~CNNUnit()
-    {
-    }
-    
-    template <typename TDevice>
-    void CNNUnit<TDevice>::computeForwardPass()
-    {
-    }
-    
-    template <typename TDevice>
-    void CNNUnit<TDevice>::computeBackwardPass()
-    {
-    }
-
-
+   
     /*****************************************************************************************
      * CNN layer 
      *****************************************************************************************/
@@ -235,16 +239,83 @@ namespace layers {
         const helpers::JsonValue &layerChild, 
         const helpers::JsonValue &weightsSection,
         Layer<TDevice> &precedingLayer)
-	: m_weightDim              (CNNTools::getWeightDim(layerChild, weightsSection, precedingLayer.size()))
-	, m_outputDim              (CNNTools::getOutFeatDim(layerChild, weightsSection, precedingLayer.size()))
-	, TrainableLayer<TDevice>  (layerChild, weightsSection, 1, 0, 
-				    m_weightDim, m_outputDim,  precedingLayer)
+	: m_winWidth_Opt    ((layerChild->HasMember("window_width")) ? 
+			     ((*layerChild)["window_width"].GetString()) : (""))
+	, m_winConRange_Opt ((layerChild->HasMember("window_convo_range")) ? 
+			     ((*layerChild)["window_convo_range"].GetString()) : (""))
+	, m_winInterval_Opt ((layerChild->HasMember("window_tap_interval")) ? 
+			     ((*layerChild)["window_tap_interval"].GetString()) : (""))
+	, TrainableLayer<TDevice>  (layerChild, weightsSection,
+				    0,
+				    (CNNTools::getCNNWeight(
+					(layerChild->HasMember("window_width")) ? 
+					((*layerChild)["window_width"].GetString()) : ("")) *
+				     precedingLayer.size() + 1),
+				    precedingLayer)
     {
-	// handling the specification
-
-	// revise the m_outputs, m_outputErrors, m_outputErrorsCopy
 	
-	//
+	if (m_winWidth_Opt.size() < 1)
+	    throw std::runtime_error("Fail to find window_width in network.jsn");
+
+	// Parse the width of filter window
+	m_winWidth_H.clear();
+	ParseIntOpt(m_winWidth_Opt, m_winWidth_H);
+	m_winWidth_D = m_winWidth_H;
+
+	// total width of filter window
+	m_winTotalL  = CNNTools::winTotalLength(m_winWidth_H);
+	
+	// number of weights (transformation matrices, not including the bias part)
+	m_numMatrixW = m_winTotalL * precedingLayer.size(); 
+
+	// parse the convolution range option
+	m_winConRange_H.clear();
+	if (m_winConRange_Opt.size())
+	    ParseIntOpt(m_winConRange_Opt, m_winConRange_H);
+	else{
+	    m_winConRange_H = m_winWidth_H;
+	    thrust::fill(m_winConRange_H.begin(), m_winConRange_H.end(), 1);
+	}
+	m_winConRange_D = m_winConRange_H;
+
+	// parse the tap interval
+	m_winInterval_H.clear();
+	if (m_winInterval_Opt.size())
+	    ParseIntOpt(m_winInterval_Opt, m_winInterval_H);
+	else{
+	    m_winInterval_H = m_winWidth_H;
+	    thrust::fill(m_winInterval_H.begin(), m_winInterval_H.end(), 1);
+	}
+	m_winInterval_D = m_winInterval_H;
+	
+	
+	if (m_winConRange_H.size() != m_winWidth_H.size() ||
+	    m_winInterval_H.size() != m_winWidth_H.size() ||
+	    m_winConRange_H.size() != this->size()        ||
+	    m_winInterval_H.size() != this->size())
+	    throw std::runtime_error("Incompatible layer size and window configuration in CNN");
+
+	// Buffer to log down the max idx
+	m_maxIdxBuffer.resize(this->precedingLayer().outputs().size(), 0);
+
+	// Create index to the first weight cell of each window filter
+	Cpu::int_vector tmp(m_winWidth_H.size() + 1, 0);
+	Cpu::int_vector tmp2(m_winWidth_H.size() + 1, 0);
+	for (int i = 1; i < (m_winWidth_H.size()+1); i++){
+	    tmp[i] = tmp[i-1]  + CNNTools::winWidth(m_winWidth_H[i-1]) * precedingLayer.size();
+	    tmp2[i]= tmp2[i-1] + CNNTools::winWidth(m_winWidth_H[i-1]);
+	}
+	m_weightIdx    = tmp;
+	m_winWidth_Cum = tmp2;
+	
+	// allocate memory for convolution buffer (\sum_window_Length * Time)
+	m_conBuffer.resize(this->precedingLayer().patTypes().size() * m_winTotalL, 0);
+
+	// done
+	printf("\n");
+	printf("\t# CNN weights: %d \n", m_numMatrixW + this->size());
+	printf("\t# CNN filter width %s, total width %d \n", m_winWidth_Opt.c_str(), m_winTotalL);
+	printf("\t# Filter tap interval (1 default) %s \n", m_winInterval_Opt.c_str());
     }
     
     template <typename TDevice>
@@ -255,11 +326,182 @@ namespace layers {
     template <typename TDevice>
     void CNNLayer<TDevice>::computeForwardPass()
     {
+
+	// Step1: prepare the data buffer by matrix transformation
+	{{
+	    helpers::Matrix<TDevice> weightMatrix   (&this->weights(),
+						     this->precedingLayer().size(),
+						     this->m_winTotalL);
+	    
+	    helpers::Matrix<TDevice> plOutputsMatrix(&this->precedingLayer().outputs(), 
+						     this->precedingLayer().size(), 
+						     this->curMaxSeqLength() * 
+						     this->parallelSequences());
+
+            helpers::Matrix<TDevice> outputsMatrix  (&this->m_conBuffer,                 
+						     this->m_winTotalL,                  
+						     this->curMaxSeqLength() * 
+						     this->parallelSequences());
+
+            outputsMatrix.assignProduct(weightMatrix, true, plOutputsMatrix, false);
+	}}
+
+	// Step2: sum the result
+	{{
+	    internal::ConvolutionCore fn;
+	    	    
+	    fn.dataBuffer       = helpers::getRawPointer(this->m_conBuffer);
+	    fn.targetBuff       = helpers::getRawPointer(this->outputs());
+	    fn.biasWeight       = helpers::getRawPointer(this->weights()) + m_numMatrixW;
+	    
+	    fn.winSizeCum       = helpers::getRawPointer(m_winWidth_Cum);
+	    fn.winHalfSize      = helpers::getRawPointer(m_winWidth_D);
+	    fn.winTapInter      = helpers::getRawPointer(m_winInterval_D);
+		
+	    fn.curLayerSize     = this->size();
+	    fn.winTotalLength   = this->m_winTotalL;
+
+	    fn.patTypes         = helpers::getRawPointer(this->patTypes());
+	    fn.paral            = this->precedingLayer().parallelSequences();
+	    fn.maxSeqLength     = this->curMaxSeqLength();
+	    
+	    int n =this->precedingLayer().curMaxSeqLength();
+	    n = n*this->precedingLayer().parallelSequences();
+	    n = n*this->size();
+
+	    thrust::for_each(
+	     thrust::make_zip_iterator(
+			thrust::make_tuple(m_maxIdxBuffer.begin(),
+					   thrust::counting_iterator<int>(0))),
+	     thrust::make_zip_iterator(
+			thrust::make_tuple(m_maxIdxBuffer.begin()+n, 
+					   thrust::counting_iterator<int>(0)+n)),
+	     fn);
+
+	}}
+	
+	// dustbin.txt 20170421x02
+    }
+    
+    template <typename TDevice>
+    void CNNLayer<TDevice>::computeForwardPass(const int timeStep)
+    {
+	// Not implemented
+	throw std::runtime_error("Not implemented yet");
     }
     
     template <typename TDevice>
     void CNNLayer<TDevice>::computeBackwardPass()
     {
+	// Step1: Pass throught the nonlinear function
+	{{
+            internal::ComputeDeltaFn fn;
+            int n = this->curMaxSeqLength() * this->parallelSequences() * this->size();
+            thrust::for_each(
+               thrust::make_zip_iterator(
+		  thrust::make_tuple(this->outputErrors().begin(),   this->outputs().begin())),
+	       thrust::make_zip_iterator(
+		  thrust::make_tuple(this->outputErrors().begin()+n, this->outputs().begin()+n)),
+                fn);
+	}}
+
+	thrust::fill(this->precedingLayer().outputErrors().begin(),
+		     this->precedingLayer().outputErrors().end(), 0.0);	
+
+	// Step2: propagate the gradient
+	{{
+	    internal::ConvolutionCoreGra fn;
+	    	    
+	    fn.dataBuffer       = helpers::getRawPointer(this->m_conBuffer);
+	    fn.GradBuffer       = helpers::getRawPointer(this->outputErrors());
+
+	    fn.winSizeCum       = helpers::getRawPointer(m_winWidth_Cum);
+	    fn.winHalfSize      = helpers::getRawPointer(m_winWidth_D);
+	    fn.winTapInter      = helpers::getRawPointer(m_winInterval_D);
+	    
+	    fn.curLayerSize     = this->size();
+	    fn.winTotalLength   = this->m_winTotalL;
+
+	    fn.patTypes         = helpers::getRawPointer(this->patTypes());
+	    fn.paral            = this->precedingLayer().parallelSequences();
+	    fn.maxSeqLength     = this->curMaxSeqLength();
+	    
+	    int n =this->precedingLayer().curMaxSeqLength();
+	    n = n*this->precedingLayer().parallelSequences();
+	    n = n*this->size();
+
+	    thrust::for_each(
+	     thrust::make_zip_iterator(
+			thrust::make_tuple(m_maxIdxBuffer.begin(),
+					   thrust::counting_iterator<int>(0))),
+	     thrust::make_zip_iterator(
+			thrust::make_tuple(m_maxIdxBuffer.begin()+n, 
+					   thrust::counting_iterator<int>(0)+n)),
+	     fn);
+
+	}}
+
+	// Step3: gradient to previous layer
+	{{
+	    helpers::Matrix<TDevice> weightMatrix   (&this->weights(),
+						     this->precedingLayer().size(),
+						     this->m_winTotalL);
+
+	    helpers::Matrix<TDevice> curErrorMatrix (&this->m_conBuffer,                 
+						     this->m_winTotalL,                  
+						     this->curMaxSeqLength() * 
+						     this->parallelSequences());
+
+            helpers::Matrix<TDevice> preErrorMatrix (&this->precedingLayer().outputErrors(),
+						     this->precedingLayer().size(),
+						     this->curMaxSeqLength() * 
+						     this->parallelSequences());
+
+            preErrorMatrix.assignProduct(weightMatrix, false, curErrorMatrix, false);
+	}}
+
+	// Step4: gradient to the weight
+	{{
+	    helpers::Matrix<TDevice> weightError   (&this->_weightUpdates(),
+						     this->precedingLayer().size(),
+						     this->m_winTotalL);
+
+	    helpers::Matrix<TDevice> curErrorMatrix (&this->m_conBuffer,                 
+						     this->m_winTotalL,                  
+						     this->curMaxSeqLength() * 
+						     this->parallelSequences());
+
+            helpers::Matrix<TDevice> preOutputMatrix (&this->precedingLayer().outputs(),
+						      this->precedingLayer().size(),
+						      this->curMaxSeqLength() * 
+						      this->parallelSequences());
+
+            weightError.assignProduct(preOutputMatrix, false, curErrorMatrix, true);
+	}}
+
+	// Step5: gradient to the bias part
+	{{
+	    // Borrow the m_conBuffer as one vector [1, 1, 1, 1, 1]
+	    thrust::fill(m_conBuffer.begin(),
+			 m_conBuffer.begin() + this->curMaxSeqLength() * this->parallelSequences(),
+			 1.0);
+	    
+	    helpers::Matrix<TDevice> biasError   (&this->_weightUpdates(), 1, this->size(),
+						  m_numMatrixW);
+
+	    helpers::Matrix<TDevice> curErrorMatrix (&this->outputErrors(),                 
+						     this->size(),                  
+						     this->curMaxSeqLength() * 
+						     this->parallelSequences());
+
+            helpers::Matrix<TDevice> onesVec (&this->m_conBuffer, 1,
+					      this->curMaxSeqLength() * this->parallelSequences());
+
+            biasError.assignProduct(onesVec, false, curErrorMatrix, true);
+	    
+	}}
+	
+	// dustbin.txt 20170421x03
     }
 
     template <typename TDevice>
@@ -270,11 +512,6 @@ namespace layers {
 	
 	// 
     }
-
-    template <typename TDevice>
-    void CNNLayer<TDevice>::mergeOutput()
-    {
-    }
     
     template <typename TDevice>
     const std::string& CNNLayer<TDevice>::type() const
@@ -282,9 +519,24 @@ namespace layers {
 	static const std::string m("cnn");
 	return m;
     }
-    
-    template class CNNUnit<Cpu>;
-    template class CNNUnit<Gpu>;
+
+    template <typename TDevice>
+    void CNNLayer<TDevice>::exportLayer(
+	const helpers::JsonValue     &layersArray, 
+	const helpers::JsonAllocator &allocator) const
+    {
+        TrainableLayer<TDevice>::exportLayer(layersArray, allocator);
+	(*layersArray)[layersArray->Size() - 1].AddMember("window_width",
+							  m_winWidth_Opt.c_str(),
+							  allocator);
+        (*layersArray)[layersArray->Size() - 1].AddMember("window_convo_range",
+							  m_winConRange_Opt.c_str(),
+							  allocator);
+        (*layersArray)[layersArray->Size() - 1].AddMember("window_tap_interval",
+							  m_winInterval_Opt.c_str(),
+							  allocator);
+    }
+
     template class CNNLayer<Gpu>;
     template class CNNLayer<Cpu>;
 }

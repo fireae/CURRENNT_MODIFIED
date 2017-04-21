@@ -49,10 +49,22 @@ void ParseStrOpt(const std::string stringOpt, std::vector<std::string> &optVec){
 
 void ParseIntOpt(const std::string stringOpt, Cpu::int_vector &optVec){
     std::vector<std::string> tempArgs;
+    std::vector<std::string> tempArgs2;
+    std::vector<int> tmpresult;
+    
     boost::split(tempArgs, stringOpt, boost::is_any_of("_"));
-    optVec.resize(tempArgs.size(), 0);
-    for (int i =0 ; i<tempArgs.size(); i++)
-	optVec[i] = boost::lexical_cast<int>(tempArgs[i]);
+    for (int i =0 ; i<tempArgs.size(); i++){
+	boost::split(tempArgs2, tempArgs[i], boost::is_any_of("*"));
+	if (tempArgs2.size() == 2){
+	    for (int j=0; j<boost::lexical_cast<int>(tempArgs2[0]); j++)
+		tmpresult.push_back(boost::lexical_cast<int>(tempArgs2[1]));
+	}else{
+	    tmpresult.push_back(boost::lexical_cast<int>(tempArgs[i]));
+	}
+    }
+    optVec.resize(tmpresult.size(), 0.0);
+    for (int i=0;i<optVec.size();i++)
+	optVec[i] = tmpresult[i];
 }
 
 int SumCpuIntVec(Cpu::int_vector &temp){
