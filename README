@@ -81,9 +81,15 @@ Building on Linux requires the following:
 * Boost library 1.48 or higher
 
 To build CURRENNT execute the following commands:
-#> cd currennt
+#> cd CURRENNT_MODIFIED
+(the root directory of the currennt package)
+
 #> mkdir build && cd build
+(make sure you can see build, currennt, currennt_lib in the same directory)
+
 #> cmake ..
+(make sure you can lunch this command. Otherwise, check the location of 'build')
+
 #> make
 
 This produces the executable file 'currennt'.
