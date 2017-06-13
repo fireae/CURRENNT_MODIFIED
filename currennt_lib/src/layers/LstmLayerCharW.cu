@@ -1704,7 +1704,7 @@ namespace layers {
     template <typename TDevice>
     void LstmLayerCharW<TDevice>::loadSequences(const data_sets::DataSetFraction &fraction)
     {
-        TrainableLayer<TDevice>::loadSequences(fraction);
+        TrainableLayer<TDevice>::loadSequences(fraction, -1);
 	
 	if (m_charW)
 	    m_charW->loadSequence(fraction);

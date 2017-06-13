@@ -22,8 +22,11 @@
 
 #include "PostOutputLayer.hpp"
 #include "../helpers/getRawPointer.cuh"
+#include "../helpers/misFuncs.hpp"
 #include "../MacroDefine.hpp"
 #include <boost/lexical_cast.hpp>
+
+
 #include <stdexcept>
 
 #include <fstream>
@@ -101,6 +104,7 @@ namespace layers {
         : Layer<TDevice>  (layerChild, precedingLayer.parallelSequences(), 
 			   precedingLayer.maxSeqLength(), createOutputs)
         , m_precedingLayer(precedingLayer)
+	, m_precedingMiddleOutLayer (NULL)
     {
 	// Modify 0506. For MDN, requireSize = -1, no need to check here
 	// if (this->size() != requiredSize)
@@ -127,20 +131,65 @@ namespace layers {
     }
 
     template <typename TDevice>
-    void PostOutputLayer<TDevice>::loadSequences(const data_sets::DataSetFraction &fraction)
+    void PostOutputLayer<TDevice>::loadSequences(const data_sets::DataSetFraction &fraction,
+						 const int nnState)
     {
-        if (fraction.outputPatternSize() != this->size()) {
-	    printf("Patter size mis match %d (layer) vs %d (data)",
-		   this->size(), fraction.outputPatternSize());
-            throw std::runtime_error("Error in network.jsn and data.nc");
-        }
+	if (m_precedingMiddleOutLayer == NULL){
+	    // The normal case 
+	    if (fraction.outputPatternSize() != this->size()) {
+		printf("Patter size mis match %d (layer) vs %d (data)",
+		       this->size(), fraction.outputPatternSize());
+		throw std::runtime_error("Error in network.jsn and data.nc");
+	    }
+	    
+	    Layer<TDevice>::loadSequences(fraction, nnState);
 
-        Layer<TDevice>::loadSequences(fraction);
-
-        if (!this->_outputs().empty())
+	    if (!this->_outputs().empty())
         	thrust::copy(fraction.outputs().begin(), fraction.outputs().end(), 
 			     this->_outputs().begin());
+	    
+	    m_ganState = NN_SIGMOID_GAN_DEFAULT;
+	    
+	}else{
+	    // when this postoutput layer is after a middleoutput layer
+	    Layer<TDevice>::loadSequences(fraction, nnState);
+	    
+	    // The normal case 
+	    if (this->outputs().size() != m_precedingMiddleOutLayer->secondOutputs().size()) 
+		throw std::runtime_error("Postoutput size is unequal to middlepost secondOutputs");
+	    
+	    if (!this->outputs().empty())
+        	thrust::copy(m_precedingMiddleOutLayer->secondOutputs().begin(),
+			     m_precedingMiddleOutLayer->secondOutputs().end(), 
+			     this->outputs().begin());
+
+	    // This part is dirty
+	    if (nnState == NN_STATE_GAN_DIS_NATDATA){
+		m_ganState = NN_SIGMOID_GAN_ONE_SIDED_FLAG;
+	    }else{
+		m_ganState = NN_SIGMOID_GAN_DEFAULT;
+	    }
+	    
+	}
     }
+    template <typename TDevice>
+    int PostOutputLayer<TDevice>::ganState()
+    {
+	return m_ganState;
+    }
+
+    template <typename TDevice>
+    void PostOutputLayer<TDevice>::computeBackwardPass(const int nnState)
+    {
+	if (m_precedingMiddleOutLayer && nnState == NN_STATE_GAN_GEN){
+	    // Generator only part
+	    thrust::fill(this->outputErrors().begin(), this->outputErrors().end(), (real_t)(-1.0));
+	    thrust::transform(this->_outputErrors().begin(), this->_outputErrors().end(),
+			      this->outputErrors().begin(),  this->_outputErrors().begin(),
+			      thrust::plus<real_t>());
+	}
+    }
+    
 
     /* Add 0401 wang for weighted MSE*/
     // return flag
@@ -230,7 +279,7 @@ namespace layers {
     template <typename TDevice>
     void PostOutputLayer<TDevice>::retrieveFeedBackData()
     {
-	// directly copy the targets to the secondOutputs
+	// directly copy the targets to the feedbackOutputs
 	thrust::copy(this->outputs().begin(), this->outputs().end(),
 		     m_feedBackOutput.begin());
     }
@@ -289,7 +338,7 @@ namespace layers {
     }
     
     template <typename TDevice>
-    typename PostOutputLayer<TDevice>::real_vector& PostOutputLayer<TDevice>::secondOutputs(
+    typename PostOutputLayer<TDevice>::real_vector& PostOutputLayer<TDevice>::feedbackOutputs(
 		const bool flagTrain)
     {
 	return m_feedBackOutput;
@@ -299,7 +348,22 @@ namespace layers {
 	    return this->precedingLayer().outputs();
 	}*/
     }
-    
+
+    template <typename TDevice>
+    typename PostOutputLayer<TDevice>::real_vector& PostOutputLayer<TDevice>::secondOutputs()
+    {
+	// This is not used at all;
+	throw std::runtime_error("This function should not be used");
+	//return m_feedBackOutput;
+    }
+
+    template <typename TDevice>
+    void PostOutputLayer<TDevice>::linkMiddleOutptu(
+		PostOutputLayer<TDevice> *precedingMiddleOutLayer)
+    {
+	m_precedingMiddleOutLayer = precedingMiddleOutLayer;
+    }
+	    
     template <typename TDevice>
     void PostOutputLayer<TDevice>::exportLayer(const helpers::JsonValue &layersArray, 
 					      const helpers::JsonAllocator &allocator) const

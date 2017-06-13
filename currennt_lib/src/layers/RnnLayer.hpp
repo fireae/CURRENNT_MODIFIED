@@ -147,7 +147,9 @@ namespace layers{
 	real_vector              m_h2hClockRNN;     // duplicated H2H matrices for each possible
 	                                            // updating schedule
 	int                      m_numH2Hmat;       // number of possible updating schedule
-	
+
+	int                      m_iterUpdate;      //
+
 	// wrappers over the error buffer of preceding layer
 	// This wrap is not prepared, because we need to know whether the previous layer
 	// is trainable or not
@@ -189,12 +191,12 @@ namespace layers{
         /**
          * @see Layer::loadSequences
          */
-        virtual void loadSequences(const data_sets::DataSetFraction &fraction);
+        virtual void loadSequences(const data_sets::DataSetFraction &fraction, const int nnState);
 
         /**
          * @see Layer::computeForwardPass()
          */
-        virtual void computeForwardPass();
+        virtual void computeForwardPass(const int nnState);
 	
 	/**
          * @see Layer::exportLayer()
@@ -205,7 +207,7 @@ namespace layers{
          /**
          * @see Layer::computeBackwardPass()
          */
-        virtual void computeBackwardPass();
+        virtual void computeBackwardPass(const int nnState);
 
 
         /**
@@ -216,7 +218,7 @@ namespace layers{
         /**
          * @see Layer::computeForwardPass()
          */
-        virtual void computeForwardPass(const int timeStep);
+        virtual void computeForwardPass(const int timeStep, const int nnState);
 
     };
 

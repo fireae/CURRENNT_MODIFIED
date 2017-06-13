@@ -73,7 +73,7 @@ namespace layers {
         /**
          * @see Layer::loadSequences()
          */
-        virtual void loadSequences(const data_sets::DataSetFraction &fraction);
+        virtual void loadSequences(const data_sets::DataSetFraction &fraction, const int nnState);
 
         /**
          * @see PostOutputLayer::calculateError()
@@ -83,17 +83,17 @@ namespace layers {
         /**
          * @see Layer::computeForwardPass()
          */
-        virtual void computeForwardPass();
+        virtual void computeForwardPass(const int nnState);
 
         /**
          * @see Layer::computeForwardPass()
          */
-        virtual void computeForwardPass(const int timeStep);
+        virtual void computeForwardPass(const int timeStep, const int nnState);
 
          /**
          * @see Layer::computeBackwardPass()
          */
-        virtual void computeBackwardPass();
+        virtual void computeBackwardPass(const int nnState);
     };
 
 } // namespace layers

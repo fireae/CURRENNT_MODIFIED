@@ -41,6 +41,8 @@ namespace layers {
 	typedef typename Cpu::real_vector cpu_real_vector;
     private:
         Layer<TDevice> &m_precedingLayer;
+
+	PostOutputLayer<TDevice> *m_precedingMiddleOutLayer;
 	
 	/* Add 0401 for weighted MSE */
 	real_vector     m_outputMseWeights;  // vector for MSE output weights
@@ -52,6 +54,8 @@ namespace layers {
 
 	// Add 170411 for feedback
 	real_vector     m_feedBackOutput;    // Buffer for the feedback data
+
+	int             m_ganState;
 	
     protected:
         real_vector&    _targets();
@@ -96,7 +100,7 @@ namespace layers {
         /**
          * @see Layer::loadSequences()
          */
-        virtual void loadSequences(const data_sets::DataSetFraction &fraction);
+        virtual void loadSequences(const data_sets::DataSetFraction &fraction, const int nnState);
 
         /**
          * Computes the error with respect to the target outputs
@@ -105,6 +109,8 @@ namespace layers {
          */
         virtual real_t calculateError() =0;
 
+	virtual void computeBackwardPass(const int nnState);
+	
 	/**
 	 * Re-initialize the network
 	   only defines for Trainable Layers, here do nothing
@@ -126,12 +132,19 @@ namespace layers {
 
 	virtual void retrieveFeedBackData(const int timeStep, const int method=0);
 
-	virtual real_vector& secondOutputs(const bool flagTrain);
+	// Used by feedbackLayer
+	virtual real_vector& feedbackOutputs(const bool flagTrain);
 
+	// get from the middleoutput layer
+	virtual real_vector& secondOutputs();
+
+	virtual void linkMiddleOutptu(PostOutputLayer<TDevice> *precedingMiddleOutLayer);
+	
 	// export
 	virtual void exportLayer(const helpers::JsonValue &layersArray, 
 				 const helpers::JsonAllocator &allocator) const;
 
+	virtual int ganState();
 
     };
 

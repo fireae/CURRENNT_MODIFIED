@@ -112,7 +112,8 @@ namespace layers {
     }
 
     template <typename TDevice>
-    void InputLayer<TDevice>::loadSequences(const data_sets::DataSetFraction &fraction)
+    void InputLayer<TDevice>::loadSequences(const data_sets::DataSetFraction &fraction,
+					    const int nnState)
     {
 	
 	if (m_flagWeUpdate){
@@ -134,7 +135,7 @@ namespace layers {
 		   boost::lexical_cast<std::string>(fraction.inputPatternSize()));
         }
 
-        Layer<TDevice>::loadSequences(fraction);
+        Layer<TDevice>::loadSequences(fraction, nnState);
 	
 	/* Add 16-02-22 Wang: for WE updating */
 	// thrust::copy(fraction.inputs().begin(),fraction.inputs().end(),this->_outputs().begin());
@@ -245,17 +246,17 @@ namespace layers {
     }
 
     template <typename TDevice>
-    void InputLayer<TDevice>::computeForwardPass()
+    void InputLayer<TDevice>::computeForwardPass(const int nnState)
     {
     }
     
     template <typename TDevice>
-    void InputLayer<TDevice>::computeForwardPass(const int timeStep)
+    void InputLayer<TDevice>::computeForwardPass(const int timeStep, const int nnState)
     {
     }
 
     template <typename TDevice>
-    void InputLayer<TDevice>::computeBackwardPass()
+    void InputLayer<TDevice>::computeBackwardPass(const int nnState)
     {
     }
 

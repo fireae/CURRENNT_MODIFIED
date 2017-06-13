@@ -85,6 +85,9 @@ namespace layers {
         // resize the output errors vector
         m_outputErrors = Cpu::real_vector(this->_outputs().size(), (real_t)0);
 	m_outputErrorsCopy = Cpu::real_vector(this->_outputs().size(), (real_t)0);
+
+	//
+	m_currTrainingEpoch = -1;
     }
 
     /* Not fully implemented */
@@ -196,7 +199,7 @@ namespace layers {
     }
     
     template <typename TDevice>
-    void Layer<TDevice>::loadSequences(const data_sets::DataSetFraction &fraction)
+    void Layer<TDevice>::loadSequences(const data_sets::DataSetFraction &fraction, const int nnState)
     {
         m_curMaxSeqLength = fraction.maxSeqLength();
         m_curMinSeqLength = fraction.minSeqLength();
@@ -232,7 +235,19 @@ namespace layers {
     {
 	return m_currTrainingEpoch;
     }
+
+    template <typename TDevice>
+    void Layer<TDevice>::setCurrTrainingFrac(const int curTrainingFrac)
+    {
+	m_currTrainingFrac = curTrainingFrac;
+    }
     
+    template <typename TDevice>
+    int& Layer<TDevice>::getCurrTrainingFrac()
+    {
+	return m_currTrainingFrac;
+    }
+
     template <typename TDevice>
     void Layer<TDevice>::linkTargetLayer(Layer<TDevice> &targetLayer)
     {
@@ -242,7 +257,7 @@ namespace layers {
     template <typename TDevice>
     const std::string& Layer<TDevice>::layerAddInfor(const int opt) const
     {
-	// used together with secondOutputs
+	// used together with feedbackOutputs
         static std::string s;
         if (s == "" && opt==1){
 	    std::ostringstream Convert;
@@ -262,11 +277,18 @@ namespace layers {
     }
 
     template <typename TDevice>
-    typename Layer<TDevice>::real_vector& Layer<TDevice>::secondOutputs(const bool flagTrain)
+    typename Layer<TDevice>::real_vector& Layer<TDevice>::feedbackOutputs(const bool flagTrain)
     {
         return m_outputs;
     }
 
+    template <typename TDevice>
+    void Layer<TDevice>::cleanGradidents()
+    {
+	//thrust::fill(m_outputErrors.begin(), m_outputErrors.end(), 0.0);
+    }
+
+    
     // explicit template instantiations
     template class Layer<Cpu>;
     template class Layer<Gpu>;

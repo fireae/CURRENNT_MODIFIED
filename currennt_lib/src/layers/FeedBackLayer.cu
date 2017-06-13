@@ -476,9 +476,10 @@ namespace layers{
     }
 
     template <typename TDevice>
-    void FeedBackLayer<TDevice>::loadSequences(const data_sets::DataSetFraction &fraction)
+    void FeedBackLayer<TDevice>::loadSequences(const data_sets::DataSetFraction &fraction,
+					       const int nnState)
     {
-	TrainableLayer<TDevice>::loadSequences(fraction);
+	TrainableLayer<TDevice>::loadSequences(fraction, nnState);
 
 	// read in the boundary information
 	if (m_aggStr.size()){
@@ -533,7 +534,7 @@ namespace layers{
     // computeForward: 
     //  in training stage, target data are known
     template <typename TDevice>
-    void FeedBackLayer<TDevice>::computeForwardPass()
+    void FeedBackLayer<TDevice>::computeForwardPass(const int nnState)
     {
 	if (m_targetLayer == NULL)
 	    throw std::runtime_error("Target layer is not linked");
@@ -554,7 +555,7 @@ namespace layers{
 	    fn.parallel       = this->parallelSequences();
 
 	    fn.input1         = helpers::getRawPointer(this->precedingLayer().outputs());
-	    fn.input2         = helpers::getRawPointer(m_targetLayer->secondOutputs(true));
+	    fn.input2         = helpers::getRawPointer(m_targetLayer->feedbackOutputs(true));
 	    fn.output         = helpers::getRawPointer(this->outputs());
 	    fn.lookBack       = helpers::getRawPointer(this->m_lookBack);
 
@@ -584,7 +585,7 @@ namespace layers{
 		fn.dimOutputStart = (this->precedingLayer().size() +
 				     this->m_lookBack.size() * (m_targetDimEnd - m_targetDimStart));
 		
-		fn.input2         = helpers::getRawPointer(m_targetLayer->secondOutputs(true));
+		fn.input2         = helpers::getRawPointer(m_targetLayer->feedbackOutputs(true));
 		fn.output         = helpers::getRawPointer(this->outputs());
 		fn.bandNum        = this->m_aggOpt.size();
 		
@@ -626,7 +627,7 @@ namespace layers{
     // computeForwardPass
     // in synthesis stage, when the target must be predicted frame by frame
     template <typename TDevice>
-    void FeedBackLayer<TDevice>::computeForwardPass(const int timeStep)
+    void FeedBackLayer<TDevice>::computeForwardPass(const int timeStep, const int nnState)
     {
 	if (m_targetLayer == NULL){
 	    throw std::runtime_error("Target layer is not linked");
@@ -655,7 +656,7 @@ namespace layers{
 
 
 	    fn.input1         = helpers::getRawPointer(this->precedingLayer().outputs());
-	    fn.input2         = helpers::getRawPointer(m_targetLayer->secondOutputs(false));
+	    fn.input2         = helpers::getRawPointer(m_targetLayer->feedbackOutputs(false));
 	    fn.output         = helpers::getRawPointer(this->outputs());
 
 	    fn.dim1Step       = m_targetDimEnd - m_targetDimStart; // dimension for 1 step
@@ -695,7 +696,7 @@ namespace layers{
 				     this->m_lookBack.size() * (m_targetDimEnd - m_targetDimStart));
 		fn.bandNum        = this->m_aggOpt.size();
 				
-		fn.input2         = helpers::getRawPointer(m_targetLayer->secondOutputs(false));
+		fn.input2         = helpers::getRawPointer(m_targetLayer->feedbackOutputs(false));
 		fn.output         = helpers::getRawPointer(this->outputs());
 
 		fn.boundaryInfo   = helpers::getRawPointer(this->m_boundaryInfo);
@@ -730,7 +731,7 @@ namespace layers{
 		
 
 		fn.input1         = helpers::getRawPointer(this->precedingLayer().outputs());
-		fn.input2         = helpers::getRawPointer(m_targetLayer->secondOutputs(false));
+		fn.input2         = helpers::getRawPointer(m_targetLayer->feedbackOutputs(false));
 		fn.output         = helpers::getRawPointer(this->outputs());
 
 		fn.dim1Step       = m_targetDimEnd - m_targetDimStart; // dimension for 1 step
@@ -759,7 +760,7 @@ namespace layers{
 
     // 
     template <typename TDevice>
-    void FeedBackLayer<TDevice>::computeBackwardPass()
+    void FeedBackLayer<TDevice>::computeBackwardPass(const int nnState)
     {
 	{{
 	   // Copy the gradient for the preceding layer

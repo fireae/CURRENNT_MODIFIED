@@ -29,12 +29,30 @@
 #ifndef MACRODEFINE_HPP
 #define MACRODEFINE_HPP
 
+/***    For Optimizer   ***/
+#define  OPTIMIZATION_ADAGRAD   1            //  AdaGrad
+#define  OPTIMIZATION_AVEGRAD   2            //  average the gradient per fraction of data
+#define  OPTIMIZATION_STOCHASTIC_ADAGRAD 3   //  Stochastic gradient + AdaGrad
+#define  OPTIMIZATION_SGD_DECAY 4            //  Stochastic gradient, and learning rate decay
+#define  OPTIMIZATION_ADAM      5
+
+#define  OP_ADAGRADFACTOR 0.000001           // epsilon for AdaGrad
+#define  OP_ADAMBETA1     0.9                // Beta1 for Adam
+#define  OP_ADAMBETA2     0.999              // Beta2 for Adam
+#define  OP_ADAMEPSILON   0.00000001         // epsilon for Adam
+
+#define OP_BLOWED_THRESHOLD 5 // tolerance of blowed network
+
+/***    For printing information ***/
+#define  OP_VERBOSE_LEVEL_0 0            // print nothing additional to cerr
+#define  OP_VERBOSE_LEVEL_1 1            // print error per utterance to cerr
+#define  OP_VERBOSE_LEVEL_2 2            // print sigmoid error rate to cerr (used by GAN)
+#define  OP_VERBOSE_LEVEL_3 3
 
 /*** For Feedback Model ***/
-
-// 
 #define NN_FEEDBACK_SCHEDULE_MIN 0.000 // Minimal value for the schedule sampling prob parameter
 #define NN_FEEDBACK_SCHEDULE_SIG 20    // K in 1/(1+exp((x-K))/Para)
+
 // Schedule sampling method code
 #define NN_FEEDBACK_GROUND_TRUTH 0     // use ground truth directly
 #define NN_FEEDBACK_DROPOUT_1N   1     // dropout, set to 1/N
@@ -47,6 +65,26 @@
 #define NN_SOFTMAX_GEN_BEST      0
 #define NN_SOFTMAX_GEN_SOFT      1
 #define NN_SOFTMAX_GEN_SAMP      2
+
+
+/*** For GAN ***/
+// Flags for GAN
+#define NN_SIGMOID_GAN_DEFAULT         0
+#define NN_SIGMOID_GAN_ONE_SIDED_FLAG  1
+
+// Flags for NN state
+#define NN_STATE_GAN_DIS_NATDATA       1
+#define NN_STATE_GAN_DIS_GENDATA       2
+#define NN_STATE_GAN_GEN               0
+#define NN_STATE_GAN_GEN_FEATMAT       3
+#define NN_STATE_GAN_GENERATION_STAGE  4
+
+/*** For Normal layers ***/
+#define NN_OPERATOR_LAYER_NOISE_TIMEREPEAT 1
+#define NN_OPERATOR_LAYER_NOISE_DIMREPEAT  2
+#define NN_OPERATOR_LAYER_NOISE_NOREPEAT   0
+
+
 
 
 #endif

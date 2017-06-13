@@ -375,7 +375,7 @@ namespace layers{
     }
 
     template <typename TDevice>
-    void BatchNormLayer<TDevice>::computeForwardPass()
+    void BatchNormLayer<TDevice>::computeForwardPass(const int nnState)
     {
 	if (m_trainFlag && m_preEpoch > 0 && m_preEpoch != this->getCurrTrainingEpoch()){
 	    // always update the mean, std for each epoch
@@ -531,13 +531,13 @@ namespace layers{
     }
 
     template <typename TDevice>
-    void BatchNormLayer<TDevice>::computeForwardPass(const int timeStep)
+    void BatchNormLayer<TDevice>::computeForwardPass(const int timeStep, const int nnState)
     {
 	throw std::runtime_error("Error: Batch norm is not implemented for online propagation");
     }
 
     template <typename TDevice>
-    void BatchNormLayer<TDevice>::computeBackwardPass()
+    void BatchNormLayer<TDevice>::computeBackwardPass(const int nnState)
     {
 	{{
 

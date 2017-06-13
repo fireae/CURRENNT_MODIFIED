@@ -64,6 +64,15 @@ namespace layers{
         return m_outputErrorsFromSkipLayer;
     }
 
+    template <typename TDevice>
+    void SkipLayer<TDevice>::exportLayer(const helpers::JsonValue &layersArray,
+					 const helpers::JsonAllocator &allocator) const
+    {
+	TrainableLayer<TDevice>::exportLayer(layersArray, allocator);
+    }
+
+	
+    
     template class SkipLayer<Cpu>;
     template class SkipLayer<Gpu>;
     

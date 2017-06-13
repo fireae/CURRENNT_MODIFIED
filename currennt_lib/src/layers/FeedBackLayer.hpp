@@ -76,20 +76,20 @@ namespace layers {
 	virtual const std::string& type() const;
 	
 	// NN forward
-	virtual void computeForwardPass();
+	virtual void computeForwardPass(const int nnState);
 	
 	// NN forward, per frame
-	virtual void computeForwardPass(const int timeStep);
+	virtual void computeForwardPass(const int timeStep, const int nnState);
 	
 	// NN backward
-	virtual void computeBackwardPass();
+	virtual void computeBackwardPass(const int nnState);
 
 	// export
 	virtual void exportLayer(const helpers::JsonValue &layersArray, 
 				 const helpers::JsonAllocator &allocator) const;
 
 	// load sequences
-	virtual void loadSequences(const data_sets::DataSetFraction &fraction);
+	virtual void loadSequences(const data_sets::DataSetFraction &fraction, const int nnState);
     };
 
 }

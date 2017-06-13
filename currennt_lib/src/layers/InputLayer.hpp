@@ -115,17 +115,17 @@ namespace layers {
         /**
          * @see Layer::loadSequences()
          */
-        virtual void loadSequences(const data_sets::DataSetFraction &fraction);
+        virtual void loadSequences(const data_sets::DataSetFraction &fraction, const int nnState);
 
         /**
          * @see Layer::computeForwardPass()
          */
-        virtual void computeForwardPass();
+        virtual void computeForwardPass(const int nnState);
 
          /**
          * @see Layer::computeBackwardPass()
          */
-        virtual void computeBackwardPass();
+        virtual void computeBackwardPass(const int nnState);
 
 	/**
 	 * Re-initialize the network
@@ -133,7 +133,7 @@ namespace layers {
 	 */
 	virtual void reInitWeight();
 
-	virtual void computeForwardPass(const int timeStep);
+	virtual void computeForwardPass(const int timeStep, const int nnState);
 	
     };
 

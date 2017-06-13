@@ -74,7 +74,7 @@ namespace layers {
 	SkipParaLayer(
 		     const helpers::JsonValue &layerChild,
 		     const helpers::JsonValue &weightsSection,
-		     std::vector<Layer<TDevice>*> precedingLayers
+		     std::vector<Layer<TDevice>*> &precedingLayers
 		     );
 
 	// Destructor
@@ -84,13 +84,13 @@ namespace layers {
 	virtual const std::string& type() const;
 
 	// NN forward
-	virtual void computeForwardPass();
+	virtual void computeForwardPass(const int nnState);
 
 	// NN forward
-	virtual void computeForwardPass(const int timeStep);
+	virtual void computeForwardPass(const int timeStep, const int nnState);
 	
 	// NN backward
-	virtual void computeBackwardPass();
+	virtual void computeBackwardPass(const int nnState);
 	
 	// Gate output
 	real_vector& outputFromGate();

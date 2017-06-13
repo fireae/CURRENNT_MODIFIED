@@ -34,17 +34,22 @@
 #include "layers/WeightedSsePostOutputLayer.hpp"
 #include "layers/BinaryClassificationLayer.hpp"
 #include "layers/MulticlassClassificationLayer.hpp"
+#include "layers/MiddleOutputLayer.hpp"
 #include "layers/BatchNorm.hpp"
+#include "layers/OperationLayer.hpp"
+#include "layers/FeatMatch.hpp"
 #include "activation_functions/Tanh.cuh"
 #include "activation_functions/Logistic.cuh"
 #include "activation_functions/Identity.cuh"
 #include "activation_functions/Relu.cuh"
 
 #include "layers/SkipAddLayer.hpp"
+#include "layers/SkipCatLayer.hpp"
 #include "layers/SkipParaLayer.hpp"
 #include "layers/MDNLayer.hpp"
 #include "layers/CNNLayer.hpp"
 //#include "layers/LstmLayerCharW.hpp"  // obsolete
+#include "layers/Maxpooling.hpp"
 #include "layers/RnnLayer.hpp"
 #include "layers/ParaLayer.hpp"
 #include "layers/FeedBackLayer.hpp"
@@ -93,6 +98,15 @@ layers::Layer<TDevice>* LayerFactory<TDevice>::createLayer(
     	return new BatchNormLayer<TDevice>(layerChild, weightsSection, *precedingLayer);
     else if (layerType == "cnn")
         return new CNNLayer<TDevice>(layerChild, weightsSection, *precedingLayer);    
+    else if (layerType == "maxpooling")
+        return new MaxPoolingLayer<TDevice>(layerChild, weightsSection, *precedingLayer);    
+    else if (layerType == "middleoutput")
+        return new MiddleOutputLayer<TDevice>(layerChild, *precedingLayer);    
+    else if (layerType == "operator")
+        return new OperationLayer<TDevice>(layerChild, weightsSection, *precedingLayer);    
+    else if (layerType == "featmatch")
+        return new FeatMatchLayer<TDevice>(layerChild, *precedingLayer);    
+
     /*
     // not implemented yet
     else if (layerType == "lstmw")
@@ -145,18 +159,21 @@ layers::Layer<TDevice>* LayerFactory<TDevice>::createSkipAddLayer(
 					   const helpers::JsonValue &weightsSection,
 					   int                       parallelSequences, 
 					   int                       maxSeqLength,
-					   std::vector<layers::Layer<TDevice>*> precedingLayers
+					   std::vector<layers::Layer<TDevice>*> &precedingLayers
 					   )
 {
     using namespace layers;
     
     /* Add 0405 Add skip ini */
     //if (layerType != "skipadd"){
-    if (layerType != "skipadd" && layerType != "skipini"){
+    if (layerType != "skipadd" && layerType != "skipini" && layerType != "skipcat"){
 	printf("Impossible bug\n");
 	throw std::runtime_error(std::string("The layer is not skipadd"));
-    }else{
+    }
+    if (layerType == "skipadd" || layerType == "skipini"){
 	return new SkipAddLayer<TDevice>(layerChild, weightsSection, precedingLayers);
+    }else{
+	return new SkipCatLayer<TDevice>(layerChild, weightsSection, precedingLayers);
     }
 }
 
@@ -167,7 +184,7 @@ layers::Layer<TDevice>* LayerFactory<TDevice>::createSkipParaLayer(
 					   const helpers::JsonValue &weightsSection,
 					   int                       parallelSequences, 
 					   int                       maxSeqLength,
-					   std::vector<layers::Layer<TDevice>*> precedingLayers
+					   std::vector<layers::Layer<TDevice>*> &precedingLayers
 					   )
 {
     using namespace layers;
@@ -179,11 +196,11 @@ layers::Layer<TDevice>* LayerFactory<TDevice>::createSkipParaLayer(
 	throw std::runtime_error(std::string("Error in network.jsn"));
     }else{
 	if (layerType == "skippara_tanh"){
-	    return new SkipParaLayer<TDevice, Tanh>(layerChild, weightsSection, precedingLayers);
+	    return new SkipParaLayer<TDevice, Tanh>(layerChild,weightsSection,precedingLayers);
 	}else if(layerType == "skippara_logistic"){
-	    return new SkipParaLayer<TDevice, Logistic>(layerChild, weightsSection, precedingLayers);
+	    return new SkipParaLayer<TDevice, Logistic>(layerChild,weightsSection,precedingLayers);
 	}else if(layerType == "skippara_identity"){
-	    return new SkipParaLayer<TDevice, Identity>(layerChild, weightsSection, precedingLayers);	    
+	    return new SkipParaLayer<TDevice, Identity>(layerChild,weightsSection,precedingLayers);	    
 	}else if(layerType == "skippara_relu"){
 	    return new SkipParaLayer<TDevice, Relu>(layerChild, weightsSection, precedingLayers);
 	}else{

@@ -185,9 +185,9 @@ namespace layers {
     }
 
     template <typename TDevice>
-    void MulticlassClassificationLayer<TDevice>::loadSequences(const data_sets::DataSetFraction &fraction)
+    void MulticlassClassificationLayer<TDevice>::loadSequences(const data_sets::DataSetFraction &fraction, const int nnState)
     {
-        PostOutputLayer<TDevice>::loadSequences(fraction);
+        PostOutputLayer<TDevice>::loadSequences(fraction, nnState);
 
         thrust::copy(fraction.targetClasses().begin(), fraction.targetClasses().end(), m_patTargetClasses.begin());
     }
@@ -214,17 +214,18 @@ namespace layers {
     }
 
     template <typename TDevice>
-    void MulticlassClassificationLayer<TDevice>::computeForwardPass()
+    void MulticlassClassificationLayer<TDevice>::computeForwardPass(const int nnState)
     {
     }
 
     template <typename TDevice>
-    void MulticlassClassificationLayer<TDevice>::computeForwardPass(const int timeStep)
+    void MulticlassClassificationLayer<TDevice>::computeForwardPass(const int timeStep,
+								    const int nnState)
     {
     }
 
     template <typename TDevice>
-    void MulticlassClassificationLayer<TDevice>::computeBackwardPass()
+    void MulticlassClassificationLayer<TDevice>::computeBackwardPass(const int nnState)
     {
         int n = this->curMaxSeqLength() * this->parallelSequences();
 

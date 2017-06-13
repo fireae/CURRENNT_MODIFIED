@@ -149,16 +149,16 @@ namespace layers {
     }
 
     template <typename TDevice>
-    void CePostOutputLayer<TDevice>::computeForwardPass()
+    void CePostOutputLayer<TDevice>::computeForwardPass(const int nnState)
     {
     }
     template <typename TDevice>
-    void CePostOutputLayer<TDevice>::computeForwardPass(const int timeStep)
+    void CePostOutputLayer<TDevice>::computeForwardPass(const int timeStep, const int nnState)
     {
     }
     
     template <typename TDevice>
-    void CePostOutputLayer<TDevice>::computeBackwardPass()
+    void CePostOutputLayer<TDevice>::computeBackwardPass(const int nnState)
     {
         // calculate the errors
         internal::ComputeOutputErrorFn fn;

@@ -33,15 +33,17 @@
 #include <boost/algorithm/string.hpp>
 #include <boost/lexical_cast.hpp>
 
+
 #include "../Configuration.hpp"
 #include <boost/random/normal_distribution.hpp>
 #include <boost/random/uniform_real_distribution.hpp>
 #include <boost/random/mersenne_twister.hpp>
 
 /* ***** Functions for string process ***** */
-void ParseStrOpt(const std::string stringOpt, std::vector<std::string> &optVec){
+void ParseStrOpt(const std::string stringOpt, std::vector<std::string> &optVec,
+		 const std::string para){
     std::vector<std::string> tempArgs;
-    boost::split(tempArgs, stringOpt, boost::is_any_of("_"));
+    boost::split(tempArgs, stringOpt, boost::is_any_of(para));
     for (int i =0 ; i<tempArgs.size(); i++)
 	optVec.push_back(tempArgs[i]);
     return;
@@ -56,10 +58,32 @@ void ParseIntOpt(const std::string stringOpt, Cpu::int_vector &optVec){
     for (int i =0 ; i<tempArgs.size(); i++){
 	boost::split(tempArgs2, tempArgs[i], boost::is_any_of("*"));
 	if (tempArgs2.size() == 2){
-	    for (int j=0; j<boost::lexical_cast<int>(tempArgs2[0]); j++)
+	    int cnt = boost::lexical_cast<int>(tempArgs2[0]);
+	    for (int j = 0; j < cnt; j++)
 		tmpresult.push_back(boost::lexical_cast<int>(tempArgs2[1]));
 	}else{
 	    tmpresult.push_back(boost::lexical_cast<int>(tempArgs[i]));
+	}
+    }
+    optVec.resize(tmpresult.size(), 0.0);
+    for (int i=0;i<optVec.size();i++)
+	optVec[i] = tmpresult[i];
+}
+
+void ParseFloatOpt(const std::string stringOpt, Cpu::real_vector &optVec){
+    std::vector<std::string> tempArgs;
+    std::vector<std::string> tempArgs2;
+    std::vector<real_t> tmpresult;
+    
+    boost::split(tempArgs, stringOpt, boost::is_any_of("_"));
+    for (int i =0 ; i<tempArgs.size(); i++){
+	boost::split(tempArgs2, tempArgs[i], boost::is_any_of("*"));
+	if (tempArgs2.size() == 2){
+	    int cnt = boost::lexical_cast<int>(tempArgs2[0]);
+	    for (int j = 0; j < cnt; j++)
+		tmpresult.push_back(boost::lexical_cast<real_t>(tempArgs2[1]));
+	}else{
+	    tmpresult.push_back(boost::lexical_cast<real_t>(tempArgs[i]));
 	}
     }
     optVec.resize(tmpresult.size(), 0.0);
@@ -74,6 +98,20 @@ int SumCpuIntVec(Cpu::int_vector &temp){
     return result;
 }
 
+int MaxCpuIntVec(Cpu::int_vector &temp){
+    if (temp.size()>0){
+	int max = temp[0];
+	for (int i = 1; i<temp.size(); i++)
+	    if (temp[i] > max){
+		max = temp[i];
+	    }
+	return max;
+    }else{
+	printf("Input vector is void");
+	return 0;
+    }
+}
+
 real_t GetRandomNumber(){
     static boost::mt19937 *gen = NULL;
     if (!gen) {
@@ -85,3 +123,16 @@ real_t GetRandomNumber(){
 }
 
 
+int flagUpdateDiscriminator(const int epoch, const int frac){
+    /*if (epoch % 2){
+	return (frac % 2) == 0;
+    }else{
+	return (frac % 2) == 1;
+	}*/
+    return ((frac + 1) % 3);
+}
+
+bool closeToZero(const real_t t1, const real_t lowBound, const real_t upBound)
+{
+    return ((t1 > lowBound) && (t1 < upBound));
+}

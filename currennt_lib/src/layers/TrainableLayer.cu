@@ -72,7 +72,7 @@ namespace layers {
     }
          
     template <typename TDevice>
-    const unsigned& TrainableLayer<TDevice>::_optOpt() const
+    const unsigned& TrainableLayer<TDevice>::optOpt() const
     {
         return m_optOpt;
     }
@@ -88,11 +88,12 @@ namespace layers {
         , m_precedingLayer         (precedingLayer)
         , m_inputWeightsPerBlock   (inputWeightsPerBlock)
         , m_internalWeightsPerBlock(internalWeightsPerBlock)
-        , m_bias                (layerChild->HasMember("bias") ? 
-				 static_cast<real_t>((*layerChild)["bias"].GetDouble()) : 0)
-        , m_learningRate        (layerChild->HasMember("learningRate") ? 
-				 static_cast<real_t>((*layerChild)["learningRate"].GetDouble()) : -1)
+        , m_bias              (layerChild->HasMember("bias") ? 
+			       static_cast<real_t>((*layerChild)["bias"].GetDouble()) : 0)
+        , m_learningRate      (layerChild->HasMember("learningRate") ? 
+			       static_cast<real_t>((*layerChild)["learningRate"].GetDouble()) : -1)
 	, m_weightNum (-1)
+	, m_optOpt    (0)
     {
         // std::cout << "Creating layer " << this->name() << std::endl;
         // check if the bias value exists
@@ -102,7 +103,7 @@ namespace layers {
 
 	const Configuration &config = Configuration::instance();
 	
-	m_optOpt = config.optimizerOption();
+	//m_optOpt = config.optimizerOption();
 	
 	// extract the weights if they are given in the network file
         Cpu::real_vector weights;
@@ -377,7 +378,8 @@ namespace layers {
         int internalWeightsCount = this->size() * m_internalWeightsPerBlock;
         internalWeightsArray.Reserve(internalWeightsCount, allocator);
         for (int i = 0; i < internalWeightsCount; ++i)
-            internalWeightsArray.PushBack(m_weights[inputWeightsCount + biasWeightsCount + i], allocator);
+            internalWeightsArray.PushBack(m_weights[inputWeightsCount + biasWeightsCount + i],
+					  allocator);
 
         // create and fill the weights subsection
         rapidjson::Value weightsSection(rapidjson::kObjectType);
@@ -395,6 +397,8 @@ namespace layers {
     {
         Layer<TDevice>::exportLayer(layersArray, allocator);
         (*layersArray)[layersArray->Size() - 1].AddMember("bias", m_bias, allocator);
+	if (m_learningRate >= 0.0)
+	    (*layersArray)[layersArray->Size() - 1].AddMember("learningRate", m_bias, allocator);
     }
     
     // Add 0511: re-initialize the weight (used for learning_rate checking)
@@ -582,7 +586,15 @@ namespace layers {
     {
 	return m_internalWeightsPerBlock;
     }
-    
+
+    template <typename TDevice>
+    void TrainableLayer<TDevice>::cleanGradidents()
+    {
+	// Fatal Error: clean gradients should clean the m_weightUpdates, not outputErrors
+	thrust::fill(m_weightUpdates.begin(), m_weightUpdates.end(), 0.0);
+	// thrust::fill(this->outputErrors().begin(), this->outputErrors().end(), 0.0);
+    }
+
 
     // explicit template instantiations
     template class TrainableLayer<Cpu>;

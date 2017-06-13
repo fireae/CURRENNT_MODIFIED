@@ -27,6 +27,7 @@
 #include "../layers/MulticlassClassificationLayer.hpp"
 #include "../Configuration.hpp"
 #include "../helpers/JsonClasses.hpp"
+#include "../MacroDefine.hpp"
 
 #include <limits>
 
@@ -34,19 +35,16 @@
 #include <thrust/fill.h>
 
 
-/* Macro definition */
-#define OP_BLOWED_THRESHOLD 5 // tolerance of blowed network 
-
 namespace optimizers {
 
     template <typename TDevice>
-    real_t Optimizer<TDevice>::_processDataSet(data_sets::DataSet &ds, 
-					       bool calcWeightUpdates, 
-					       real_t *classError)
+    void Optimizer<TDevice>::_processDataSet(data_sets::DataSet &ds,  bool calcWeightUpdates,
+					       real_t &error, real_t &classError, real_t &secError)
     {
         // process all data set fractions
-        real_t error = 0;
-        *classError = (real_t) ds.totalTimesteps();
+        error       = 0;
+	secError    = 0;
+        classError = (real_t) ds.totalTimesteps();
 	
 	// Add 0413 Wang : for weight Mask
 	m_neuralNetwork.maskWeight();
@@ -56,26 +54,36 @@ namespace optimizers {
 
 	// variances
         boost::shared_ptr<data_sets::DataSetFraction> frac;
-        bool firstFraction = true;                           // first fraction
-	int  uttNum        = ds.totalSequences();            // total number of sequences
-	real_t  uttCnt     = 0;                              // utterance counter
-	int  frameNum      = -1;                             // number of frames in mini-batch
+        bool   firstFraction = true;                           // first fraction
+	int    uttNum        = ds.totalSequences();            // total number of sequences
+	int    frameNum      = -1;                             // number of frames in mini-batch
+	int    fracCnt       = 0;
+	real_t uttCnt        = 0;                              // utterance counter
+	real_t errorTemp1    = 0.0;
+	real_t errorTemp2    = 0.0;
         while ((frac = ds.getNextFraction())) {
 	    
 	    // get the number of frames for SGD
 	    if (Configuration::instance().hybridOnlineBatch()) 
 		frameNum   = frac->fracTimeLength();
             // compute forward pass and calculate the error
+	    m_neuralNetwork.notifyCurrentFrac(fracCnt);
+	    m_neuralNetwork.updateNNState(m_curEpoch, fracCnt);
             m_neuralNetwork.loadSequences(*frac);
             m_neuralNetwork.computeForwardPass(frac->maxSeqLength(), (m_curEpoch-1));
 	    m_neuralNetwork.restoreTarget(*frac);
-            error += (m_neuralNetwork.calculateError()/ds.totalSequences());
-
-	    if (Configuration::instance().verboseLevel())
-		std::cerr << "Fraction " << uttCnt << ", error " << error << std::endl;
+	    
+            errorTemp1 = (m_neuralNetwork.calculateError(true)/ds.totalSequences());
+	    errorTemp2 = (m_neuralNetwork.calculateError(false)/ds.totalSequences());
+	    
+	    if (Configuration::instance().verboseLevel() == OP_VERBOSE_LEVEL_1){
+		std::cerr << uttCnt << ", " << errorTemp1 << ", " << errorTemp2 << std::endl;
+	    }
+	    error    += errorTemp1;
+	    secError += errorTemp2;
 	    
 	    // check for NaN
-	    if (error != error){
+	    if (error != error || secError != secError){
 		printf("NaN detected. Tune the learning rate please.\n");
 		this->m_blowed = true;
 		break;
@@ -86,11 +94,11 @@ namespace optimizers {
 	    // calculate the classification error if any of the layers used
             if (dynamic_cast<layers::BinaryClassificationLayer<TDevice>*>(
 			&m_neuralNetwork.postOutputLayer()))
-                *classError -= (real_t)static_cast<layers::BinaryClassificationLayer<TDevice>&>(
+                classError -= (real_t)static_cast<layers::BinaryClassificationLayer<TDevice>&>(
 			m_neuralNetwork.postOutputLayer()).countCorrectClassifications();
             if (dynamic_cast<layers::MulticlassClassificationLayer<TDevice>*>(
 			&m_neuralNetwork.postOutputLayer()))
-                *classError -= (real_t)static_cast<layers::MulticlassClassificationLayer<TDevice>&>(
+                classError -= (real_t)static_cast<layers::MulticlassClassificationLayer<TDevice>&>(
 			m_neuralNetwork.postOutputLayer()).countCorrectClassifications();
             
 	    // backward computation and parameter updateing
@@ -113,6 +121,9 @@ namespace optimizers {
                 // compute the backward pass and accumulate the weight updates
                 m_neuralNetwork.computeBackwardPass();
 
+		// clean the gradients for GAN (do nothing for other networks)
+		m_neuralNetwork.cleanGradientsForDiscriminator();
+		
 		// accumulate the statistics for parameter updating
                 for (size_t i = 1; i < m_neuralNetwork.layers().size(); ++i) {
 		    
@@ -186,6 +197,7 @@ namespace optimizers {
             firstFraction = false;
 	    //std::cerr << uttCnt << "/" << uttNum <<std::endl;
 	    uttCnt += frac->numSequences();
+	    fracCnt+= 1;
         }
 
         // update weights for batch learning
@@ -197,9 +209,9 @@ namespace optimizers {
         //error /= ds.totalSequences();
 	//error /= ds.totalTimesteps();
 
-        *classError /= (real_t)ds.totalTimesteps();
-
-        return error;
+        classError /= (real_t)ds.totalTimesteps();
+	
+        return;
     }
 
     template <typename TDevice>
@@ -340,6 +352,12 @@ namespace optimizers {
         , m_curValidationClassError   (0)
         , m_curTrainingClassError     (0)
         , m_curTestClassError         (0)
+        , m_curValidationSecError     (0)
+        , m_curTrainingSecError       (0)
+        , m_curTestSecError           (0)
+        , m_curValidationErrorPerFrame(0)
+        , m_curTrainingErrorPerFrame  (0)
+        , m_curTestErrorPerFrame      (0)
 	, m_blowed                    (false)
 	, m_optOption                 (optOption)
     {
@@ -367,7 +385,8 @@ namespace optimizers {
 		// initialize the buffer for AdaGrad
 		m_weightStats = m_bestWeights;
 		for (size_t i = 1; i < m_neuralNetwork.layers().size(); ++i) {
-		    thrust::fill(m_weightStats[i].begin(), m_weightStats[i].end(), ADAGRADFACTOR);
+		    thrust::fill(m_weightStats[i].begin(), m_weightStats[i].end(),
+				 OP_ADAGRADFACTOR);
 		}
 		if (m_optOption == OPTIMIZATION_ADAGRAD){
 		    printf("\n Optimization Techinique: AdaGrad\n");
@@ -376,6 +395,14 @@ namespace optimizers {
 			   Configuration::instance().optimizerSecondLR());
 		}
 		
+	    }else if(m_optOption == OPTIMIZATION_ADAM){
+		// initialize the buffer for Adam
+		m_weightStats = m_bestWeights;
+		for (size_t i = 1; i < m_neuralNetwork.layers().size(); ++i) {
+		    m_weightStats[i].resize(m_bestWeights[i].size() * 2, 0.0);
+		    thrust::fill(m_weightStats[i].begin(), m_weightStats[i].end(), 0.0);
+		}
+		printf("\n Optimization Techinique: Adam\n");
 	    }else if(m_optOption == OPTIMIZATION_AVEGRAD){
 		m_weightStats.clear();
 		printf("\n Optimization: average gradient over each data fraction\n");
@@ -455,6 +482,24 @@ namespace optimizers {
 	return m_curTestErrorPerFrame;                                         
     }                                                                  
 
+    template <typename TDevice>                                        
+    real_t Optimizer<TDevice>::curTrainingErrorSec() const                
+    {                                                                  
+	return m_curTrainingSecError;
+    }                                                                  
+                                                                   
+    template <typename TDevice>                                        
+    real_t Optimizer<TDevice>::curValidationErrorSec() const              
+    {                                                                  
+	return m_curValidationSecError;
+    }                                                                  
+                                                                   
+    template <typename TDevice>                                        
+    real_t Optimizer<TDevice>::curTestErrorSec() const                    
+    {                                                                  
+	return m_curTestSecError;                                         
+    }                                                                  
+
     template <typename TDevice>
     real_t Optimizer<TDevice>::curTrainingClassError() const
     {
@@ -480,9 +525,12 @@ namespace optimizers {
             ++m_curEpoch;
 
             // train one epoch and update the weights
-	    if (Configuration::instance().verboseLevel())
-		std::cerr << "Start training:" << std::endl;
-            m_curTrainingError = _processDataSet(m_trainingSet, true, &m_curTrainingClassError);
+	    if (Configuration::instance().verboseLevel() == OP_VERBOSE_LEVEL_1)
+		std::cerr << "Training set\nFractionNum, error, secError" << std::endl;
+	    
+	    // processing the data
+            _processDataSet(m_trainingSet, true,
+			    m_curTrainingError, m_curTrainingClassError, m_curTrainingSecError);
 	    
 	    // Add 0511
 	    if (this->m_blowed) {
@@ -503,19 +551,27 @@ namespace optimizers {
 	    m_curTrainingErrorPerFrame = (m_curTrainingError * 
 					  m_trainingSet.totalSequences() /
 					  m_trainingSet.totalTimesteps());
-	    
+	    //m_curTrainingSecError      = (m_curTrainingSecError * 
+	    //m_trainingSet.totalSequences() /
+	    //				  m_trainingSet.totalTimesteps());
 	    
             // calculate the validation error and store the weights if we a new lowest error
             if (!m_validationSet.empty() && m_curEpoch % m_validateEvery == 0) {
-		if (Configuration::instance().verboseLevel())
-		    std::cerr << "Start validation:" << std::endl;
-                m_curValidationError = _processDataSet(m_validationSet, false, 
-						       &m_curValidationClassError);
+		if (Configuration::instance().verboseLevel() == OP_VERBOSE_LEVEL_1)
+		    std::cerr << "Validation set\nFractionNum, error, secError" << std::endl;
+		
+		// processing the data
+                _processDataSet(m_validationSet, false, m_curValidationError,
+				m_curValidationClassError, m_curValidationSecError);
                 m_curValidationErrorPerFrame = (m_curValidationError * 
 						m_validationSet.totalSequences() / 
 						m_validationSet.totalTimesteps());
 
-                if (m_curValidationError < m_lowestValidationError) {
+		//m_curValidationSecError      = (m_curValidationSecError* 
+		//				m_validationSet.totalSequences() /
+		//				m_validationSet.totalTimesteps());
+		
+		if (m_curValidationError < m_lowestValidationError) {
                     m_lowestValidationError  = m_curValidationError;
                     m_epochsSinceLowestError = 0;
                     _storeWeights();
@@ -533,10 +589,15 @@ namespace optimizers {
 
             // calculate the test error
             if (!m_testSet.empty() && m_curEpoch % m_testEvery == 0){
-                m_curTestError = _processDataSet(m_testSet, false, &m_curTestClassError);
+                _processDataSet(m_testSet, false,
+				m_curTestError, m_curTestClassError, m_curTestSecError);
 		m_curTestErrorPerFrame = (m_curTestError * 
 					  m_testSet.totalSequences() /
 					  m_testSet.totalTimesteps());
+		//m_curTestSecError      = (m_curTestSecError* 
+		//			  m_testSet.totalSequences() /
+		//			  m_testSet.totalTimesteps());
+
 	    }
 	    
 	    	    
@@ -573,6 +634,8 @@ namespace optimizers {
 		    m_optStatus = "ADAGRAD";
 		}else if (m_optOption == OPTIMIZATION_AVEGRAD){
 		    m_optStatus = "AVEGRAD";
+		}else if (m_optOption == OPTIMIZATION_ADAM){
+		    m_optStatus = "ADAM";
 		}else{
 		    m_optStatus = "SGD";
 		}
@@ -613,7 +676,8 @@ namespace optimizers {
         _exportWeights(jsonDoc, "optimizer_best_weights", m_bestWeights);
 	
 	if (m_optOption == OPTIMIZATION_ADAGRAD || 
-	    m_optOption == OPTIMIZATION_STOCHASTIC_ADAGRAD){
+	    m_optOption == OPTIMIZATION_STOCHASTIC_ADAGRAD ||
+	    m_optOption == OPTIMIZATION_ADAM){
 	    _exportWeights(jsonDoc, "optimizer_status_vector",   m_weightStats);
 	}
     }
@@ -651,7 +715,8 @@ namespace optimizers {
 
 	// If AdaGrad is used, read the optimizer_status_vector to m_weightStats
 	if (m_optOption == OPTIMIZATION_ADAGRAD || 
-	    m_optOption == OPTIMIZATION_STOCHASTIC_ADAGRAD)
+	    m_optOption == OPTIMIZATION_STOCHASTIC_ADAGRAD ||
+	    m_optOption == OPTIMIZATION_ADAM)
 	    _importWeights(jsonDoc, "optimizer_status_vector",   &m_weightStats);
 	
     }
@@ -714,7 +779,18 @@ namespace optimizers {
 		// initialize the buffer for AdaGrad
 		m_weightStats = m_bestWeights;
 		for (size_t i = 1; i < m_neuralNetwork.layers().size(); ++i) {
-		    thrust::fill(m_weightStats[i].begin(), m_weightStats[i].end(), ADAGRADFACTOR);
+		    thrust::fill(m_weightStats[i].begin(),
+				 m_weightStats[i].end(),
+				 OP_ADAGRADFACTOR);
+		}		
+	    }else if(m_optOption == OPTIMIZATION_ADAM){
+		// initialize the buffer for Adam
+		m_weightStats = m_bestWeights;
+		for (size_t i = 1; i < m_neuralNetwork.layers().size(); ++i) {
+		    m_weightStats[i].resize(m_bestWeights[i].size() * 2, 0.0);
+		    thrust::fill(m_weightStats[i].begin(),
+				 m_weightStats[i].end(),
+				 0.0);
 		}		
 	    }else if(m_optOption == OPTIMIZATION_AVEGRAD){
 		m_weightStats.clear();

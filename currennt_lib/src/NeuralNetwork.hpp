@@ -55,7 +55,12 @@ private:
     std::vector<layers::Layer<TDevice>*> m_skipAddLayers;
 
     int m_firstFeedBackLayer;                                  // ID of the first feedback Layer
-
+    int m_middlePostOutputLayer;
+    int m_featMatchLayer;
+    int m_trainingEpoch;
+    int m_trainingFrac;
+    int m_trainingState;
+    
 public:
     /**
      * Creates the neural network from the process configuration
@@ -98,7 +103,7 @@ public:
 
     layers::SkipLayer<TDevice>* outGateLayer(const int layerID);
     
-    layers::MDNLayer<TDevice>* outMDNLayer();
+    layers::MDNLayer<TDevice>* outMDNLayer(const int layerID=-1);
 
     /**
      * Returns the post output layer
@@ -140,7 +145,7 @@ public:
      *
      * @return The computed error
      */
-    real_t calculateError() const;
+    real_t calculateError(const bool flagGenerateMainError) const;
 
     /**
      * Stores the description of the layers in a JSON tree
@@ -184,7 +189,6 @@ public:
     
     bool flagInputWeUpdate() const;
 
-
     bool saveWe(const std::string weFile) const;
     
     /* Add 04-01 Wang: for RMSE output mask */
@@ -197,7 +201,6 @@ public:
     
     /* Add 0511 Wang: re-initialize the weight*/
     void reInitWeight();
-
 
     /* Add 0514 Wang: initialize the output layer for MDN */
     void initOutputForMDN(const data_sets::DataSetMV &datamv);
@@ -213,6 +216,22 @@ public:
     
     /* Add 0928 Wang: notify the current training epoch to each layer*/
     void notifyCurrentEpoch(const int trainingEpoch);
+
+    /* Add 0928 Wang: notify the current training epoch to each layer*/
+    void notifyCurrentFrac(const int fracNum);
+
+    /* Add 170515 update the current state*/
+    void updateNNState(const int trainingEpoch, const int fracNum);
+
+    void updateNNStateForGeneration();
+    
+    int  layerSize(const int layerID);
+
+    bool isMDNLayer(const int layerID);
+    
+    /* Add 17-05-02: support for the GAN training */
+    void cleanGradientsForDiscriminator();
+    
     
 };
 

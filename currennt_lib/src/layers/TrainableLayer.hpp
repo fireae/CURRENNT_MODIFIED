@@ -54,11 +54,14 @@ namespace layers {
 	real_vector  m_weightMask;  // the float data to store weight mask	
 	bool         m_weightMaskFlag;     // whether to use the weight Mask
 	
-	int          m_weightNum;           // the number of weights
-	unsigned     m_optOpt;
+	int          m_weightNum;          // the number of weights
+	unsigned     m_optOpt;             // Note: this is used for Average Gradient
+	                                   // but now, it is used as a controller to fix the
+	                                   // the weight of one layer (by setting gradients to 0)
+	
     protected:
         real_vector&    _weightUpdates();
-	const unsigned& _optOpt() const;
+	//const unsigned& _optOpt() const;
 	
     public:
         /**
@@ -170,12 +173,14 @@ namespace layers {
          * @param weightsObject The object containing the weights
          * @param allocator     The allocator to use
          */
-        virtual void exportWeights(const helpers::JsonValue &weightsObject, const helpers::JsonAllocator &allocator) const;
+        virtual void exportWeights(const helpers::JsonValue &weightsObject,
+				   const helpers::JsonAllocator &allocator) const;
 
         /**
          * @see Layer::exportLayer()
          */
-        virtual void exportLayer(const helpers::JsonValue &layersArray, const helpers::JsonAllocator &allocator) const;
+        virtual void exportLayer(const helpers::JsonValue &layersArray,
+				 const helpers::JsonAllocator &allocator) const;
 
 	/**
 	 * Re-initialize the network
@@ -196,7 +201,8 @@ namespace layers {
 	int inputWeightsPerBlock();
         int internalWeightsPerBlock();
 
-	
+	virtual void cleanGradidents();	
+	const unsigned& optOpt() const;
     };
 
 } // namespace layers

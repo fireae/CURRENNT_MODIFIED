@@ -563,9 +563,10 @@ namespace layers {
     }
     
     template <typename TDevice, typename TActFn>
-    void ParaLayer<TDevice, TActFn>::loadSequences(const data_sets::DataSetFraction &fraction)
+    void ParaLayer<TDevice, TActFn>::loadSequences(const data_sets::DataSetFraction &fraction,
+						   const int nnState)
     {
-	TrainableLayer<TDevice>::loadSequences(fraction);
+	TrainableLayer<TDevice>::loadSequences(fraction, nnState);
 	
 	if (fraction.auxDataDim()>0){
 	    Cpu::pattype_vector clockTime = fraction.auxPattypeData();
@@ -627,7 +628,7 @@ namespace layers {
     }
 
     template <typename TDevice, typename TActFn>
-    void ParaLayer<TDevice, TActFn>::computeForwardPass()
+    void ParaLayer<TDevice, TActFn>::computeForwardPass(const int nnState)
     {
 	// transform the predicted parameters into feature trajectories
 	{{
@@ -656,20 +657,20 @@ namespace layers {
 	}}
 	
 	// normal feedforward transformation
-	this->FeedForwardLayer<TDevice,TActFn>::computeForwardPass();
+	this->FeedForwardLayer<TDevice,TActFn>::computeForwardPass(nnState);
     }
 
     template <typename TDevice, typename TActFn>
-    void ParaLayer<TDevice, TActFn>::computeForwardPass(const int timeStep)
+    void ParaLayer<TDevice, TActFn>::computeForwardPass(const int timeStep, const int nnState)
     {
 	
     }
 
     template <typename TDevice, typename TActFn>
-    void ParaLayer<TDevice, TActFn>::computeBackwardPass()
+    void ParaLayer<TDevice, TActFn>::computeBackwardPass(const int nnState)
     {
 	// normal backward computation
-	this->FeedForwardLayer<TDevice,TActFn>::computeBackwardPass();
+	this->FeedForwardLayer<TDevice,TActFn>::computeBackwardPass(nnState);
 	
 	
 	// compute the gradient for the para representation layers

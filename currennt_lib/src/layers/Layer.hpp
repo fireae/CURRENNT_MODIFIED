@@ -64,8 +64,9 @@ namespace layers {
 	cpu_real_vector   m_outputErrorsCopy;  // make a CPU copy
 
 	/* Add 16-09-28 Wang: the current training epoch */
-	int               m_currTrainingEpoch; // maybe useful
-
+	int               m_currTrainingEpoch; // epoch number 
+	int               m_currTrainingFrac;  // frac number in each epoch
+ 	
     protected:
         real_vector& _outputs();
 	
@@ -183,17 +184,17 @@ namespace layers {
          *
          * @param fraction The fraction of the data set to load
          */
-        virtual void loadSequences(const data_sets::DataSetFraction &fraction);
+        virtual void loadSequences(const data_sets::DataSetFraction &fraction, const int nnState);
 
         /**
          * Computes the forward pass
          */
-        virtual void computeForwardPass() =0;
+        virtual void computeForwardPass(const int nnState) =0;
 
         /**
          * Computes the backward pass, including the weight updates
          */
-        virtual void computeBackwardPass() =0;
+        virtual void computeBackwardPass(const int nnState) =0;
 	
         /**
          * Stores the description of the layer in a JSON object
@@ -223,6 +224,9 @@ namespace layers {
 	
 	virtual int& getCurrTrainingEpoch();
 	
+	virtual void setCurrTrainingFrac(const int curTrainingFrac);
+	
+	virtual int& getCurrTrainingFrac();
 
 	/*
 	 *  Provide additional information
@@ -236,10 +240,11 @@ namespace layers {
 	 */
 	virtual void prepareStepGeneration(const int timeStep);
 	
-	virtual void computeForwardPass(const int timeStep)=0;
+	virtual void computeForwardPass(const int timeStep, const int nnState)=0;
 
-	virtual real_vector& secondOutputs(const bool flagTrain);
+	virtual real_vector& feedbackOutputs(const bool flagTrain);
 
+	virtual void cleanGradidents();
     };
 
 } // namespace layers

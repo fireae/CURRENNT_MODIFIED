@@ -65,7 +65,7 @@ public:
 	    const helpers::JsonValue &weightsSection,
 	    int                       parallelSequences, 
 	    int                       maxSeqLength,
-	    std::vector<layers::Layer<TDevice>*> precedingLayers
+	    std::vector<layers::Layer<TDevice>*> &precedingLayers
         );
 
     static layers::Layer<TDevice>* createSkipParaLayer(
@@ -74,7 +74,7 @@ public:
 	    const helpers::JsonValue &weightsSection,
 	    int                       parallelSequences, 
 	    int                       maxSeqLength,
-	    std::vector<layers::Layer<TDevice>*> precedingLayers
+	    std::vector<layers::Layer<TDevice>*> &precedingLayers
         );
 
 };

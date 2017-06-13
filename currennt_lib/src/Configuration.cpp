@@ -157,10 +157,8 @@ Configuration::Configuration(int argc, const char *argv[])
 	 po::value(&feedForwardFormatString)->default_value("single_csv"),  
 	 "output format for output layer activations (htk, csv or single_csv)")
         ("ff_output_file", 
-	 po::value(&m_feedForwardOutputFile)->default_value("ff_output.csv"), 
-	 std::string(
-	      std::string("sets the name of the output file / directory in forward pass mode") + 
-	      std::string(" (directory for htk / csv modes)")).c_str())
+	 po::value(&m_feedForwardOutputFile)->default_value(""), 
+	 "sets the name of the output directory")
         ("ff_output_kind", 
 	 po::value(&m_outputFeatureKind)->default_value(9),                   
 	 "sets the parameter kind in case of HTK output (9: user, consult HTK book for details)")
@@ -188,6 +186,9 @@ Configuration::Configuration(int argc, const char *argv[])
 	("mdnSoftmaxGenMethod",
 	 po::value(&m_mdnSoftMaxGenMethod)->default_value(0),
 	 std::string("Method to generate from softmax (0: one-hot (def); 1: soft merge)").c_str())
+	("fakeEpochNum",
+	 po::value(&m_fakeEpochNum)->default_value(-1),
+	 "")
         ;
 
     po::options_description trainingOptions("Training options");
@@ -358,7 +359,12 @@ Configuration::Configuration(int argc, const char *argv[])
 	("ScheduleSampPara",
 	 po::value(&m_scheduleSampPara) ->default_value(0),
 	 "Parameter for schedule sampling. Default 0")
-
+	("runningMode",
+	 po::value(&m_runningMode)      ->default_value(0),
+	 "Training mode of CURRENNT.\n\t0: default\n\t1: skip layers with 0 LR during backprop")
+	("mdnVarFixEpochNum",
+	 po::value(&m_mdnVarFixEpochNum)->default_value(-1),
+	 "Fix the variance of mdn (GMM) as 1 for this number of epochs. Default (not use)")
         ;
 
     po::options_description autosaveOptions("Autosave options");
@@ -706,11 +712,11 @@ Configuration::Configuration(int argc, const char *argv[])
         std::cout << "\tTest  every " << m_testEvery << " epochs." << std::endl;
 
     if (m_trainingMode) {
-        std::cout << "\n\tTraining will be stopped";
+        std::cout << "\n\tTraining epoch number maximum: ";
         if (m_maxEpochs != std::numeric_limits<unsigned>::max())
-            std::cout << " after " << m_maxEpochs << " epochs or";
-        std::cout << " after no new lowest validation error for ";
-	std::cout << m_maxEpochsNoBest << " epochs." << std::endl;
+            std::cout << m_maxEpochs << std::endl;
+        std::cout << "\n\tTraining epoch number no lowest validation error: ";
+	std::cout << m_maxEpochsNoBest << std::endl;
     }
     
     if (m_autosave) {
@@ -767,6 +773,13 @@ Configuration::Configuration(int argc, const char *argv[])
 	    m_parallelSequences = 1;
 	}	
 	std::cout << std::endl;
+    }
+
+
+    if (m_feedForwardOutputFile.size() > 0 &&
+	m_mdnVarFixEpochNum > 0 && m_mdnVarFixEpochNum < 999){
+	std::cout << "\nGeneration mode, mdnVarFixEpochNum is not used";
+	m_mdnVarFixEpochNum = -1;
     }
     
     std::cout << std::endl;
@@ -1309,4 +1322,20 @@ const std::string& Configuration::exInputDim() const
 const int& Configuration::verboseLevel() const
 {
     return m_verbose;
+}
+
+const int& Configuration::fakeEpochNum() const
+{
+    return m_fakeEpochNum;
+}
+
+
+const int& Configuration::runningMode()  const
+{
+    return m_runningMode;
+}
+
+const int& Configuration::mdnVarUpdateEpoch() const
+{
+    return m_mdnVarFixEpochNum;
 }

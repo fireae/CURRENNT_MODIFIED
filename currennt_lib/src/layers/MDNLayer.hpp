@@ -99,6 +99,9 @@ namespace layers {
 	std::string    m_uvSigmoidStr;
 	std::string    m_quanMergeStr;
 	int_vector     m_quanMergeVal;
+
+	// one-sided smoothing
+	int            m_oneSidedSmoothing;
 	
     public:
 	MDNLayer(
@@ -113,11 +116,11 @@ namespace layers {
 	
 	virtual real_t calculateError();
 	
-	virtual void   computeForwardPass();
+	virtual void   computeForwardPass(const int nnState);
 
-	virtual void   computeForwardPass(const int timeStep);
+	virtual void   computeForwardPass(const int timeStep, const int nnState);
 	
-	virtual void   computeBackwardPass();
+	virtual void   computeBackwardPass(const int nnState);
 	
 	virtual real_vector& mdnParaVec();
 	
@@ -160,7 +163,7 @@ namespace layers {
 	
 	virtual const std::string& layerAddInfor(const int opt) const;
 
-	virtual void loadSequences(const data_sets::DataSetFraction &fraction);
+	virtual void loadSequences(const data_sets::DataSetFraction &fraction, const int nnState);
 
 	/* *
 	 * Functions to support the feedback data
@@ -171,7 +174,7 @@ namespace layers {
 
 	virtual void retrieveFeedBackData(const int timeStep, const int method=0);
 	
-	virtual real_vector& secondOutputs(const bool flagTrain);
+	virtual real_vector& feedbackOutputs(const bool flagTrain);
 
 	// export
 	virtual void exportLayer(const helpers::JsonValue &layersArray, 

@@ -359,7 +359,7 @@ namespace layers {
     }
 
     template <typename TDevice, typename TActFn>
-    void FeedForwardLayer<TDevice, TActFn>::computeForwardPass()
+    void FeedForwardLayer<TDevice, TActFn>::computeForwardPass(const int nnState)
     {
 
 	// Fine, I am lazy to merge the code
@@ -549,7 +549,8 @@ namespace layers {
 
 
     template <typename TDevice, typename TActFn>
-    void FeedForwardLayer<TDevice, TActFn>::computeForwardPass(const int timeStep)
+    void FeedForwardLayer<TDevice, TActFn>::computeForwardPass(const int timeStep,
+							       const int nnState)
     {
 	if (m_batchNorm){
 	    throw std::runtime_error("Error: batchnorm not available for online processing");
@@ -593,7 +594,7 @@ namespace layers {
     }
 
     template <typename TDevice, typename TActFn>
-    void FeedForwardLayer<TDevice, TActFn>::computeBackwardPass()
+    void FeedForwardLayer<TDevice, TActFn>::computeBackwardPass(const int nnState)
     {
 	// compute deltas
 	{{
@@ -684,6 +685,8 @@ namespace layers {
 	
 	// back-propagate the error to the preceding layer
 	{{
+
+	    // why only to Trainablelayer?
             TrainableLayer<TDevice> *pl = 
 		dynamic_cast<TrainableLayer<TDevice>*>(&this->precedingLayer());
 	    
@@ -705,8 +708,11 @@ namespace layers {
 		/* Add 16-02-22 Wang: for WE updating */
 		// If the input layer will udpate the word vectors
 		// we need to propagate the errors back to the input layer
+		/* Add 17-05-01 for MiddleoutputLayer*/
 		Layer<TDevice> *pl2 = dynamic_cast<Layer<TDevice>*>(&this->precedingLayer());
-		if (this->precedingLayer().inputWeUpdate()){
+		if (this->precedingLayer().inputWeUpdate() ||
+		    this->precedingLayer().type() == "middleoutput" ||
+		    this->precedingLayer().type() == "featmatch"){
 		    helpers::Matrix<TDevice> weightsMatrix (&this->weights(),      
 							    pl2->size(),  
 							    this->size());

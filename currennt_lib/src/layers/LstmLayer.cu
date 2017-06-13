@@ -1106,9 +1106,10 @@ namespace layers {
     }
 
     template <typename TDevice>
-    void LstmLayer<TDevice>::loadSequences(const data_sets::DataSetFraction &fraction)
+    void LstmLayer<TDevice>::loadSequences(const data_sets::DataSetFraction &fraction,
+					   const int nnState)
     {
-        TrainableLayer<TDevice>::loadSequences(fraction);
+        TrainableLayer<TDevice>::loadSequences(fraction, nnState);
 
         m_precLayerOutputsMatrix = helpers::Matrix<TDevice>(
 		&this->precedingLayer().outputs(), this->precedingLayer().size(), 
@@ -1334,7 +1335,7 @@ namespace layers {
 
 
     template <typename TDevice>
-    void LstmLayer<TDevice>::computeForwardPass()
+    void LstmLayer<TDevice>::computeForwardPass(const int nnState)
     {
 	
         // for unidirectional LSTM, we can write the outputs directly in the layer output vector
@@ -1532,7 +1533,7 @@ namespace layers {
     }
 
     template <typename TDevice>
-    void LstmLayer<TDevice>::computeForwardPass(const int timeStep)
+    void LstmLayer<TDevice>::computeForwardPass(const int timeStep, const int nnState)
     {
 	// for unidirectional LSTM, we can write the outputs directly in the layer output vector
         if (!m_isBidirectional) {
@@ -1637,7 +1638,7 @@ namespace layers {
 
 
     template <typename TDevice>
-    void LstmLayer<TDevice>::computeBackwardPass()
+    void LstmLayer<TDevice>::computeBackwardPass(const int nnState)
     {
         // for unidirectional LSTM,
 	// we can write the output errors directly in the layer output errors vector
@@ -1865,8 +1866,8 @@ namespace layers {
 	
         // back-propagate the error to the preceding layer
         {{
-            TrainableLayer<TDevice> *pl =
-		dynamic_cast<TrainableLayer<TDevice>*>(&this->precedingLayer());
+            Layer<TDevice> *pl =
+		dynamic_cast<Layer<TDevice>*>(&this->precedingLayer());
 	    
             if (pl) {
                 helpers::Matrix<TDevice> plErrorsMatrix(

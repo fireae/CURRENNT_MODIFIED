@@ -134,6 +134,35 @@ namespace {
         }
     };
 
+    struct AdamAccumulateUpdate
+    {
+	real_t  fracLength;
+	real_t  beta1Accum;
+	real_t  beta2Accum;
+	real_t *mvBuffer;
+	const real_t *weightMask;
+	
+        __host__ __device__ void operator() (const thrust::tuple<real_t&, const int&> &t) const
+        {
+	    //
+	    if (weightMask && weightMask[t.get<1>()] < 1.0)
+		return;
+
+	    // Average gradient over the sequence
+	    real_t aveGradient = t.get<0>() / fracLength;
+	    // m_t = m_t_1 * beta1 + (1-beta1)*gradient;
+    	    // v_t = v_t_1 * beta1 + (1-beta1)*gradient*gradient;
+	    mvBuffer[2 * t.get<1>()]   = (mvBuffer[2 * t.get<1>()]   * OP_ADAMBETA1 +
+					  aveGradient * (1 - OP_ADAMBETA1));
+	    mvBuffer[2 * t.get<1>()+1] = (mvBuffer[2 * t.get<1>()+1] * OP_ADAMBETA2 +
+					  aveGradient * aveGradient * (1 - OP_ADAMBETA2));
+	    real_t tmpM = mvBuffer[2 * t.get<1>()]   / (1 - beta1Accum);
+	    real_t tmpV = mvBuffer[2 * t.get<1>()+1] / (1 - beta2Accum);
+	    
+            t.get<0>() = tmpM / (sqrt(tmpV) + OP_ADAMEPSILON);
+        }
+    };
+    
     struct divideOpe { 
 	const real_t a; 
 	divideOpe(real_t _a) : a(_a) {} 
@@ -268,9 +297,43 @@ namespace optimizers {
 				thrust::make_tuple(this->_curWeightUpdates()[i].end(),
 						   this->_weightStats()[i].end(),
 						   thrust::counting_iterator<int>(0)+
-						   m_weightDeltas.size())),
+						   m_weightDeltas[i].size())),
 			     adaUpdateFn
 			);
+			/* Fatal error: 
+			   m_weightDeltas.size() is used instead of m_weightDeltas[i].size()
+			 */
+			
+		    }else if (this->_optOption() == OPTIMIZATION_ADAM){
+			// Adam
+			// Update the beta1 and beta2
+			m_adamBeta1Accum = m_adamBeta1Accum * OP_ADAMBETA1;
+			m_adamBeta2Accum = m_adamBeta2Accum * OP_ADAMBETA2;
+			
+			internal::AdamAccumulateUpdate adaUpdateFn;
+			adaUpdateFn.fracLength = (real_t)fracLength;
+			adaUpdateFn.beta1Accum = m_adamBeta1Accum;
+			adaUpdateFn.beta2Accum = m_adamBeta2Accum;
+			adaUpdateFn.mvBuffer   = helpers::getRawPointer(this->_weightStats()[i]);
+			adaUpdateFn.weightMask = (layer->flagUseWeightMask()?
+						  helpers::getRawPointer(layer->weightMask()):
+						  NULL);
+			
+			thrust::for_each(
+			     thrust::make_zip_iterator(
+				thrust::make_tuple(this->_curWeightUpdates()[i].begin(),   
+						   thrust::counting_iterator<int>(0))),
+			     thrust::make_zip_iterator(
+				thrust::make_tuple(this->_curWeightUpdates()[i].end(),
+						   thrust::counting_iterator<int>(0)+
+						   m_weightDeltas[i].size())),
+			     adaUpdateFn
+			);
+
+			/* Fatal error: 
+			   m_weightDeltas.size() is used instead of m_weightDeltas[i].size()
+			 */
+
 		    }else if(this->_optOption() == OPTIMIZATION_STOCHASTIC_ADAGRAD){
 			// AdaGrad, but just accumulate the gradients
 			internal::AdaGradAccumulate adaUpdateFn;
@@ -287,9 +350,13 @@ namespace optimizers {
 				thrust::make_tuple(this->_curWeightUpdates()[i].end(),
 						   this->_weightStats()[i].end(),
 						   thrust::counting_iterator<int>(0)+
-						   m_weightDeltas.size())),
+						   m_weightDeltas[i].size())),
 			     adaUpdateFn
 			);
+			/* Fatal error: 
+			   m_weightDeltas.size() is used instead of m_weightDeltas[i].size()
+			 */
+
 		    }else{
 			// nothing
 		    }
@@ -300,7 +367,7 @@ namespace optimizers {
 		    updateWeightFn.momentum      = m_momentum;
 		    updateWeightFn.learningRate  = m_learningRate;
 		    
-		    if (layer->learningRate() >= 0.0)
+		    if (layer->learningRate() > -0.5) // In fact, >= 0.0
 			updateWeightFn.learningRate = layer->learningRate();
 
 		    updateWeightFn.weights       = helpers::getRawPointer(layer->weights());
@@ -323,7 +390,7 @@ namespace optimizers {
 		    updateWeightFn2.momentum      = m_momentum;
 		    updateWeightFn2.learningRate  = m_learningRate;
 		    
-		    if (layer->learningRate() >= 0.0)
+		    if (layer->learningRate() > -0.5) // In fact, >= 0.0
 			updateWeightFn2.learningRate = layer->learningRate();
 		    
 
@@ -388,6 +455,8 @@ namespace optimizers {
 	, m_learningRateAdjust (adjustLRRate)
 	, m_weLearningRate     (weLearningRate)
         , m_momentum           (momentum)
+	, m_adamBeta1Accum     (1.0)
+	, m_adamBeta2Accum     (1.0)
     {
         // intialize the weight deltas vectors with zeros
         m_weightDeltas = this->_curWeightUpdates();

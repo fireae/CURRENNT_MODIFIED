@@ -47,6 +47,7 @@
 #include "../activation_functions/Relu.cuh"
 
 #include "../Configuration.hpp"
+#include "../MacroDefine.hpp"
 
 #include <boost/foreach.hpp>
 #include <boost/random/normal_distribution.hpp>
@@ -66,6 +67,9 @@
 #include <vector>
 #include <stdexcept>
 
+
+#define LOCAL_CNN_WINFO_NUM 5
+
 #define DEBUG_LOCAL_CNN 1
 
 namespace internal{
@@ -80,7 +84,7 @@ namespace{
     {
 
 	real_t *dataBuffer;
-	real_t *targetBuff;
+	//real_t *targetBuff;
 	real_t *biasWeight;
 	
 	int    *winSizeCum;
@@ -94,7 +98,7 @@ namespace{
 	int   paral;                
 	int   maxSeqLength;         // max length of one utterance
 	
-        __host__ __device__ void operator() (const thrust::tuple<int&, int> &t) const
+        __host__ __device__ void operator() (const thrust::tuple<real_t&, int> &t) const
         {
 	    
             // unpack the tuple
@@ -115,7 +119,10 @@ namespace{
 	    // location of the element to be added;
 	    int dTmp     = dimS + winHS;
 	    int tTmp     = timeIdx;
-	    int maxValue = 0;
+	    /* Fatal Error */
+	    // How could I use
+	    // int maxValue = 0; ???
+	    real_t maxValue = 0;
 	    
 	    for (int shift = -1 * winHS; shift <= winHS; shift += 1){
 		dTmp = (dimS + winHS) + shift;
@@ -131,7 +138,7 @@ namespace{
 	    }
 
 	    // add bias and pass through the activation function
-	    targetBuff[outputIdx] = cell_act_fn_t::fn(maxValue + biasWeight[dimIdx]);
+	    t.get<0>() = cell_act_fn_t::fn(maxValue + biasWeight[dimIdx]);
         }
     };
 
@@ -140,7 +147,7 @@ namespace{
     {
 
 	real_t *dataBuffer;
-	real_t *GradBuffer;
+	//real_t *GradBuffer;
 
 	int    *winSizeCum;
 	int    *winHalfSize;
@@ -153,7 +160,7 @@ namespace{
 	int   paral;                
 	int   maxSeqLength;         // max length of one utterance
 	
-        __host__ __device__ void operator() (const thrust::tuple<int&, int> &t) const
+        __host__ __device__ void operator() (const thrust::tuple<const real_t&, int> &t) const
         {
 	    
             // unpack the tuple
@@ -185,7 +192,7 @@ namespace{
 		    continue;
 		
 		// copy the gradient
-		dataBuffer[tTmp * winTotalLength + dTmp] = GradBuffer[outputIdx];
+		dataBuffer[tTmp * winTotalLength + dTmp] = t.get<0>();//GradBuffer[outputIdx];
 	    }
         }
     };
@@ -199,34 +206,589 @@ namespace{
         }
     };
 
+    struct CNNFilterWeightCopy
+    {
+	real_t *weightBuffer;
+	int    *weightCopyInfo;
+	int    *filterIndexMap;
+	
+	int     filterNum;
+	int     preLayerSize;
+	int     biasPosition;
+	int     biasPositionBuf;
+	bool    reverse;
+	
+	__host__ __device__ void operator() (const thrust::tuple<real_t&, int> &t) const
+	{
+	    int weightIdx   = t.get<1>();
+	    int filterIndex = filterIndexMap[weightIdx];
+
+	    if (filterIndex >= filterNum)
+		return; // impossible
+
+	    if (weightIdx < biasPosition){
+		// weight part
+		int filterStartOriginal = weightCopyInfo[filterIndex * LOCAL_CNN_WINFO_NUM + 0];
+		int filterStartBuffer   = weightCopyInfo[filterIndex * LOCAL_CNN_WINFO_NUM + 1];
+		//int filterWidth         = weightCopyInfo[filterIndex * LOCAL_CNN_WINFO_NUM + 2];
+		int filterHeight        = weightCopyInfo[filterIndex * LOCAL_CNN_WINFO_NUM + 3];
+		
+		int weightRelativeIdx   = weightIdx - filterStartOriginal;
+		int dimIndex            = weightRelativeIdx % filterHeight;
+		int colIndex            = weightRelativeIdx / filterHeight;
+		
+		int weightBufferIdx     = filterStartBuffer + colIndex * preLayerSize + dimIndex;
+
+		if (reverse){
+		    t.get<0>() = weightBuffer[weightBufferIdx];
+		}else{
+		    weightBuffer[weightBufferIdx] = t.get<0>();
+		}
+		
+	    }else{
+		// bias part
+		int filterBiasBuffer    = weightCopyInfo[filterIndex * LOCAL_CNN_WINFO_NUM + 4];
+		int biasBufferIdx       = biasPositionBuf + filterBiasBuffer;
+
+		if (reverse){
+		    t.get<0>() = weightBuffer[biasBufferIdx];
+		}else{
+		    weightBuffer[biasBufferIdx] = t.get<0>();
+		}
+	    }
+	    
+	}
+    };
+
     
+    struct CNNFilterDuplicate
+    {
+	real_t *weight;
+	int    *wColIndex;
+	int    *wRowIndex;
+	int    *wFilterHeight;
+	int    *wFilterShift;
+	
+	int     layerSize;
+	int     matrixWNum;
+	
+	__host__ __device__ void operator() (const thrust::tuple<real_t&, int> &t) const
+        {
+	    int outputIdx = t.get<1>();
+
+	    if (outputIdx < matrixWNum){
+		// the weight part
+		// calculate the pattern index
+		int colIndex = outputIdx / layerSize;
+		int rowIndex = outputIdx % layerSize;
+
+		int colShift = wColIndex[colIndex];
+		int rowShift = wRowIndex[colIndex];
+		int filterH  = wFilterHeight[colIndex];
+		
+		if (rowIndex < rowShift || rowIndex >= (filterH + rowShift)){
+		    // this dimension is void (set to zero)
+		    t.get<0>() = 0.0;
+		}else{
+		    if (colShift == 0){
+			// this is the block not need to be shifted
+			// do nothing
+		    }else{
+			if ((colIndex - colShift) < 0)
+			    return;			// impossible
+			
+			if ((rowIndex - rowShift) < 0)
+			    return;			// impossible
+			
+			t.get<0>() = weight[(colIndex - colShift) * layerSize +
+					    (rowIndex - rowShift)];
+		    }
+		}
+	    }else{
+		// the bias part
+		int shift = wFilterShift[outputIdx - matrixWNum];
+		if (shift == 0){
+		    // the original bias, doing nothing
+		}else{
+		    t.get<0>() = weight[outputIdx - shift];
+		}
+	    }
+	}
+    };
+
+    struct CNNFilterGradientMerge
+    {
+	real_t *weightGra;
+	int    *wColIndex;
+	int    *wRowIndex;
+	int    *wFilterHeight;
+	int    *wFilterShift;
+	
+	int    *wFilterWidth;
+	int    *wFilterShiftNum;
+	int    *wFilterShiftNumBias;
+	
+	int     layerSize;
+	int     matrixWNum;
+	
+	__host__ __device__ void operator() (const thrust::tuple<real_t&, int> &t) const
+        {
+	    int outputIdx = t.get<1>();
+
+	    if (outputIdx < matrixWNum){
+		// the weight part
+		// calculate the pattern index
+		int colIndex = outputIdx / layerSize;
+		int rowIndex = outputIdx % layerSize;
+
+		int colShift = wColIndex[colIndex];
+		int stride   = wRowIndex[colIndex];
+		int filterH  = wFilterHeight[colIndex];
+		int shiftNum = wFilterShiftNum[colIndex];
+		int filterW  = wFilterWidth[colIndex];
+		
+		if (colShift == 0){
+		    if (rowIndex >= filterH){
+			// zero part
+			t.get<0>() = 0;
+		    }else{
+			// point to the gradient buffer for the original feature
+			for (int i = 1; i < shiftNum; i++)
+			    t.get<0>() += weightGra[outputIdx + i * filterW * layerSize + i*stride];
+		    }
+		}
+	    }else{
+		// the bias part
+		int shift = wFilterShiftNumBias[outputIdx - matrixWNum];
+		if (shift == 0){
+		    // the shifted part
+		}else{
+		    for (int i = 1; i < shift; i++)
+			t.get<0>() += weightGra[outputIdx + i];
+		}
+	    }
+	}
+    };
+
 } // namespace 
 } // namespace internal
 
 namespace CNNTools{
 
-    int winWidth(int opt){
-	return (opt * 2 + 1);
+
+    // return the number of shifted filters
+    //  input:
+    //   featureDim:  dimension of the input feature
+    //   height:      height of the filter
+    //   stride:      stride of the filter
+    //  output = floor((FeatureDim - FilterHeight)/stride) + 1
+    int getShiftSteps(const int featureDim, const int height, const int stride){
+	// no zero padding
+	// the same filter will be shifted along the dimension of input feature matrix
+	//
+	if (featureDim < height){
+	    printf("Feature dimension %d cannot < filter height %d\n", featureDim, height);
+	    throw std::runtime_error("Please check filter window_height");
+	}
+	if (stride < 1){
+	    printf("Filter stride cannot < 1\n");
+	    throw std::runtime_error("Please check filter window_stride");
+	}
+	return ((int)std::floor((float)(featureDim - height)/(float)stride) + 1);
     }
     
-    int winTotalLength(Cpu::int_vector &opt){
+    // return the width of window = 2 * halfWidth + 1
+    // input:
+    //    opt: half-width of a window
+    int getWinWidth(int opt){
+	return (opt * 2 + 1);
+    }
+
+    // return the total width of windows
+    // input:
+    //    opt: vector of half-width of each window
+    int getWinTotalLength(Cpu::int_vector &opt){
 	int cnt =0;
 	for (int i=0; i < opt.size(); i++){
-	    cnt += winWidth(opt[i]);
+	    cnt += getWinWidth(opt[i]);
 	}
 	return cnt;
     }
-    
-    int getCNNWeight(const std::string winWidthOpt){
-	Cpu::int_vector tmp;
-	if (winWidthOpt.size() > 0){
-	    ParseIntOpt(winWidthOpt, tmp);
-	    return ((int)std::ceil(winTotalLength(tmp)/(float)tmp.size()));
+
+    // parse the option for CNN configuration
+    // input:
+    //    cnnOpt: text string of configuration for original filter set
+    //    layerSize: layer size (this layer)
+    //    dupOpt: index of the shifted filter to the original filter set
+    //            e.g., [1, 1, 1, 2, 2],
+    //            the first/second/third shifted filters corresponding to 1st original filter
+    //            the forth/fifth shifted filters correponsding to 2nd orignal filter
+    // output:
+    //    outOpt: vector of parased configuration for each shifted filter
+    void ParseCNNOpt(const std::string cnnOpt, int layerSize, Cpu::int_vector &dupOpt,
+		     Cpu::int_vector  &outOpt){
+
+	ParseIntOpt(cnnOpt, outOpt);
+	if (dupOpt.size()<1)
+	    return;
+		
+	Cpu::int_vector tmp(layerSize,  0);
+	for (int i = 0; i < layerSize; i++){
+	    if (dupOpt[i] >= outOpt.size()){
+		printf("Parsing %s", cnnOpt.c_str());
+		throw std::runtime_error("Error in parsing");
+	    }
+	    // dupOpt[i] is the index of the shifted filter in the original filter set
+	    tmp[i]  = outOpt[dupOpt[i]];
+	}
+	outOpt = tmp;
+	  
+    }
+
+    // preparing index data for CNN operation
+    // input:
+    //    winWidthOpt:  input configuration of filter width (original filter)
+    //    winHeightOpt: input configuration of filter height (original filter)
+    //    thisLayerSize:
+    //    preLayerSize:
+    // output:
+    //    winIndex:     index of each shifted filter in the original filter set
+    //    winHeight:    height of the shifted filter
+    //    winShift:     parameter for shifting of each shifted filter
+    //    inShiftRev:   how many shifted filters is used for each original filter
+    //                  this is used by the shifted filter with shift == 0
+    int getWindowIndex(const std::string winWidthOpt,  const std::string winHeightOpt,
+		       const std::string winStrideOpt, 
+		       int thisLayerSize,  int preLayerSize,
+		       Cpu::int_vector &winIndex,  Cpu::int_vector &winHeight,
+		       Cpu::int_vector &winShift,  Cpu::int_vector &winShiftRev,
+		       Cpu::int_vector &winStride, Cpu::int_vector &wCopyInfo,
+		       Cpu::int_vector &winWidthCum){
+	//
+	winIndex.resize(thisLayerSize, 0);
+	winHeight.resize(thisLayerSize, 0);
+	winShift.resize(thisLayerSize, 0);
+	winShiftRev.resize(thisLayerSize, 0);
+	winStride.resize(thisLayerSize, 0);
+	winWidthCum.resize(thisLayerSize + 1, 0);
+ 
+	if (winHeightOpt.size() > 0){
+	    // if 2-D convolution
+	    Cpu::int_vector width;
+	    Cpu::int_vector height;
+	    Cpu::int_vector stride;
+		
+	    ParseIntOpt(winHeightOpt, height);
+	    ParseIntOpt(winWidthOpt,  width);
+	    if (winStrideOpt.size() > 0)
+		ParseIntOpt(winStrideOpt,  stride);
+	    else
+		stride.resize(width.size(), 1);
+		
+	    if (width.size() != height.size() || width.size() != stride.size())
+		throw std::runtime_error("Unequal length of window_height, window_width");
+
+	    // 
+	    wCopyInfo.resize(width.size() * LOCAL_CNN_WINFO_NUM, 0);
+	    
+	    int cnt          = 0;  // counter of the shifted filter
+	    int widthCum     = 0;
+	    int wPosOriginal = 0;  // position of the pointer in the original weight matrix
+	    int wPosBuffer   = 0;  // position of the pointer in the weight buffer
+	    int wShiftSum    = 0;
+	    for (int i = 0; i < width.size(); i++){
+		
+		// a filter will be shifted D-K+1 times,
+		// where D is the previous layer size (dimension of input feature mat)
+		//       K is the height of the filter (<= dimension of input feature)
+		if (height[i] > preLayerSize)
+		    throw std::runtime_error("Error filter height larger than input feature dim");
+		int shiftSteps = getShiftSteps(preLayerSize,  height[i], stride[i]);
+		
+		// store the index of the shifted filter in the orignal filter set
+		for (int j = 0; j < shiftSteps; j++){
+		    if (cnt >= thisLayerSize){
+			printf("feature number %d > cnn layer size %d", cnt, thisLayerSize);
+			throw std::runtime_error("Error configuration");
+		    }
+		    winIndex[cnt]    = i;         // index of the shifted filter in the orignal set
+		    winShift[cnt]    = j;         // shifted position of this shifted filter
+		    winHeight[cnt]   = height[i]; // height
+		    winStride[cnt]   = stride[i]; // stride
+		    winWidthCum[cnt] = widthCum;
+		    if (j==0)
+			winShiftRev[cnt] = shiftSteps; // how many shifted filters ?
+		    cnt++;
+		    widthCum += getWinWidth(width[i]);
+		}
+
+		// store the weight position in the weight buffer and weight matrix
+		// start position in the weight matrix
+		wCopyInfo[i * LOCAL_CNN_WINFO_NUM + 0] = wPosOriginal;
+		wPosOriginal += getWinWidth(width[i]) * height[i];
+		// start position in the weight buffer
+		wCopyInfo[i * LOCAL_CNN_WINFO_NUM + 1] = wPosBuffer;
+		wPosBuffer   += (getWinWidth(width[i]) * preLayerSize) * shiftSteps;
+		// start position for the bias part
+		wCopyInfo[i * LOCAL_CNN_WINFO_NUM + 4] = wShiftSum;
+		wShiftSum    += shiftSteps; 
+		// height and width
+		wCopyInfo[i * LOCAL_CNN_WINFO_NUM + 2] = getWinWidth(width[i]);
+		wCopyInfo[i * LOCAL_CNN_WINFO_NUM + 3] = height[i];
+		
+	    }
+	    winWidthCum[thisLayerSize] = widthCum;
+	    
+	    if (cnt != thisLayerSize)
+		throw std::runtime_error("Layer size != feature dimension");
+	    
+	    return width.size();
+	    
 	}else{
-	    return 0;
+	    
+	    // 1-D convolution
+	    wCopyInfo.resize(thisLayerSize, 0);
+	   
+	    Cpu::int_vector width;
+	    ParseIntOpt(winWidthOpt,  width);
+	    if (width.size() != thisLayerSize)
+		throw std::runtime_error("Unequal length of width and layer size");
+
+	    int cum = 0;
+	    for (int i = 0; i< thisLayerSize; i++){
+		winIndex[i]  = i;
+		winHeight[i] = preLayerSize;
+		winStride[i] = 1;
+		winShift[i]  = 0;
+		winWidthCum[i] = cum;
+		cum += getWinWidth(width[i]);
+	    }
+	    winWidthCum[thisLayerSize] = cum;
+	    return thisLayerSize;
 	}
     }
 
+    
+    // Return the number of CNN weight / thisLayerSize
+    // Note, in TriainableLayers, the number of weight will be multiplied by this->size
+    //       thus, returned value is (ceil(#/layerSize)) 
+    int getCNNWeight(const std::string winWidthOpt,  const std::string winHeightOpt,
+		     const std::string winStrideOpt, int thisLayerSize, int preLayerSize,
+		     bool accurate){
+	
+	Cpu::int_vector width;
+	Cpu::int_vector height;
+	Cpu::int_vector stride;
+	
+	if (winHeightOpt.size() > 0){
+	    // 2-D convolution
+
+	    ParseIntOpt(winHeightOpt, height);
+	    ParseIntOpt(winWidthOpt,  width);
+
+	    if (winStrideOpt.size() > 0)
+		ParseIntOpt(winStrideOpt,  stride);
+	    else
+		stride.resize(width.size(), 1);
+		
+	    if (width.size() != height.size() || width.size() != stride.size()){
+		printf("Unequal length of configuration string:\n");
+		printf("there are %d window width parameters (window_width),", (int)width.size());
+		printf(" %d window height parameters (window_height),", (int)height.size());
+		printf(" %d window stride parameters (window_stride),", (int)stride.size());
+		throw std::runtime_error("Please check window_height,window_width,window_stride");
+	    }
+
+	    int cnt = 0;
+	    for (int i = 0; i < width.size(); i++)
+		cnt += height[i] * getWinWidth(width[i]);
+	    cnt += width.size();
+	    if (accurate)
+		return cnt;
+	    else
+		return ((int)std::ceil((float)cnt/(float)thisLayerSize));
+	    /*
+	    if (accurate){
+		
+	    }else{
+		
+		Cpu::int_vector width2(thisLayerSize,  0);
+		int cnt = 0;
+		for (int i = 0; i < width.size(); i++){
+		    int shiftSteps = getShiftSteps(preLayerSize, height[i], stride[i]);
+		    for (int j = 0; j < shiftSteps; j++){
+			if (cnt >= thisLayerSize)
+			    throw std::runtime_error("CNN size is smaller than expected");
+			width2[cnt]  = width[i];
+			cnt++;
+		    }
+		}
+		
+		if (cnt != thisLayerSize){
+		    printf("CNN size %d is unequal to expected dimension %d", thisLayerSize, cnt);
+		    throw std::runtime_error("Please check layer size or CNN configuration");
+		}
+		width = width2;
+		return ((int)std::ceil(getWinTotalLength(width) *
+					   (float)preLayerSize /
+					   (float)thisLayerSize) + 1);
+					   }*/
+	    
+	}else{
+
+	    // default 1-D convolution
+	    
+	    ParseIntOpt(winWidthOpt, width);
+	    if (width.size() > 0){
+		// count the total number of filter widths
+		// parameter = width * pre_layer_size + #filter
+		if (accurate)
+		    return getWinTotalLength(width) * preLayerSize + thisLayerSize;
+		else	
+		    return ((int)std::ceil(getWinTotalLength(width) *
+					   (float)preLayerSize /
+					   (float)thisLayerSize) + 1);
+	    }else{
+		return 0;
+	    }
+	}
+    }
+
+    // Return various data vectors to be used by 2-D convolution
+    //  input:
+    //    filterWidth:  half-width of each shifted filter
+    //    filterIndex:  index of shifted filter in original filter set
+    //    filterHeight: height of each each shifted filter
+    //    shiftNum:     how many shifted filters for each original filter?
+    //  output:
+    //    ColoutIndex:  shifted position from the original filter (column)
+    //    RowoutIndex:  shifted position from the original filter (row)
+    //    filHeight:    height of this filter
+    //    widthCol:     width of the filter
+    //    widthShift:   how many shifted filters for each original filter?
+    void fillInColIndex(Cpu::int_vector &filterWidth,  Cpu::int_vector &filterIndex,
+			Cpu::int_vector &filterHeight, Cpu::int_vector &shiftNum,
+			Cpu::int_vector &stride,       const int winTotalL,
+			Cpu::int_vector &ColoutIndex,
+			Cpu::int_vector &RowoutIndex,
+			Cpu::int_vector &filHeight,
+			Cpu::int_vector &widthCol,
+			Cpu::int_vector &widthShift){
+
+	ColoutIndex.resize(winTotalL, 0);
+	RowoutIndex.resize(winTotalL, 0);
+	filHeight.resize(winTotalL, 0);
+	widthCol.resize(winTotalL, 0);
+	widthShift.resize(winTotalL, 0);
+	
+	if (filterWidth.size() != filterIndex.size())
+	    throw std::runtime_error("Error fillInColIndex, filterWidth filterIndex unequal size");
+	
+	int cnt          = 0;
+	int indexTracker = -1;
+	int colshiftTmp  = 0;
+	int rowshiftTmp  = 0;
+	//int winTotalL    = ColoutIndex.size();
+	for (int i = 0; i < filterWidth.size(); i++){
+	    if (filterIndex[i] != indexTracker){
+		// come to the new filter
+		colshiftTmp  = 0;
+		rowshiftTmp  = 0;
+		indexTracker = filterIndex[i];
+	    }else{
+		colshiftTmp += getWinWidth(filterWidth[i]); // shift distance = filter width
+		rowshiftTmp += stride[i];                    // 
+	    }
+	    
+	    for (int j = 0; j < getWinWidth(filterWidth[i]); j++){
+		if (cnt > winTotalL){
+		    printf("column number %d > m_winTotalL %d\n", cnt, (int)ColoutIndex.size());
+		    throw std::runtime_error("Error in parsing fillInColIndex");
+		}
+		ColoutIndex[cnt] = colshiftTmp;
+		RowoutIndex[cnt] = rowshiftTmp;
+		filHeight[cnt]   = filterHeight[i];
+		widthCol[cnt]    = getWinWidth(filterWidth[i]);
+		if (colshiftTmp == 0)
+		    widthShift[cnt]  = shiftNum[i];
+		cnt++;
+	    }
+	}
+	if (cnt != winTotalL)
+	    throw std::runtime_error("Error in parsing fillInColIndex. Cnt != winTotalL");
+    }
+
+
+    void fillInFilterWeightMap(const std::string winWidthOpt,  const std::string winHeightOpt,
+			       const int weightNum,
+			       Cpu::int_vector &filterWeightMap){
+	
+	Cpu::int_vector width;
+	Cpu::int_vector height;
+	filterWeightMap.resize(weightNum, 0);
+	
+	ParseIntOpt(winHeightOpt, height);
+	ParseIntOpt(winWidthOpt,  width);
+	if (height.size() != width.size())
+	    throw std::runtime_error("Error height width unequal length");
+
+	int weightCnt = 0;
+	for (int filterCnt = 0; filterCnt < width.size(); filterCnt++){
+	    int filterWidth  = getWinWidth(width[filterCnt]);
+	    int filterHeight = height[filterCnt];
+	    int wNum = filterWidth * filterHeight;
+	    for (int i = 0; i<wNum; i++){
+		if (weightCnt > weightNum)
+		    throw std::runtime_error("weight number larger than expected");
+		filterWeightMap[weightCnt] = filterCnt;
+		weightCnt++;
+	    }
+	}
+	for (int filterCnt = 0; filterCnt < width.size(); filterCnt++){
+	    filterWeightMap[weightCnt] = filterCnt;
+	    weightCnt++;
+	}
+	if (weightCnt != weightNum)
+	    throw std::runtime_error("weight number unequal to expected number");
+    }
+    
+    void printCNNConfiguration(const int originalFilterNum, const int layerSize,
+			       const int preLayerSize, 
+			       Cpu::int_vector &winIndex,  Cpu::int_vector &winWidth,
+			       Cpu::int_vector &winHeight, Cpu::int_vector &winStride){
+	
+	int channelNum = layerSize; // use the standard name
+	
+	if (layerSize != winIndex.size() || layerSize != winHeight.size() ||
+	    layerSize != winStride.size()|| layerSize != winWidth.size()){
+	    // impossible error
+	    throw std::runtime_error("Unequal length of winIndex, winStride, winHeight");
+	}
+	printf("\n\tFilter details:");
+	printf("\n\t--Filter ID-- | -- Width -- | -- Height -- |");
+	printf("-- Stride -- | -- Weight -- | -- Output Channel -- \n");
+	int cnt = 0;
+	for (int cnt1 = 0; cnt1 < originalFilterNum; cnt1++){
+	    printf("\t%10d    |", cnt1);
+	    for (int cnt2 = 0; cnt2 < channelNum; cnt2++){
+		if (winIndex[cnt2] == cnt1){
+		    int chanlocal = getShiftSteps(preLayerSize, winHeight[cnt2], winStride[cnt2]);
+		    printf("%10d   |", getWinWidth(winWidth[cnt2]));
+		    printf("%11d   |", winHeight[cnt2]);
+		    printf("%10d   |", winStride[cnt2]);
+		    printf("%11d   |", winHeight[cnt2] * getWinWidth(winWidth[cnt2]) + 1);
+		    printf("%10d   \n",  chanlocal);
+		    cnt += chanlocal;
+		    break;
+		}
+	    }
+	}
+	if (cnt != channelNum){
+	    // impossible error
+	    throw std::runtime_error("Unequal output channel and layersize");
+	}
+	printf("\tCNN total output channels: %d\n", channelNum);
+    }
 }
 
 namespace layers {
@@ -241,81 +803,150 @@ namespace layers {
         Layer<TDevice> &precedingLayer)
 	: m_winWidth_Opt    ((layerChild->HasMember("window_width")) ? 
 			     ((*layerChild)["window_width"].GetString()) : (""))
-	, m_winConRange_Opt ((layerChild->HasMember("window_convo_range")) ? 
-			     ((*layerChild)["window_convo_range"].GetString()) : (""))
 	, m_winInterval_Opt ((layerChild->HasMember("window_tap_interval")) ? 
 			     ((*layerChild)["window_tap_interval"].GetString()) : (""))
+	, m_winHeight_Opt   ((layerChild->HasMember("window_height")) ? 
+			     ((*layerChild)["window_height"].GetString()) : (""))
+	, m_winStride_Opt   ((layerChild->HasMember("window_stride")) ? 
+			     ((*layerChild)["window_stride"].GetString()) : (""))
 	, TrainableLayer<TDevice>  (layerChild, weightsSection,
 				    0,
-				    (CNNTools::getCNNWeight(
+				    CNNTools::getCNNWeight(
 					(layerChild->HasMember("window_width")) ? 
-					((*layerChild)["window_width"].GetString()) : ("")) *
-				     precedingLayer.size() + 1),
+					((*layerChild)["window_width"].GetString()) : (""),
+					(layerChild->HasMember("window_height")) ? 
+					((*layerChild)["window_height"].GetString()) : (""),
+					(layerChild->HasMember("window_stride")) ? 
+					((*layerChild)["window_stride"].GetString()) : (""),
+					(layerChild->HasMember("size")) ? 
+					((*layerChild)["size"].GetInt()) : (0),
+					precedingLayer.size(), false),
 				    precedingLayer)
     {
-	
+
 	if (m_winWidth_Opt.size() < 1)
 	    throw std::runtime_error("Fail to find window_width in network.jsn");
 
+	int filterNum = CNNTools::getWindowIndex(
+		m_winWidth_Opt,  m_winHeight_Opt, m_winStride_Opt,
+		this->size(),    precedingLayer.size(),
+		m_winIndex_H,    m_winHeight_H,   m_winShiftIndex_H,  m_winShiftRevId_H,
+		m_winStride_H,   m_wCopyInfo_H,   m_winWidth_Cum_H);
+	m_winIndex_D      = m_winIndex_H;
+	m_winHeight_D     = m_winHeight_H;
+	m_winShiftIndex_D = m_winShiftIndex_H;
+	m_winShiftRevId_D = m_winShiftRevId_H;
+	m_winStride_D     = m_winStride_H;
+	m_wCopyInfo_D     = m_wCopyInfo_H;
+	m_winWidth_Cum_D  = m_winWidth_Cum_H;
+	m_winNumOrignal   = filterNum;
+
 	// Parse the width of filter window
 	m_winWidth_H.clear();
-	ParseIntOpt(m_winWidth_Opt, m_winWidth_H);
+	CNNTools::ParseCNNOpt(m_winWidth_Opt, this->size(), m_winIndex_H, m_winWidth_H);
 	m_winWidth_D = m_winWidth_H;
 
 	// total width of filter window
-	m_winTotalL  = CNNTools::winTotalLength(m_winWidth_H);
+	m_winTotalL  = CNNTools::getWinTotalLength(m_winWidth_H);
+
+	// number of weights (accurate)
+	m_weightNum = CNNTools::getCNNWeight(m_winWidth_Opt, m_winHeight_Opt, m_winStride_Opt,
+					      this->size(), precedingLayer.size(), true);
+	m_biasPos   = m_weightNum - filterNum;
 	
-	// number of weights (transformation matrices, not including the bias part)
-	m_numMatrixW = m_winTotalL * precedingLayer.size(); 
+	// number of weights (in buffer)
+	m_weightBufferNum  = m_winTotalL * precedingLayer.size() + this->size();
+	m_biasPosInBuffer  = m_winTotalL * precedingLayer.size();
 
-	// parse the convolution range option
-	m_winConRange_H.clear();
-	if (m_winConRange_Opt.size())
-	    ParseIntOpt(m_winConRange_Opt, m_winConRange_H);
-	else{
-	    m_winConRange_H = m_winWidth_H;
-	    thrust::fill(m_winConRange_H.begin(), m_winConRange_H.end(), 1);
+	// m_numMatrixW = m_winTotalL * precedingLayer.size();
+	
+	if (m_winHeight_Opt.size()>0){
+	    // 2-D convolution
+	    // get the column index for filter shifting
+	    CNNTools::fillInColIndex(
+		m_winWidth_H,      m_winIndex_H,    m_winHeight_H,
+		m_winShiftRevId_H, m_winStride_H,   m_winTotalL,
+		m_winColIndex_H,   m_winRowIndex_H, m_winColHeight_H,
+		m_winWidthCol_H,   m_winShiftNum_H);
+	    m_winColIndex_D  = m_winColIndex_H;
+	    m_winRowIndex_D  = m_winRowIndex_H;
+	    m_winColHeight_D = m_winColHeight_H;
+	    m_winWidthCol_D  = m_winWidthCol_H;
+	    m_winShiftNum_D  = m_winShiftNum_H;
+
+	    // fill in a map between individual filter weight and filter index
+	    Cpu::int_vector tmp;
+	    CNNTools::fillInFilterWeightMap(m_winWidth_Opt, m_winHeight_Opt, m_weightNum, tmp);
+	    m_weightFilter_map = tmp;
+	    
+	}else{
+	    // 1-D convolution
+	    m_winColIndex_H.clear();
+	    m_winRowIndex_H.clear();
+	    m_winColHeight_H.clear();
+	    m_winShiftNum_H.clear();
+	    m_winWidthCol_H.clear();
+	    m_winColIndex_D  = m_winColIndex_H;
+	    m_winRowIndex_D  = m_winRowIndex_H;
+	    m_winColHeight_D = m_winColHeight_H;
+	    m_winWidthCol_D  = m_winWidthCol_H;
+	    m_winShiftNum_D  = m_winShiftNum_H;
+	    m_weightFilter_map.clear();
 	}
-	m_winConRange_D = m_winConRange_H;
+	
 
+	
 	// parse the tap interval
 	m_winInterval_H.clear();
 	if (m_winInterval_Opt.size())
-	    ParseIntOpt(m_winInterval_Opt, m_winInterval_H);
+	    CNNTools::ParseCNNOpt(m_winInterval_Opt, this->size(), m_winIndex_H, m_winInterval_H);
 	else{
 	    m_winInterval_H = m_winWidth_H;
 	    thrust::fill(m_winInterval_H.begin(), m_winInterval_H.end(), 1);
 	}
 	m_winInterval_D = m_winInterval_H;
 	
-	
-	if (m_winConRange_H.size() != m_winWidth_H.size() ||
-	    m_winInterval_H.size() != m_winWidth_H.size() ||
-	    m_winConRange_H.size() != this->size()        ||
+	if (m_winInterval_H.size() != m_winWidth_H.size() ||
 	    m_winInterval_H.size() != this->size())
 	    throw std::runtime_error("Incompatible layer size and window configuration in CNN");
 
-	// Buffer to log down the max idx
-	m_maxIdxBuffer.resize(this->precedingLayer().outputs().size(), 0);
-
+	/*
 	// Create index to the first weight cell of each window filter
-	Cpu::int_vector tmp(m_winWidth_H.size() + 1, 0);
+	//Cpu::int_vector tmp(m_winWidth_H.size() + 1, 0);
 	Cpu::int_vector tmp2(m_winWidth_H.size() + 1, 0);
 	for (int i = 1; i < (m_winWidth_H.size()+1); i++){
-	    tmp[i] = tmp[i-1]  + CNNTools::winWidth(m_winWidth_H[i-1]) * precedingLayer.size();
-	    tmp2[i]= tmp2[i-1] + CNNTools::winWidth(m_winWidth_H[i-1]);
+	    // Index of the first weight element for this filter
+	    //tmp[i] = tmp[i-1]+ CNNTools::getWinWidth(m_winWidth_H[i-1]) * precedingLayer.size();
+	    // How many columns of filter weight before this filter
+	    tmp2[i]= tmp2[i-1] + CNNTools::getWinWidth(m_winWidth_H[i-1]);
 	}
-	m_weightIdx    = tmp;
+	//m_weightIdx    = tmp;
 	m_winWidth_Cum = tmp2;
+	*/
 	
 	// allocate memory for convolution buffer (\sum_window_Length * Time)
 	m_conBuffer.resize(this->precedingLayer().patTypes().size() * m_winTotalL, 0);
 
+	// allocate memmory for weight buffer
+	m_weightBuffer.resize(precedingLayer.size() * m_winTotalL + this->size(), 0.0);
+	
 	// done
 	printf("\n");
-	printf("\t# CNN weights: %d \n", m_numMatrixW + this->size());
-	printf("\t# CNN filter width %s, total width %d \n", m_winWidth_Opt.c_str(), m_winTotalL);
-	printf("\t# Filter tap interval (1 default) %s \n", m_winInterval_Opt.c_str());
+	if (m_winHeight_Opt.size())
+	    printf("\tCNN 2-D convolution\n");
+	else
+	    printf("\tCNN 1-D convolution\n");
+	printf("\tCNN trainable weights: %d (weights in Network summary may be inaccurate)\n",
+	       m_weightNum);
+	if (Configuration::instance().verboseLevel() == OP_VERBOSE_LEVEL_3){
+	    CNNTools::printCNNConfiguration(filterNum, this->size(), precedingLayer.size(),
+					    m_winIndex_H,  m_winWidth_H,
+					    m_winHeight_H, m_winStride_H);
+	}else{
+	    printf("\tCNN winwidth: %s\n", m_winWidth_Opt.c_str());
+	    printf("\tCNN winHeight: %s\n", m_winHeight_Opt.c_str());
+	    printf("\tCNN winStride: %s\n", m_winStride_Opt.c_str());
+	}
     }
     
     template <typename TDevice>
@@ -324,12 +955,70 @@ namespace layers {
     }
     
     template <typename TDevice>
-    void CNNLayer<TDevice>::computeForwardPass()
+    void CNNLayer<TDevice>::computeForwardPass(const int nnState)
     {
+	// Step0: 
+	{{
+
+	    if (m_winHeight_Opt.size()>0){
+
+		// 2-D convolution
+		
+		// Copy weight from this->weights() to m_weightBuffer
+		internal::CNNFilterWeightCopy fn1;
+		fn1.weightBuffer   = helpers::getRawPointer(m_weightBuffer);
+		fn1.weightCopyInfo = helpers::getRawPointer(m_wCopyInfo_D);
+		fn1.filterIndexMap = helpers::getRawPointer(m_weightFilter_map);
+		fn1.filterNum      = m_winNumOrignal;
+		fn1.preLayerSize   = this->precedingLayer().size();
+		fn1.biasPosition   = m_biasPos;
+		fn1.biasPositionBuf= m_biasPosInBuffer;
+		fn1.reverse        = false;
+		
+		int n = m_weightNum;
+		thrust::for_each(
+		  thrust::make_zip_iterator(
+			thrust::make_tuple(this->weights().begin(),
+					   thrust::counting_iterator<int>(0))),
+		  thrust::make_zip_iterator(
+			thrust::make_tuple(this->weights().begin() + n, 
+					   thrust::counting_iterator<int>(0) + n)),
+		  fn1);
+		
+		
+		// duplicate weights inside m_weightBuffer
+		internal::CNNFilterDuplicate fn;
+		fn.weight       = helpers::getRawPointer(m_weightBuffer);
+		fn.wColIndex    = helpers::getRawPointer(m_winColIndex_D);
+		fn.wRowIndex    = helpers::getRawPointer(m_winRowIndex_D);
+		fn.wFilterHeight= helpers::getRawPointer(m_winColHeight_D);
+		fn.wFilterShift = helpers::getRawPointer(m_winShiftIndex_D);
+		fn.layerSize    = this->precedingLayer().size();
+		fn.matrixWNum   = m_biasPosInBuffer;
+		
+		n = this->m_winTotalL * this->precedingLayer().size() + this->size();
+		thrust::for_each(
+		  thrust::make_zip_iterator(
+			thrust::make_tuple(this->m_weightBuffer.begin(),
+					   thrust::counting_iterator<int>(0))),
+		  thrust::make_zip_iterator(
+			thrust::make_tuple(this->m_weightBuffer.begin() + n, 
+					   thrust::counting_iterator<int>(0) + n)),
+		  fn);
+		
+	    }else{
+
+		// 1-D convolution
+		// copy the weights from this->weights() to m_weightBuffer
+		thrust::copy(this->weights().begin(),
+			     this->weights().begin() + m_weightBufferNum,
+			     m_weightBuffer.begin());
+	    }
+	}}
 
 	// Step1: prepare the data buffer by matrix transformation
 	{{
-	    helpers::Matrix<TDevice> weightMatrix   (&this->weights(),
+	    helpers::Matrix<TDevice> weightMatrix   (&this->m_weightBuffer,
 						     this->precedingLayer().size(),
 						     this->m_winTotalL);
 	    
@@ -351,10 +1040,10 @@ namespace layers {
 	    internal::ConvolutionCore fn;
 	    	    
 	    fn.dataBuffer       = helpers::getRawPointer(this->m_conBuffer);
-	    fn.targetBuff       = helpers::getRawPointer(this->outputs());
-	    fn.biasWeight       = helpers::getRawPointer(this->weights()) + m_numMatrixW;
+	    //fn.targetBuff       = helpers::getRawPointer(this->outputs());
+	    fn.biasWeight       = helpers::getRawPointer(this->m_weightBuffer) + m_biasPosInBuffer;
 	    
-	    fn.winSizeCum       = helpers::getRawPointer(m_winWidth_Cum);
+	    fn.winSizeCum       = helpers::getRawPointer(m_winWidth_Cum_D);
 	    fn.winHalfSize      = helpers::getRawPointer(m_winWidth_D);
 	    fn.winTapInter      = helpers::getRawPointer(m_winInterval_D);
 		
@@ -371,10 +1060,10 @@ namespace layers {
 
 	    thrust::for_each(
 	     thrust::make_zip_iterator(
-			thrust::make_tuple(m_maxIdxBuffer.begin(),
+		thrust::make_tuple(this->outputs().begin(),
 					   thrust::counting_iterator<int>(0))),
 	     thrust::make_zip_iterator(
-			thrust::make_tuple(m_maxIdxBuffer.begin()+n, 
+		thrust::make_tuple(this->outputs().begin()+n, 
 					   thrust::counting_iterator<int>(0)+n)),
 	     fn);
 
@@ -384,14 +1073,14 @@ namespace layers {
     }
     
     template <typename TDevice>
-    void CNNLayer<TDevice>::computeForwardPass(const int timeStep)
+    void CNNLayer<TDevice>::computeForwardPass(const int timeStep, const int nnState)
     {
 	// Not implemented
 	throw std::runtime_error("Not implemented yet");
     }
     
     template <typename TDevice>
-    void CNNLayer<TDevice>::computeBackwardPass()
+    void CNNLayer<TDevice>::computeBackwardPass(const int nnState)
     {
 	// Step1: Pass throught the nonlinear function
 	{{
@@ -413,9 +1102,9 @@ namespace layers {
 	    internal::ConvolutionCoreGra fn;
 	    	    
 	    fn.dataBuffer       = helpers::getRawPointer(this->m_conBuffer);
-	    fn.GradBuffer       = helpers::getRawPointer(this->outputErrors());
+	    //fn.GradBuffer       = helpers::getRawPointer(this->outputErrors());
 
-	    fn.winSizeCum       = helpers::getRawPointer(m_winWidth_Cum);
+	    fn.winSizeCum       = helpers::getRawPointer(m_winWidth_Cum_D);
 	    fn.winHalfSize      = helpers::getRawPointer(m_winWidth_D);
 	    fn.winTapInter      = helpers::getRawPointer(m_winInterval_D);
 	    
@@ -432,10 +1121,10 @@ namespace layers {
 
 	    thrust::for_each(
 	     thrust::make_zip_iterator(
-			thrust::make_tuple(m_maxIdxBuffer.begin(),
+			thrust::make_tuple(this->outputErrors().begin(),
 					   thrust::counting_iterator<int>(0))),
 	     thrust::make_zip_iterator(
-			thrust::make_tuple(m_maxIdxBuffer.begin()+n, 
+			thrust::make_tuple(this->outputErrors().begin()+n, 
 					   thrust::counting_iterator<int>(0)+n)),
 	     fn);
 
@@ -443,7 +1132,7 @@ namespace layers {
 
 	// Step3: gradient to previous layer
 	{{
-	    helpers::Matrix<TDevice> weightMatrix   (&this->weights(),
+	    helpers::Matrix<TDevice> weightMatrix   (&this->m_weightBuffer,
 						     this->precedingLayer().size(),
 						     this->m_winTotalL);
 
@@ -462,7 +1151,8 @@ namespace layers {
 
 	// Step4: gradient to the weight
 	{{
-	    helpers::Matrix<TDevice> weightError   (&this->_weightUpdates(),
+	    // use m_weightBuffer as the buffer for gradients
+	    helpers::Matrix<TDevice> weightError   (&this->m_weightBuffer,
 						     this->precedingLayer().size(),
 						     this->m_winTotalL);
 
@@ -486,8 +1176,8 @@ namespace layers {
 			 m_conBuffer.begin() + this->curMaxSeqLength() * this->parallelSequences(),
 			 1.0);
 	    
-	    helpers::Matrix<TDevice> biasError   (&this->_weightUpdates(), 1, this->size(),
-						  m_numMatrixW);
+	    helpers::Matrix<TDevice> biasError   (&this->m_weightBuffer, 1, this->size(),
+						  m_biasPosInBuffer);
 
 	    helpers::Matrix<TDevice> curErrorMatrix (&this->outputErrors(),                 
 						     this->size(),                  
@@ -500,15 +1190,80 @@ namespace layers {
             biasError.assignProduct(onesVec, false, curErrorMatrix, true);
 	    
 	}}
+
+	// Step6: merge the gradient
+	{{
+	    
+	    if (m_winHeight_Opt.size()>0){
+		
+		// 2-D convolution
+
+		// merge the gradients in the buffer
+		internal::CNNFilterGradientMerge fn;
+		fn.weightGra    = helpers::getRawPointer(this->m_weightBuffer);
+		fn.wColIndex    = helpers::getRawPointer(m_winColIndex_D);
+		fn.wRowIndex    = helpers::getRawPointer(m_winRowIndex_D);
+		fn.wFilterHeight= helpers::getRawPointer(m_winColHeight_D);
+		fn.wFilterShift = helpers::getRawPointer(m_winShiftIndex_D);
+
+		fn.wFilterWidth        = helpers::getRawPointer(m_winWidthCol_D);
+		fn.wFilterShiftNum     = helpers::getRawPointer(m_winShiftNum_D);
+		fn.wFilterShiftNumBias = helpers::getRawPointer(m_winShiftRevId_D);
+		
+		fn.layerSize    = this->precedingLayer().size();
+		fn.matrixWNum   = this->m_winTotalL * this->precedingLayer().size();
+		
+		int n = this->m_winTotalL * this->precedingLayer().size() + this->size();
+		thrust::for_each(
+		  thrust::make_zip_iterator(
+			thrust::make_tuple(this->m_weightBuffer.begin(),
+					   thrust::counting_iterator<int>(0))),
+		  thrust::make_zip_iterator(
+			thrust::make_tuple(this->m_weightBuffer.begin() + n, 
+					   thrust::counting_iterator<int>(0) + n)),
+		  fn);
+
+		// copy the gradients to the weightsUpdate buffer
+		internal::CNNFilterWeightCopy fn1;
+		fn1.weightBuffer   = helpers::getRawPointer(m_weightBuffer);
+		fn1.weightCopyInfo = helpers::getRawPointer(m_wCopyInfo_D);
+		fn1.filterIndexMap = helpers::getRawPointer(m_weightFilter_map);
+		fn1.filterNum      = m_winNumOrignal;
+		fn1.preLayerSize   = this->precedingLayer().size();
+		fn1.biasPosition   = m_biasPos;
+		fn1.biasPositionBuf= m_biasPosInBuffer;
+		fn1.reverse        = true;
+		
+		n = m_weightNum;
+		thrust::for_each(
+		  thrust::make_zip_iterator(
+			thrust::make_tuple(this->_weightUpdates().begin(),
+					   thrust::counting_iterator<int>(0))),
+		  thrust::make_zip_iterator(
+			thrust::make_tuple(this->_weightUpdates().begin() + n, 
+					   thrust::counting_iterator<int>(0) + n)),
+		  fn1);
+		
+		
+	    }else{
+
+		// 1-D convolution
+		thrust::copy(this->m_weightBuffer.begin(),
+			     this->m_weightBuffer.begin() + m_weightBufferNum,
+			     this->_weightUpdates().begin());
+	    }
+
+	}}
 	
 	// dustbin.txt 20170421x03
     }
 
     template <typename TDevice>
-    void CNNLayer<TDevice>::loadSequences(const data_sets::DataSetFraction &fraction)
+    void CNNLayer<TDevice>::loadSequences(const data_sets::DataSetFraction &fraction,
+					  const int nnState)
     {
 	// load the sequences for TrainableLayers
-	TrainableLayer<TDevice>::loadSequences(fraction);
+	TrainableLayer<TDevice>::loadSequences(fraction, nnState);
 	
 	// 
     }
@@ -529,11 +1284,14 @@ namespace layers {
 	(*layersArray)[layersArray->Size() - 1].AddMember("window_width",
 							  m_winWidth_Opt.c_str(),
 							  allocator);
-        (*layersArray)[layersArray->Size() - 1].AddMember("window_convo_range",
-							  m_winConRange_Opt.c_str(),
-							  allocator);
         (*layersArray)[layersArray->Size() - 1].AddMember("window_tap_interval",
 							  m_winInterval_Opt.c_str(),
+							  allocator);
+        (*layersArray)[layersArray->Size() - 1].AddMember("window_height",
+							  m_winHeight_Opt.c_str(),
+							  allocator);
+        (*layersArray)[layersArray->Size() - 1].AddMember("window_stride",
+							  m_winStride_Opt.c_str(),
 							  allocator);
     }
 

@@ -68,17 +68,17 @@ namespace layers {
         /**
          * @see Layer::computeForwardPass()
          */
-        virtual void computeForwardPass();
+        virtual void computeForwardPass(const int nnState);
 
 	/**
          * @see Layer::computeForwardPass()
          */
-        virtual void computeForwardPass(const int timeStep);
+        virtual void computeForwardPass(const int timeStep, const int nnState);
 
          /**
          * @see Layer::computeBackwardPass()
          */
-        virtual void computeBackwardPass();
+        virtual void computeBackwardPass(const int nnState);
     };
 
 } // namespace layers

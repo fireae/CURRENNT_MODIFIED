@@ -150,7 +150,7 @@ namespace layers{
 	virtual real_t calculateError(real_vector &targets) =0;
 	
 	// back ward computation
-	virtual void computeBackward(real_vector &targets) =0; 
+	virtual void computeBackward(real_vector &targets, const int flag) =0; 
 
 	// initialize the parameter set of the units
 	virtual void initPreOutput(const cpu_real_vector &mVec, const cpu_real_vector &vVec) =0;
@@ -233,7 +233,7 @@ namespace layers{
 
 	virtual real_t calculateError(real_vector &targets);
 	
-	virtual void computeBackward(real_vector &targets);
+	virtual void computeBackward(real_vector &targets, const int flag = 0);
 
 	virtual void initPreOutput(const cpu_real_vector &mVec, const cpu_real_vector &vVec);
 	
@@ -302,7 +302,7 @@ namespace layers{
 
 	virtual real_t calculateError(real_vector &targets);
 	
-	virtual void computeBackward(real_vector &targets);
+	virtual void computeBackward(real_vector &targets, const int flag = 0);
 
 	virtual void initPreOutput(const cpu_real_vector &mVec, const cpu_real_vector &vVec);
 	
@@ -340,10 +340,12 @@ namespace layers{
 	// data
 	const int   m_numMixture;
 	const int   m_featureDim;
+
+	int         m_mdnVarEpochFix; // fix the variance for # epochs
 	
 	real_t      m_varFloor;  // all dimensions and all mixtures share the same variance floor
 	bool        m_tieVar;    // whether the variance should be tied across dimension ?
-
+	
 	real_vector m_offset;    // temporary, calculate the offset for mixture weight
 	real_vector m_tmpPat;    // temporary, store the statistics for BP
 	real_vector m_varBP;     // temporary, store the variance gradients for BP
@@ -373,7 +375,7 @@ namespace layers{
 	
 	virtual real_t calculateError(real_vector &targets);
 	
-	virtual void computeBackward(real_vector &targets);
+	virtual void computeBackward(real_vector &targets, const int flag = 0);
 
 	virtual void initPreOutput(const cpu_real_vector &mVec, const cpu_real_vector &vVec);
 	
@@ -470,7 +472,7 @@ namespace layers{
 	
 	virtual void computeForward(const int timeStep);
 	
-	virtual void computeBackward(real_vector &targets);
+	virtual void computeBackward(real_vector &targets, const int flag = 0);
 	
 	virtual void getOutput(const real_t para, real_vector &targets);
 
@@ -537,7 +539,7 @@ namespace layers{
 	
 	virtual real_t calculateError(real_vector &targets);
 	
-	virtual void   computeBackward(real_vector &targets);
+	virtual void   computeBackward(real_vector &targets, const int flag = 0);
 	
 	virtual void   getOutput(const real_t para, real_vector &targets);
 

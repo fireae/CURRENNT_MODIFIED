@@ -249,10 +249,10 @@ namespace layers {
     }
 
     template <typename TDevice, typename TFfActFn>
-    void SoftmaxLayer<TDevice, TFfActFn>::computeForwardPass()
+    void SoftmaxLayer<TDevice, TFfActFn>::computeForwardPass(const int nnState)
     {
         // compute the forward pass of the feedforward layer
-        FeedForwardLayer<TDevice, TFfActFn>::computeForwardPass();
+        FeedForwardLayer<TDevice, TFfActFn>::computeForwardPass(nnState);
 
         // calculate the offset to center the activations for safer exponentiation
         {{
@@ -316,12 +316,12 @@ namespace layers {
     }
 
     template <typename TDevice, typename TFfActFn>
-    void SoftmaxLayer<TDevice, TFfActFn>::computeForwardPass(const int timeStep)
+    void SoftmaxLayer<TDevice, TFfActFn>::computeForwardPass(const int timeStep, const int nnState)
     {
     }
 
     template <typename TDevice, typename TFfActFn>
-    void SoftmaxLayer<TDevice, TFfActFn>::computeBackwardPass()
+    void SoftmaxLayer<TDevice, TFfActFn>::computeBackwardPass(const int nnState)
     {
         // calculate the error offset for each pattern
         {{
@@ -355,7 +355,7 @@ namespace layers {
         }}
 
         // compute the backward pass of the feedforward layer
-        FeedForwardLayer<TDevice, TFfActFn>::computeBackwardPass();
+        FeedForwardLayer<TDevice, TFfActFn>::computeBackwardPass(nnState);
     }
 
 

@@ -190,7 +190,7 @@ namespace layers{
     SkipParaLayer<TDevice, TActFn>::SkipParaLayer(
 					const helpers::JsonValue &layerChild,
 					const helpers::JsonValue &weightsSection,
-					std::vector<Layer<TDevice>*> precedingLayers
+					std::vector<Layer<TDevice>*> &precedingLayers
 					)
 	// use preLayers[0] as fake preceding layers
 	: SkipLayer<TDevice>(layerChild, weightsSection, precedingLayers, true)
@@ -214,7 +214,12 @@ namespace layers{
 
 	// previous skip layer
 	m_preSkipLayer = precedingLayers[0];
-		
+
+	if (this->size() != m_preSkipLayer->size()){
+	    printf("Error: %s vs %s", m_preSkipLayer->name().c_str(), this->name().c_str());
+	    throw std::runtime_error("Error unequal layer size");
+	}
+	
 	// initialize the vector
 	// m_outputErrorsFromSkipLayer = Cpu::real_vector(this->outputs().size(), (real_t)0.0);
 	m_gateOutput                = Cpu::real_vector(this->outputs().size(), (real_t)0.0);
@@ -240,7 +245,7 @@ namespace layers{
 	
     // NN forward
     template <typename TDevice, typename TActFn>
-    void SkipParaLayer<TDevice, TActFn>::computeForwardPass()
+    void SkipParaLayer<TDevice, TActFn>::computeForwardPass(const int nnState)
     {
 	
 	// initialization for backward pass 
@@ -318,7 +323,7 @@ namespace layers{
 	
     // NN forward
     template <typename TDevice, typename TActFn>
-    void SkipParaLayer<TDevice, TActFn>::computeForwardPass(const int timeStep)
+    void SkipParaLayer<TDevice, TActFn>::computeForwardPass(const int timeStep, const int nnState)
     {
 	int effTimeS = timeStep     * this->parallelSequences();
 	int effTimeE = (timeStep+1) * this->parallelSequences();
@@ -387,7 +392,7 @@ namespace layers{
 
     // NN backward
     template <typename TDevice, typename TActFn>
-    void SkipParaLayer<TDevice, TActFn>::computeBackwardPass()
+    void SkipParaLayer<TDevice, TActFn>::computeBackwardPass(const int nnState)
     {
 	// the same as the skipadd layer
 	// at first, add the errors in both m_outputErrorsFromSkipLayer and m_outputErrors

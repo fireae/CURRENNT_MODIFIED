@@ -174,7 +174,11 @@ private:
 
     /* Add 20170404 */
     int         m_verbose;
+    int         m_fakeEpochNum;
+    int         m_runningMode;
 
+    /* Add 20170612 */
+    int         m_mdnVarFixEpochNum;
     
     unsigned m_truncSeqLength;
     unsigned m_parallelSequences;
@@ -677,6 +681,12 @@ public:
     const std::string& exInputDim() const;
 
     const int& verboseLevel() const;
+
+    const int& fakeEpochNum() const;
+
+    const int& runningMode()  const;
+
+    const int& mdnVarUpdateEpoch() const;
 };
 
 

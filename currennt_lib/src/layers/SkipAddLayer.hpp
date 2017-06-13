@@ -53,14 +53,16 @@ namespace layers {
 	// to receive the errors directly from next skip add layer
 	// real_vector       m_outputErrorsFromSkipLayer;
 
-	bool m_flagSkipInit; // this layer only take input from previous layer?        
+	bool                         m_flagSkipInit; // this layer SkipInit or SkipAdd 
+	real_t                       m_noiseRatio;
+	std::string                  m_previousSkipStr;
     public:
 		
 	// Construct the layer
 	SkipAddLayer(
 		     const helpers::JsonValue &layerChild,
 		     const helpers::JsonValue &weightsSection,
-		     std::vector<Layer<TDevice>*> precedingLayers
+		     std::vector<Layer<TDevice>*> &precedingLayers
 		     );
 
 	// Destructor
@@ -70,10 +72,10 @@ namespace layers {
 	virtual const std::string& type() const;
 
 	// NN forward
-	virtual void computeForwardPass();
+	virtual void computeForwardPass(const int nnState);
 	
 	// NN backward
-	virtual void computeBackwardPass();
+	virtual void computeBackwardPass(const int nnState);
 
 	// fake output from gate
 	real_vector& outputFromGate();
@@ -82,10 +84,15 @@ namespace layers {
 	std::vector<Layer<TDevice>*> PreLayers();
 
 	// NN forward
-	virtual void computeForwardPass(const int timeStep);
+	virtual void computeForwardPass(const int timeStep, const int nnState);
 	
 	// return reference to the m_outputErrorsFromSkipLayer
 	// real_vector& outputErrorsFromSkipLayer();
+
+	// output the layer configuration
+	virtual void exportLayer(const helpers::JsonValue &layersArray,
+				 const helpers::JsonAllocator &allocator) const;
+
     };
 
 }

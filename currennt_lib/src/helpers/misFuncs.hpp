@@ -35,10 +35,21 @@
 #include "../Types.hpp"
 
 /* ***** Functions for string process ***** */
-void ParseStrOpt(const std::string stringOpt, std::vector<std::string> &optVec);
-void ParseIntOpt(const std::string stringOpt, Cpu::int_vector &optVec);
+void   ParseStrOpt(const std::string stringOpt, std::vector<std::string> &optVec,
+		   const std::string para="_");
+void   ParseIntOpt(const std::string stringOpt,   Cpu::int_vector &optVec);
+void   ParseFloatOpt(const std::string stringOpt, Cpu::real_vector &optVec);
+
+/* ***** Functions for vector process ***** */
+int    SumCpuIntVec(Cpu::int_vector &temp);
+int    MaxCpuIntVec(Cpu::int_vector &temp);
+
+/* ***** Functions for training process ***** */
+int    flagUpdateDiscriminator(const int epoch, const int frac);
+
+/* ***** Functions for numerical process ***** */
 
 real_t GetRandomNumber();
-
-int SumCpuIntVec(Cpu::int_vector &temp);
+bool   closeToZero(const real_t t1, const real_t lowBound = -0.0001,
+		   const real_t upBound = 0.0001);
 #endif

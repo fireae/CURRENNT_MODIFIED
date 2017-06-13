@@ -298,6 +298,9 @@ namespace {
 	int startD;
 	int endD;
 	real_t varFloor;           // the variance floor !!!
+
+	bool flagUpdateV;        // update variance (Yes: default; No: use 1.0 as variance)
+	
 	const char   *patTypes;
 	const real_t *NNOutput;
 
@@ -311,11 +314,15 @@ namespace {
 	    
 	    if (patTypes[timeStep] == PATTYPE_NONE)
 		return SKIP_MARKER;
-
-	    const real_t *data = NNOutput + (NNOutputSize * timeStep ) + dimStep;
-	    real_t b = helpers::safeExp(*data);
-	    b = (b < varFloor)?(varFloor):b;
-	    return b;
+	    
+	    if (flagUpdateV){
+		const real_t *data = NNOutput + (NNOutputSize * timeStep ) + dimStep;
+		real_t b = helpers::safeExp(*data);
+		b = (b < varFloor)?(varFloor):b;
+		return b;
+	    }else{
+		return 1.0;
+	    }
 	}
     };
 	
@@ -488,7 +495,27 @@ namespace {
      Backpropagation functions for
      Sigmoid, softmax, mixture MDNUnit
      ******************************************/
-
+    //
+    struct FrameNum
+    {
+	int startD;             // start position of data in NN output layer
+	int endD;               // end position of data in NN output layer
+	const char *patTypes;
+	
+	// from 1 to timesteps * para_dim
+	__host__ __device__ real_t operator() (const thrust::tuple<const real_t&, int> &t) const
+	{
+	    
+	    int outputIdx = t.get<1>();  // index
+	    const int timeStep = outputIdx / (endD - startD);
+	    
+	    if (patTypes[timeStep] == PATTYPE_NONE)
+		return 0.0;
+	    else
+		return 1.0;
+	}
+    };
+    
     // Calculate errors (- log likelihood) for sigmoid
     struct ComputeSigmoidError
     {
@@ -524,7 +551,42 @@ namespace {
 	    return -1*log(targetProb);
 	}
     };
-    
+
+    // 
+    struct ComputeSigmoidPositiveFrame
+    {
+	int startD;             // start position of data in NN output layer
+	int endD;               // end position of data in NN output layer
+	int startDOut;          // start position of data in observed data
+	int layerSizeOut;       // dimension of the observed data
+	const char *patTypes;
+	const real_t *targets;  // targets data
+	
+	// from 1 to timesteps * para_dim
+	__host__ __device__ real_t operator() (const thrust::tuple<const real_t&, int> &t) const
+	{
+	    
+	    int outputIdx = t.get<1>();  // index
+	    real_t prob   = t.get<0>();  // output of NN (probability)
+
+	    // timeStep: which frame is it?
+	    // dimStep:  which dimension in the NN output side this frame ?
+	    const int timeStep = outputIdx / (endD - startD);
+	    const int dimStep  = (outputIdx % (endD - startD)) + startDOut;
+	    
+	    if (patTypes[timeStep] == PATTYPE_NONE)
+		return 0;
+	    
+	    // target data
+	    const real_t *data = targets + (layerSizeOut * timeStep) + dimStep;
+	    
+	    if ((((*data)>0) && (prob > 0.5)) || (((*data)<0.0001) && (prob < 0.50001))){
+		return 1.0;
+	    }else
+		return 0.0;
+	}
+    };
+
     // Definition the back-propagation for sigmoid units
     struct ComputeSigmoidBP
     {
@@ -537,6 +599,7 @@ namespace {
 	const real_t *targets;  // targets data
 	real_t *errors;         // errors of previous layer
 
+	int flagForGAN;
 	// from 1 to timesteps * para_dim
 	__host__ __device__ void operator() (const thrust::tuple<real_t, int> &t) const
 	{
@@ -548,21 +611,26 @@ namespace {
 	    // dimStep:  which dimension in the NN output side this frame ?
 	    const int timeStep = outputIdx / (endD - startD);
 	    const int dimStep  = (outputIdx % (endD - startD));
-	    
-	    if (patTypes[timeStep] == PATTYPE_NONE)
-		return;
-	    
+	    	    
 	    // target data
 	    const real_t *data = targets + (layerSizeOut * timeStep) + dimStep + startDOut;
 	    
 	    // position of the gradient data in the NN output layer side
 	    const int pos_error= layerSizeIn * timeStep + dimStep + startD;
+	    
+	    if (patTypes[timeStep] == PATTYPE_NONE){
+		*(errors+pos_error) = 0;
+		return;
+	    }
 
 	    // calculate the gradient
 	    // note: we assume the training data will be normalized with zero mean.
 	    //       thus, data \in {-a, a}, where the value of a is determined by
 	    //       the data corpus, usually, a positive number
-	    *(errors+pos_error) = (*(data)>0)?(-1+prob):(prob);
+	    if (flagForGAN)
+		*(errors+pos_error) = (*(data)>0)?(-0.9+prob):(prob);
+	    else
+		*(errors+pos_error) = (*(data)>0)?(-1+prob):(prob);
 
 	}
     };
@@ -1866,7 +1934,7 @@ namespace {
 	    const real_t *alpha  = mdnPara + pos;
 
 	    if (patTypes[timeStep] == PATTYPE_NONE){
-	    
+		*(errors + pos) = 0.0;
 	    }else{
 		// pointer to the memory array to store the gradient
 		pos = timeStep * NNOutputSize + startD + mixtureI;
@@ -1894,7 +1962,8 @@ namespace {
 	int featureDim;
 	
 	bool tieVar;
-
+	bool flagUpdateV;
+	
 	const char *patTypes;
 	const real_t *meanDis; // the mixture lielihookd w_i Phi_i and the sum 
 	const real_t *mdnPara; // mean value of the mixture
@@ -1910,9 +1979,6 @@ namespace {
 	{
 	    const int outputIdx = t.get<1>();
 	    const int timeStep = outputIdx / (mixture_num * featureDim);
-
-	    if (patTypes[timeStep] == PATTYPE_NONE)
-		return;
 	    
 	    const int tmp = outputIdx % (mixture_num * featureDim);
 	    const int mixtureI = tmp / featureDim;
@@ -1936,7 +2002,12 @@ namespace {
 			      (varBuff + varshift) : 
 			      (errors + meanshift + mixture_num * featureDim));
 
-	    
+	    if (patTypes[timeStep] == PATTYPE_NONE){
+		(*errorm) = 0.0;
+		(*errorv) = 0.0;
+		return;
+	    }
+
 	    // pointer to the target data y
 	    const real_t *tardata= target + timeStep * layerSizeOut + startDOut + featureI;
 
@@ -1975,7 +2046,10 @@ namespace {
 	    // STUPID MISTAKE
 	    // (*errorv)  = posterior*featureDim - (*errorm)*(*mean - *tardata);
 	    // How could I multiply featureDim here ! For each dimension, it should be 1
-	    (*errorv)  = posterior - (*errorm)*(*mean - *tardata);
+	    if (flagUpdateV)
+		(*errorv)  = posterior - (*errorm)*(*mean - *tardata);
+	    else
+		(*errorv)  = 0.0;
 	    
 	}
 
@@ -2690,6 +2764,14 @@ namespace layers {
 	return featureDim * (featureDim + 1)  * mixNum;
 	#endif
     }
+
+    //
+    bool flagUpdateVar(const int thisEpoch, const int epochNum){
+	if (epochNum <= 0 || thisEpoch > epochNum)
+	    return true;
+	else
+	    return false;
+    }
     
     /************************************************
      * MDNUnit Definition
@@ -3120,7 +3202,9 @@ namespace layers {
     {
 	// - sum_n_1_N sum_m_1_M ( (output_n_m>0) * log p(1|x) + (output_n_m<0) * log (1-p(1|x))
 	// where N is the timestep, M is the dimension
-	real_t tmp = 0.0;
+	real_t num = 0.0;
+	real_t likelihood = 0.0;
+	real_t correctframe = 0.0;
 	{{
 		internal::ComputeSigmoidError fn;
 		fn.startD    = this->m_startDim;
@@ -3134,7 +3218,7 @@ namespace layers {
 		n = n*this->m_precedingLayer.parallelSequences();
 		n = n*this->m_paraDim; // = this->m_endDim - this->m_startDim
 		
-		tmp = thrust::transform_reduce(
+		likelihood = thrust::transform_reduce(
 		         thrust::make_zip_iterator(
 			     thrust::make_tuple(this->m_paraVec.begin(), 
 						thrust::counting_iterator<int>(0))),
@@ -3144,6 +3228,42 @@ namespace layers {
 			 fn,
 			 (real_t)0,
 			 thrust::plus<real_t>());
+
+		internal::ComputeSigmoidPositiveFrame fn2;
+		fn2.startD    = this->m_startDim;
+		fn2.endD      = this->m_endDim;
+		fn2.patTypes  = helpers::getRawPointer(this->m_precedingLayer.patTypes());
+		fn2.targets   = helpers::getRawPointer(targets);
+		fn2.layerSizeOut = this->m_layerSizeTar;
+		fn2.startDOut = this->m_startDimOut;
+				
+		correctframe = thrust::transform_reduce(
+		         thrust::make_zip_iterator(
+			     thrust::make_tuple(this->m_paraVec.begin(), 
+						thrust::counting_iterator<int>(0))),
+		         thrust::make_zip_iterator(
+			     thrust::make_tuple(this->m_paraVec.begin()+n, 
+						thrust::counting_iterator<int>(0)+n)),
+			 fn2,
+			 (real_t)0,
+			 thrust::plus<real_t>());
+
+		
+		internal::FrameNum fn3;
+		fn3.startD    = this->m_startDim;
+		fn3.endD      = this->m_endDim;
+		fn3.patTypes  = helpers::getRawPointer(this->m_precedingLayer.patTypes());
+		num = thrust::transform_reduce(
+		         thrust::make_zip_iterator(
+			     thrust::make_tuple(this->m_paraVec.begin(), 
+						thrust::counting_iterator<int>(0))),
+		         thrust::make_zip_iterator(
+			     thrust::make_tuple(this->m_paraVec.begin()+n, 
+						thrust::counting_iterator<int>(0)+n)),
+			 fn3,
+			 (real_t)0,
+			 thrust::plus<real_t>());
+		
 		
 		#ifdef DEBUG_LOCAL
 		Cpu::real_vector tmp1 = targets;
@@ -3165,11 +3285,14 @@ namespace layers {
 		#endif
 
 	}}
-	return tmp;
+	if (Configuration::instance().verboseLevel() == OP_VERBOSE_LEVEL_2){
+	    std::cerr << (correctframe/num) << ", " << (likelihood/num) << std::endl;
+	}
+	return (likelihood/num);
     }
 
     template <typename TDevice>
-    void MDNUnit_sigmoid<TDevice>::computeBackward(real_vector &targets)
+    void MDNUnit_sigmoid<TDevice>::computeBackward(real_vector &targets, const int flag)
     {
 	// calculate the gradient w.r.t the input to this sigmoid unit
 	// pay attention to the assumption:
@@ -3184,10 +3307,14 @@ namespace layers {
 		fn.startDOut    = this->m_startDimOut;
 		fn.layerSizeIn  = this->m_precedingLayer.size();
 
+		// flag for one-sided smoothing when GAN is to be trained
+		fn.flagForGAN   = flag;
+		
 		fn.errors    = helpers::getRawPointer(this->m_precedingLayer.outputErrors());
 		fn.patTypes  = helpers::getRawPointer(this->m_precedingLayer.patTypes());
 		fn.targets   = helpers::getRawPointer(targets);
 
+		
 		int n =this->m_precedingLayer.curMaxSeqLength();
 		n = n*this->m_precedingLayer.parallelSequences();
 		n = n*this->m_paraDim;
@@ -3200,7 +3327,7 @@ namespace layers {
 			     thrust::make_tuple(this->m_paraVec.begin()+n, 
 						thrust::counting_iterator<int>(0)+n)),
 			 fn);
-
+		
 		#ifdef DEBUG_LOCAL
 		Cpu::real_vector tmp1 = targets;
 		Cpu::real_vector tmp2 = this->m_paraVec;
@@ -3942,7 +4069,7 @@ namespace layers {
 	return tmp;
     }
     template <typename TDevice>
-    void MDNUnit_softmax<TDevice>::computeBackward(real_vector &targets)
+    void MDNUnit_softmax<TDevice>::computeBackward(real_vector &targets, const int flag)
     {
 	// BP for softmax unit, it is similar to the sigmoid function
 	// however, the output is a number that has not been normalized (start from 0)
@@ -4309,7 +4436,9 @@ namespace layers {
 	    m_varBP.resize(this->m_precedingLayer.patTypes().size()*(endDim-startDim)*type, 0.0);
 	else
 	    m_varBP.clear();
-			 
+
+	m_mdnVarEpochFix = Configuration::instance().mdnVarUpdateEpoch();
+	
     }
 
     template <typename TDevice>
@@ -4389,7 +4518,7 @@ namespace layers {
 		for (int i =0; 
 		     i<((this->m_endDim-this->m_startDim) * tLayer->precedingLayer().size()); 
 		     i++)
-		    wInit.push_back(dist1(*gen));
+		    wInit.push_back(0.0);//wInit.push_back(dist1(*gen));
 		
 		// set w to uniform distribution, set b to mean+variance
 		// w starts from precedingSize * startDim
@@ -4576,6 +4705,9 @@ namespace layers {
 		fn.patTypes     = helpers::getRawPointer(this->m_precedingLayer.patTypes());
 		fn.NNOutput     = helpers::getRawPointer(this->m_precedingLayer.outputs());
 
+		fn.flagUpdateV  = flagUpdateVar(this->m_precedingLayer.getCurrTrainingEpoch(),
+						m_mdnVarEpochFix);
+		
 		// total time step
 		int timeStep = this->m_precedingLayer.curMaxSeqLength();
 		timeStep     = timeStep*this->m_precedingLayer.parallelSequences();
@@ -4725,6 +4857,8 @@ namespace layers {
 		fn.varFloor     = this->m_varFloor;
 		fn.patTypes     = helpers::getRawPointer(this->m_precedingLayer.patTypes());
 		fn.NNOutput     = helpers::getRawPointer(this->m_precedingLayer.outputs());
+		fn.flagUpdateV  = flagUpdateVar(this->m_precedingLayer.getCurrTrainingEpoch(),
+						m_mdnVarEpochFix);
 
 		// total time step
 		int timeStep = this->m_precedingLayer.curMaxSeqLength();
@@ -5380,7 +5514,7 @@ namespace layers {
     }                
 
     template <typename TDevice>
-    void MDNUnit_mixture<TDevice>::computeBackward(real_vector &targets)
+    void MDNUnit_mixture<TDevice>::computeBackward(real_vector &targets, const int flag)
     {                          
 	
 	// clean the outputErrors
@@ -5469,7 +5603,9 @@ namespace layers {
 		fn.featureDim   = this->m_featureDim;
 		fn.mixture_num  = this->m_numMixture;
 		fn.tieVar       = this->m_tieVar;
-		
+		fn.flagUpdateV  = flagUpdateVar(this->m_precedingLayer.getCurrTrainingEpoch(),
+						m_mdnVarEpochFix);
+				
 		fn.patTypes  = helpers::getRawPointer(this->m_precedingLayer.patTypes());
 		fn.meanDis   = helpers::getRawPointer(this->m_tmpPat);
 		fn.mdnPara   = helpers::getRawPointer(this->m_paraVec);
@@ -5477,6 +5613,8 @@ namespace layers {
 		fn.target    = helpers::getRawPointer(targets);
 		fn.varBuff   = helpers::getRawPointer(this->m_varBP);
 
+
+		
 		int n =this->m_precedingLayer.curMaxSeqLength();
 		n = n*this->m_precedingLayer.parallelSequences();
 		
@@ -6061,10 +6199,10 @@ namespace layers {
     }                
     
     template <typename TDevice>
-    void MDNUnit_mixture_dyn<TDevice>::computeBackward(real_vector &targets)
+    void MDNUnit_mixture_dyn<TDevice>::computeBackward(real_vector &targets, const int flag)
     {   
 	// The same as the conventional methods
-	this->MDNUnit_mixture<TDevice>::computeBackward(targets);
+	this->MDNUnit_mixture<TDevice>::computeBackward(targets, flag);
 	
 	#ifdef MIXTUREDYNDIAGONAL
 	{{
@@ -7021,11 +7159,11 @@ namespace layers {
     }
 
     template <typename TDevice>
-    void MDNUnit_mixture_dynSqr<TDevice>::computeBackward(real_vector &targets)
+    void MDNUnit_mixture_dynSqr<TDevice>::computeBackward(real_vector &targets, const int flag)
     {                
 	// step1: 
 	// The same as the conventional methods
-	this->MDNUnit_mixture<TDevice>::computeBackward(targets);
+	this->MDNUnit_mixture<TDevice>::computeBackward(targets, flag);
 	
 	// step2:
 	// Accumulate gradients for the trainable A and B

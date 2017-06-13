@@ -1,4 +1,3 @@
-// Obsolete
 /******************************************************************************
  * This file is an addtional component of CURRENNT. 
  * Xin WANG
@@ -46,26 +45,63 @@ namespace layers {
 	typedef typename Cpu::int_vector cpu_int_vector;
 
     protected:
+	int             m_winNumOrignal;  //
+	
 	cpu_int_vector  m_winWidth_H;     // filter dimension (width of the filter window)
-	int_vector      m_winWidth_D;     // 
+	int_vector      m_winWidth_D;     // (dimension = this->size())
 	std::string     m_winWidth_Opt;   //
 
-	int_vector      m_winWidth_Cum;   // cumsum of the filter dimension
+	cpu_int_vector  m_winWidth_Cum_H;   // cumsum of the filter dimension
+	int_vector      m_winWidth_Cum_D;   // cumsum of the filter dimension
 	
-	cpu_int_vector  m_winConRange_H;  // filter convolution range
-	int_vector      m_winConRange_D;
-	std::string     m_winConRange_Opt;
+	cpu_int_vector  m_winHeight_H;    // filter height
+	int_vector      m_winHeight_D;    // (dimension = this->size())
+	std::string     m_winHeight_Opt;
 
+	cpu_int_vector  m_winStride_H;    //
+	int_vector      m_winStride_D;    //
+	std::string     m_winStride_Opt;  //
+	
+	cpu_int_vector  m_winIndex_H;     // index of the shifted filter in the original filter set
+	int_vector      m_winIndex_D;     // (dimension = this->size())
+ 
+	cpu_int_vector  m_winShiftIndex_H;// shift of the filter bias
+	int_vector      m_winShiftIndex_D;// (dimension = this->size())
+	cpu_int_vector  m_winShiftRevId_H;// shift of the filter bias 
+	int_vector      m_winShiftRevId_D;// (dimension = this->size())
+
+	
+	cpu_int_vector  m_winColIndex_H;  // index of each column to the original filter weight
+	int_vector      m_winColIndex_D;  // (dimension = winTotalL)
+	cpu_int_vector  m_winRowIndex_H;  // index of each column to the original filter weight
+	int_vector      m_winRowIndex_D;  // (dimension = winTotalL)
+	cpu_int_vector  m_winColHeight_H; // same as m_winHeight, but duplicated for each column
+	int_vector      m_winColHeight_D; // (dimension = winTotalL)
+	cpu_int_vector  m_winWidthCol_H;
+	int_vector      m_winWidthCol_D;
+	cpu_int_vector  m_winShiftNum_H;
+	int_vector      m_winShiftNum_D;
+
+
+	real_vector     m_weightBuffer;   // buffer to store the large weight matrix
+	cpu_int_vector  m_wCopyInfo_H;
+	int_vector      m_wCopyInfo_D;    // buffer to store the information for copying weights
+	int             m_weightNum;      // total number of weights of filter
+	int             m_biasPos;
+	int_vector      m_weightFilter_map;
+
+	int             m_weightBufferNum;
+	int             m_biasPosInBuffer;// position of bias in the weight buffer
+	
 	cpu_int_vector  m_winInterval_H;  // interval between window 
 	int_vector      m_winInterval_D;
 	std::string     m_winInterval_Opt;
 
-	int_vector      m_maxIdxBuffer;   //
-	int_vector      m_weightIdx;      // idx to access the weight of each window filter
+	//int_vector      m_weightIdx;      // idx to access the weight of each window filter
 
 	real_vector     m_conBuffer;      // data buffer
 	int             m_winTotalL;      // sum of the width of filter
-	int             m_numMatrixW;     // total number of weights of filter
+
 	
     public:
 	// initializer and destructor
@@ -77,13 +113,13 @@ namespace layers {
 
 	virtual const std::string& type() const;
 	
-	virtual void computeForwardPass();
+	virtual void computeForwardPass(const int nnState);
 
-	virtual void computeForwardPass(const int timeStep);
+	virtual void computeForwardPass(const int timeStep, const int nnState);
 	
-	virtual void computeBackwardPass();
+	virtual void computeBackwardPass(const int nnState);
 
-        virtual void loadSequences(const data_sets::DataSetFraction &fraction);
+        virtual void loadSequences(const data_sets::DataSetFraction &fraction, const int nnState);
 
 	// export
 	virtual void exportLayer(const helpers::JsonValue &layersArray, 

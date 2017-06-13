@@ -25,12 +25,8 @@
 
 #include "../NeuralNetwork.hpp"
 #include "../data_sets/DataSet.hpp"
+#include "../MacroDefine.hpp"
 
-#define  OPTIMIZATION_ADAGRAD 1              //  AdaGrad
-#define  OPTIMIZATION_AVEGRAD 2              //  average the gradient per fraction of data
-#define  OPTIMIZATION_STOCHASTIC_ADAGRAD 3   //  Stochastic gradient + AdaGrad
-#define  OPTIMIZATION_SGD_DECAY 4            //  Stochastic gradient, and learning rate decay
-#define  ADAGRADFACTOR 0.000001
 
 namespace optimizers {
 
@@ -70,6 +66,10 @@ namespace optimizers {
         real_t m_curValidationClassError;
         real_t m_curTrainingClassError;
         real_t m_curTestClassError;
+
+	real_t m_curTrainingSecError;
+	real_t m_curValidationSecError;
+	real_t m_curTestSecError;
 	
 	// Add 0512 showing the Error per frame
 	real_t m_curTrainingErrorPerFrame;
@@ -86,7 +86,8 @@ namespace optimizers {
 	std::string              m_optStatus;
 	
     private:
-        real_t _processDataSet(data_sets::DataSet &ds, bool calcWeightUpdates, real_t *classError);
+        void   _processDataSet(data_sets::DataSet &ds, bool calcWeightUpdates,
+			       real_t &error, real_t &classError, real_t &secError);
         void   _storeWeights();
         void   _restoreWeights();
 
@@ -258,7 +259,14 @@ namespace optimizers {
         real_t curValidationErrorPerFrame() const;
 
         real_t curTestErrorPerFrame() const;
-	
+
+	real_t curTrainingErrorSec() const;
+
+        real_t curValidationErrorSec() const;
+
+        real_t curTestErrorSec() const;
+
+       	
 	const std::string& optStatus() const;
     };
 

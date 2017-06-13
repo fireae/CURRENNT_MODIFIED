@@ -294,17 +294,17 @@ namespace layers {
     }
 
     template <typename TDevice>
-    void KLPostOutputLayer<TDevice>::computeForwardPass()
+    void KLPostOutputLayer<TDevice>::computeForwardPass(const int nnState)
     {
     }
 
     template <typename TDevice>
-    void KLPostOutputLayer<TDevice>::computeForwardPass(const int timeStep)
+    void KLPostOutputLayer<TDevice>::computeForwardPass(const int timeStep, const int nnState)
     {
     }
 
     template <typename TDevice>
-    void KLPostOutputLayer<TDevice>::computeBackwardPass()
+    void KLPostOutputLayer<TDevice>::computeBackwardPass(const int nnState)
     {
      // calculate the errors
 	/*internal::ComputeOutputErrorFn fn;

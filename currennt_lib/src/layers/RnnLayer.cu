@@ -329,6 +329,41 @@ namespace {
 	}
     };
     
+
+    struct killTimeResolution{
+	int     featDim;
+	int     iterFactor;
+	int     bandNum;
+	bool    birnn;
+	
+	int    *bandConfig;
+	real_t *dataMatrix;
+	const char *patTypes;
+	
+	__host__ __device__ void operator() (const thrust::tuple<real_t&, int> &t) const{
+	    int idx    = t.get<1>();
+	    int dimIdx = idx % (featDim/(birnn?2:1));
+	    int timeIdx= idx / featDim;
+	    int bandIdx = -1;
+
+	    if (patTypes != NULL & patTypes[timeIdx] == PATTYPE_NONE)
+		return;
+
+	    // which band does this dimension belong to
+	    for (int block = 0; block < bandNum; block++){
+		if (dimIdx < bandConfig[block*2+1]){
+		    bandIdx = block;
+		    break;
+		}
+	    }
+
+	    //  assume the slow block is in higher dimensional
+	    if (iterFactor < (bandNum - bandIdx -1))
+		dataMatrix[idx] = 0.0;
+	}
+    };
+    
+
 }
 }
 
@@ -463,7 +498,12 @@ namespace layers {
 	    m_h2hClockRNN.clear();
 	    m_crStepDevice.clear();
 	}
+
+	// get the number of epochs for iterative updating
+	m_iterUpdate = ((layerChild->HasMember("iterative_updating_epoch")) ? 
+			((*layerChild)["iterative_updating_epoch"].GetInt()) : (-1));
 	
+	// 
 	// Prepare the wrappers and pointers to weight and data
 	// pointers to the bias weight [PL+0, PL+L-1]
 	_rawBiasWeights = helpers::getRawPointer(this->weights()) + numInputWeights;
@@ -722,9 +762,10 @@ namespace layers {
     }
 
     template <typename TDevice>
-    void RnnLayer<TDevice>::loadSequences(const data_sets::DataSetFraction &fraction)
+    void RnnLayer<TDevice>::loadSequences(const data_sets::DataSetFraction &fraction,
+					  const int nnState)
     {
-	TrainableLayer<TDevice>::loadSequences(fraction);
+	TrainableLayer<TDevice>::loadSequences(fraction, nnState);
 
 	// update the input data wrap
 	// because the duration of the input sequence varies,
@@ -940,7 +981,7 @@ namespace layers {
     }
 
     template <typename TDevice>
-    void RnnLayer<TDevice>::computeForwardPass()
+    void RnnLayer<TDevice>::computeForwardPass(const int nnState)
     {
 	// for unidirectional LSTM, we can write the outputs directly in the layer output vector
         if (!m_isBidirectional) {
@@ -1075,11 +1116,35 @@ namespace layers {
         else {
             this->_outputs().swap(m_fw.tmpOutputs);
         }
+	
+	// Finally, for Clock RNN, use iterative updating
+	if (m_clockRNN && m_iterUpdate > 0 && this->getCurrTrainingEpoch()>=0){
+	    {{
+		internal::killTimeResolution fn;
+		fn.featDim    = this->size();
+		fn.birnn      = this->m_isBidirectional;
+		fn.bandNum    = m_crStepDevice.size()/2;
+		fn.iterFactor = (this->getCurrTrainingEpoch()-1)/ m_iterUpdate;
+		fn.bandConfig = helpers::getRawPointer(m_crStepDevice);
+		fn.dataMatrix = helpers::getRawPointer(this->outputs());
+		fn.patTypes   = helpers::getRawPointer(this->patTypes());
+		
+		int n =this->curMaxSeqLength() * this->parallelSequences() * this->size();
+		thrust::for_each(
+			thrust::make_zip_iterator(
+				thrust::make_tuple(this->outputs().begin(), 
+						   thrust::counting_iterator<int>(0))),
+		         thrust::make_zip_iterator(
+				thrust::make_tuple(this->outputs().begin()+n, 
+						   thrust::counting_iterator<int>(0)+n)),
+			fn);
+	    }}
+	}
 
     }
 
     template <typename TDevice>
-    void RnnLayer<TDevice>::computeForwardPass(const int timeStep)
+    void RnnLayer<TDevice>::computeForwardPass(const int timeStep, const int nnState)
     {
 	// for unidirectional LSTM, we can write the outputs directly in the layer output vector
         if (!m_isBidirectional) {
@@ -1153,13 +1218,61 @@ namespace layers {
         }else {
             this->_outputs().swap(m_fw.tmpOutputs);
         }
-
+	
+	// Finally, for Clock RNN, use iterative updating
+	if (m_clockRNN && m_iterUpdate > 0){
+	    {{
+		internal::killTimeResolution fn;
+		fn.featDim    = this->size();
+		fn.birnn      = this->m_isBidirectional;
+		fn.bandNum    = m_crStepDevice.size()/2;;
+		fn.iterFactor = (this->getCurrTrainingEpoch() -1)/ m_iterUpdate;
+		fn.bandConfig = helpers::getRawPointer(m_crStepDevice);
+		fn.dataMatrix = helpers::getRawPointer(this->outputs());
+		fn.patTypes   = helpers::getRawPointer(this->patTypes());
+		
+		int sTime = timeStep * this->precedingLayer().parallelSequences() * this->size();
+		int eTime = sTime    + this->precedingLayer().parallelSequences() * this->size();
+		thrust::for_each(
+			thrust::make_zip_iterator(
+				thrust::make_tuple(this->outputs().begin() + sTime, 
+						   thrust::counting_iterator<int>(0) + sTime)),
+		         thrust::make_zip_iterator(
+				thrust::make_tuple(this->outputs().begin() + eTime, 
+						   thrust::counting_iterator<int>(0) + eTime)),
+			fn);
+	    }}
+	}
     }
 
 
     template <typename TDevice>
-    void RnnLayer<TDevice>::computeBackwardPass()
+    void RnnLayer<TDevice>::computeBackwardPass(const int nnState)
     {
+	// Finally, for Clock RNN, use iterative updating
+	if (m_clockRNN && m_iterUpdate > 0){
+	    {{
+		internal::killTimeResolution fn;
+		fn.featDim    = this->size();
+		fn.birnn      = this->m_isBidirectional;
+		fn.bandNum    = m_crStepDevice.size()/2;
+		fn.iterFactor = (this->getCurrTrainingEpoch()-1) / m_iterUpdate;
+		fn.bandConfig = helpers::getRawPointer(m_crStepDevice);
+		fn.dataMatrix = helpers::getRawPointer(this->outputErrors());
+		fn.patTypes   = helpers::getRawPointer(this->patTypes());
+		
+		int n =this->curMaxSeqLength() * this->parallelSequences() * this->size();
+		thrust::for_each(
+			thrust::make_zip_iterator(
+				thrust::make_tuple(this->outputs().begin(), 
+						   thrust::counting_iterator<int>(0))),
+		         thrust::make_zip_iterator(
+				thrust::make_tuple(this->outputs().begin()+n, 
+						   thrust::counting_iterator<int>(0)+n)),
+			fn);
+	    }}
+	}
+
 	// step0. put the gradients back to the buffer
 	//        gradients have been transformed by the next layer
         if (m_isBidirectional) {
@@ -1389,8 +1502,8 @@ namespace layers {
 	
 	// step2. back-propagate the error to the preceding layer
         {{
-	    TrainableLayer<TDevice> *pl = 
-		dynamic_cast<TrainableLayer<TDevice>*>(&this->precedingLayer());
+	    Layer<TDevice> *pl = 
+		dynamic_cast<Layer<TDevice>*>(&this->precedingLayer());
             if (pl) {
                 helpers::Matrix<TDevice> plErrorsMatrix(
 			&pl->outputErrors(), pl->size(), 
@@ -1490,7 +1603,10 @@ namespace layers {
 					const helpers::JsonAllocator &allocator) const
     {
         TrainableLayer<TDevice>::exportLayer(layersArray, allocator);
-        (*layersArray)[layersArray->Size() - 1].AddMember("clock", m_crStepStr.c_str(), allocator);
+        (*layersArray)[layersArray->Size() - 1].AddMember("clock", 
+							  m_crStepStr.c_str(), allocator);
+        (*layersArray)[layersArray->Size() - 1].AddMember("iterative_updating_epoch", 
+							  m_iterUpdate,        allocator);
     }
     
     // explicit template instantiations

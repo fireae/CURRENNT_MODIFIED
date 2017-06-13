@@ -86,6 +86,11 @@ namespace layers {
 	
 	// return reference to the m_outputErrorsFromSkipLayer
 	real_vector& outputErrorsFromSkipLayer();
+
+	// output the layer configuration
+	virtual void exportLayer(const helpers::JsonValue &layersArray,
+				 const helpers::JsonAllocator &allocator) const;
+
     };
 
 }

@@ -29,6 +29,8 @@
 #include "SkipAddLayer.hpp"
 #include "../helpers/getRawPointer.cuh"
 #include "../helpers/Matrix.hpp"
+#include "../helpers/JsonClasses.hpp"
+#include "../helpers/misFuncs.hpp"
 
 #include <thrust/transform.h>
 #include <thrust/transform_reduce.h>
@@ -36,9 +38,38 @@
 #include <thrust/iterator/constant_iterator.h>
 #include <thrust/iterator/counting_iterator.h>
 #include <thrust/fill.h>
+#include <thrust/random.h>
 #include <boost/foreach.hpp>
 #include <boost/shared_ptr.hpp>
+#include <boost/algorithm/string.hpp>
 #include <vector>
+
+
+namespace internal{
+namespace{
+
+
+
+    struct tempPrg
+    {
+	float a, b;
+	int   seed;
+	
+	__host__ __device__
+	tempPrg(float _a=-1.f, float _b=1.f, int _seed=123) : a(_a), b(_b), seed(_seed) {};
+
+	__host__ __device__
+	float operator()(const unsigned int n) const
+	{
+	    thrust::default_random_engine rng(seed);
+	    thrust::uniform_real_distribution<float> dist(a, b);
+	    rng.discard(n);
+	    return dist(rng);
+	}
+    };
+
+}
+}
 
 
 namespace layers{
@@ -48,19 +79,74 @@ namespace layers{
     SkipAddLayer<TDevice>::SkipAddLayer(
 					const helpers::JsonValue &layerChild,
 					const helpers::JsonValue &weightsSection,
-					std::vector<Layer<TDevice>*> precedingLayers
+					std::vector<Layer<TDevice>*> &precedingLayers
 					)
 	// use preLayers[0] as fake preceding layers
 	: SkipLayer<TDevice>(layerChild, weightsSection, precedingLayers, false)
+	, m_noiseRatio      (-1.0)
+	, m_flagSkipInit    (true)
     {
-	m_preLayers.assign(precedingLayers.begin(), precedingLayers.end());
+	if (precedingLayers.size() < 1){
+	    throw std::runtime_error("Error no precedinglayers in skipadd/skipini");
+	}
+	
+	m_previousSkipStr = (layerChild->HasMember("preSkipLayer") ? 
+			     ((*layerChild)["preSkipLayer"].GetString()) : "");
+	if (m_previousSkipStr.size()){
+	    std::vector<std::string> tmpOpt;
+	    ParseStrOpt(m_previousSkipStr, tmpOpt, ",");
+	    for (int cnt = 0 ; cnt < tmpOpt.size(); cnt++) {
+		BOOST_FOREACH (Layer<TDevice> *layer, precedingLayers) {
+		    if (layer->name() == tmpOpt[cnt]){
+			m_preLayers.push_back(layer);
+			break;
+		    }
+		}
+	    }
+
+	    /*
+	    boost::iterator_range<std::string::iterator> r;
+	    BOOST_FOREACH (Layer<TDevice> *layer, precedingLayers) {
+		r = boost::find_first(m_previousSkipStr, layer->name());
+		if (r)
+		    m_preLayers.push_back(layer);
+	    }
+	    if (m_preLayers.size() == 0 ||
+		m_preLayers.back()->name() != precedingLayers.back()->name()){
+		// if the string doesn't specify the defaul previous layer
+		m_preLayers.push_back(precedingLayers.back());
+		}*/
+
+	}else{
+	    // default cause, use only the previous 1 skip and previous normal output layer
+	    if (precedingLayers.size()<2)
+		m_preLayers.assign(precedingLayers.begin(), precedingLayers.end());
+	    else
+		m_preLayers.assign(precedingLayers.end()-2, precedingLayers.end());
+	}
+	
+	printf("\n\tReceive input from layer(s):");
+	BOOST_FOREACH (Layer<TDevice> *layer, m_preLayers) {
+	    printf(" %s,", layer->name().c_str());
+	    if (layer->size() != this->size()){
+		printf("Error: %s vs %s", layer->name().c_str(), this->name().c_str());
+		throw std::runtime_error("Error unequal layer size");
+	    }
+	}
+	printf("\n");
+	
 	// m_outputErrorsFromSkipLayer = Cpu::real_vector(this->outputs().size(), (real_t)0.0);
 
-	if (precedingLayers.size()<2){
-	    m_flagSkipInit = true;
-	}else{
-	    m_flagSkipInit = false;
-	}
+	m_noiseRatio    = (layerChild->HasMember("noiseRatio") ? 
+			   static_cast<real_t>((*layerChild)["noiseRatio"].GetDouble()) : -1.0);
+	if (m_noiseRatio > 0)
+	    printf("\n\tInject noise %f\n", m_noiseRatio);
+
+	
+	if (precedingLayers.size()<2)
+	    m_flagSkipInit = true;  // this is the skipinit
+	else
+	    m_flagSkipInit = false; // not
 
     }	
 
@@ -72,14 +158,23 @@ namespace layers{
 	
     // NN forward
     template <typename TDevice>
-    void SkipAddLayer<TDevice>::computeForwardPass()
+    void SkipAddLayer<TDevice>::computeForwardPass(const int nnState)
     {
 	// initialization
-	thrust::fill(this->outputs().begin(), 
-		     (this->outputs().begin() + 
-		      this->curMaxSeqLength() * this->parallelSequences() * this->size()),
-		     0.0
-		     );
+	if (m_noiseRatio > 0){
+	    thrust::counting_iterator<unsigned int> index_sequence_begin(0);
+	    thrust::transform(index_sequence_begin,
+			      (index_sequence_begin +
+			       this->curMaxSeqLength() * this->parallelSequences() * this->size()),
+			      this->outputs().begin(),
+			      internal::tempPrg(-1.0 * m_noiseRatio, m_noiseRatio,
+						(int)(GetRandomNumber() * 10000.0)));
+	}else{
+	    thrust::fill(this->outputs().begin(), 
+			 (this->outputs().begin() + 
+			  this->curMaxSeqLength() * this->parallelSequences() * this->size()),
+			 0.0);
+	}
 	
 	// initialization for backward pass
 	thrust::fill(this->outputErrors().begin(), 
@@ -107,15 +202,23 @@ namespace layers{
 
     // NN forward
     template <typename TDevice>
-    void SkipAddLayer<TDevice>::computeForwardPass(const int timeStep)
+    void SkipAddLayer<TDevice>::computeForwardPass(const int timeStep, const int nnState)
     {
 	int effTimeS = timeStep     * this->parallelSequences();
 	int effTimeE = (timeStep+1) * this->parallelSequences();
 
-	// initialization
-	thrust::fill(this->outputs().begin() + effTimeS * this->size(), 
-		     this->outputs().begin() + effTimeE * this->size(), 
-		     0.0);
+	if (m_noiseRatio > 0){
+	    thrust::counting_iterator<unsigned int> index_sequence_begin(0);
+	    thrust::transform(index_sequence_begin  + effTimeS * this->size(),
+			      index_sequence_begin  + effTimeE * this->size(),
+			      this->outputs().begin() + effTimeS * this->size(),
+			      internal::tempPrg(-1.0 * m_noiseRatio, m_noiseRatio));
+	}else{
+	    // initialization without noise
+	    thrust::fill(this->outputs().begin() + effTimeS * this->size(), 
+			 this->outputs().begin() + effTimeE * this->size(), 
+			 0.0);
+	}
 	
 	// accumulating the outputs of previous layers
 	BOOST_FOREACH (Layer<TDevice> *layer, m_preLayers) {
@@ -131,7 +234,7 @@ namespace layers{
 
     // NN backward
     template <typename TDevice>
-    void SkipAddLayer<TDevice>::computeBackwardPass()
+    void SkipAddLayer<TDevice>::computeBackwardPass(const int nnState)
     {
 	// 
 	// at first, add the errors in both this->outputErrorsFromSkipLayer() and m_outputErrors
@@ -186,16 +289,27 @@ namespace layers{
     template <typename TDevice>
     const std::string& SkipAddLayer<TDevice>::type() const
     {
-	static std::string s;
-	if (m_flagSkipInit){
-	    s = "skipini";
-	}
-	else{
-	    s = "skipadd";
-	}
-        return s;
+	// Fatal Error, one instance can only use one static string
+	// This is different from the case in Feedforward/SkipPara
+	static std::string s1("skipini");
+	static std::string s2("skipadd");
+        return (m_flagSkipInit ? s1 : s2);
     }
-   
+
+    template <typename TDevice>
+    void SkipAddLayer<TDevice>::exportLayer(const helpers::JsonValue &layersArray,
+					 const helpers::JsonAllocator &allocator) const
+    {
+	SkipLayer<TDevice>::exportLayer(layersArray, allocator);
+	if (m_noiseRatio > 0)
+	    (*layersArray)[layersArray->Size() - 1].AddMember("noiseRatio",
+							      m_noiseRatio, allocator);
+	if (m_previousSkipStr.size())
+	    (*layersArray)[layersArray->Size() - 1].AddMember("preSkipLayer",
+							      m_previousSkipStr.c_str(), allocator);
+
+    }
+    
     /*
     template <typename TDevice>
     typename SkipAddLayer<TDevice>::real_vector& SkipAddLayer<TDevice>::outputErrorsFromSkipLayer()

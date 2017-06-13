@@ -15,7 +15,7 @@
  * but WITHOUT ANY WARRANTY; without even the implied warranty of
  * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
  * GNU General Public License for more details.
- *
+ * 
  * You should have received a copy of the GNU General Public License
  * along with CURRENNT.  If not, see <http://www.gnu.org/licenses/>.
  *****************************************************************************/
@@ -251,7 +251,7 @@ int trainerMain(const Configuration &config)
 	    inputSize,    outputSize);
 
 	// Check the network configuration
-        if (!trainingSet->empty() && trainingSet->outputPatternSize() != 
+        /*if (!trainingSet->empty() && trainingSet->outputPatternSize() != 
 	    neuralNetwork.postOutputLayer().size())
             throw std::runtime_error(
 		"Post output layer size != target size(training set)");
@@ -262,7 +262,7 @@ int trainerMain(const Configuration &config)
         if (!testSet->empty() && testSet->outputPatternSize() != 
 	    neuralNetwork.postOutputLayer().size())
             throw std::runtime_error(
-		"Post output layer size != target size(test set)");
+	    "Post output layer size != target size(test set)");*/
 
 	printf("\nNetwork construction done.\n\n");
         printf("Network summary:\n");
@@ -357,7 +357,7 @@ int trainerMain(const Configuration &config)
                 throw std::runtime_error("Unknown optimizer type");
             }
 
-            printf("done.\n");
+            //printf("done.\n");
             printOptimizer(config, *optimizer);
 
             std::string infoRows;
@@ -397,15 +397,16 @@ int trainerMain(const Configuration &config)
 	    }
 
 	    
-            printf("Starting training...\nPrint error per sequence / per timestep");
+            printf("Starting training...");
+	    printf("\nPrint error per sequence / per timestep / secondary error (optional)");
             printf("\n");
-	    printf(" Epoch | Duration |           Training error  |");
-	    printf("           Validation error|");
-	    printf("           Test error      |");
+	    printf(" Epoch | Duration |           Training error         |");
+	    printf("           Validation error       |");
+	    printf("           Test error             |");
 	    printf("New best \n");
-            printf("-------+----------+---------------------------+");
-	    printf("---------------------------+");
-	    printf("---------------------------+");
+            printf("-------+----------+----------------------------------+");
+	    printf("----------------------------------+");
+	    printf("----------------------------------+");
 	    printf("---------\n");
 	    std::cout << infoRows;
 
@@ -415,8 +416,8 @@ int trainerMain(const Configuration &config)
             while (!finished) {
 		
                 const char *errFormat = (classificationTask ? 
-					 "%6.2lf%%%10.3lf |" : "%14.3lf /%10.3lf |");
-                const char *errSpace  = "                           |";
+					 "%6.2lf%%%10.3lf |" : "%12.3lf / %9.3lf/ %8.3f|");
+                const char *errSpace  = "                                  |";
 
                 // train for one epoch and measure the time
                 infoRows += printfRow(" %5d | ", optimizer->currentEpoch() + 1);                
@@ -437,22 +438,26 @@ int trainerMain(const Configuration &config)
                 if (classificationTask)
                     infoRows += printfRow(errFormat, 
 					  (double)optimizer->curTrainingClassError()*100.0, 
-					  (double)optimizer->curTrainingError());
+					  (double)optimizer->curTrainingError(),
+					  (double)optimizer->curTrainingErrorSec());
                 else
                     infoRows += printfRow(errFormat, 
 					  (double)optimizer->curTrainingError(),
-					  (double)optimizer->curTrainingErrorPerFrame());
+					  (double)optimizer->curTrainingErrorPerFrame(),
+					  (double)optimizer->curTrainingErrorSec());
                 
                 if (!validationSet->empty() && 
 		    optimizer->currentEpoch() % config.validateEvery() == 0) {
                     if (classificationTask)
                         infoRows += printfRow(errFormat, 
 					      (double)optimizer->curValidationClassError()*100.0, 
-					      (double)optimizer->curValidationError());
+					      (double)optimizer->curValidationError(),
+					      (double)optimizer->curValidationErrorSec());
                     else
                         infoRows += printfRow(errFormat, 
 					      (double)optimizer->curValidationError(),
-					      (double)optimizer->curValidationErrorPerFrame());
+					      (double)optimizer->curValidationErrorPerFrame(),
+					      (double)optimizer->curValidationErrorSec());
                 }
                 else
                     infoRows += printfRow("%s", errSpace);
@@ -462,11 +467,13 @@ int trainerMain(const Configuration &config)
                     if (classificationTask)
                         infoRows += printfRow(errFormat, 
 					      (double)optimizer->curTestClassError()*100.0, 
-					      (double)optimizer->curTestError());
+					      (double)optimizer->curTestError(),
+					      (double)optimizer->curTestErrorSec());
                     else
                         infoRows += printfRow(errFormat, 
 					      (double)optimizer->curTestError(),
-					      (double)optimizer->curTestErrorPerFrame());
+					      (double)optimizer->curTestErrorPerFrame(),
+					      (double)optimizer->curTestErrorSec());
                 }
                 else
                     infoRows += printfRow("%s", errSpace);
@@ -573,15 +580,87 @@ int trainerMain(const Configuration &config)
 	    
 	/********************* Data Generation    *************************/
         }else {
-	    
+
+	    // Load data mean and std
             Cpu::real_vector outputMeans  = feedForwardSet->outputMeans();
             Cpu::real_vector outputStdevs = feedForwardSet->outputStdevs();
             assert (outputMeans.size()  == feedForwardSet->outputPatternSize());
             assert (outputStdevs.size() == feedForwardSet->outputPatternSize());
-            bool unstandardize = config.revertStd(); 
+	    if (config.datamvPath().size()>0){
+		if (dataMV == NULL)
+		    throw std::runtime_error("Can't read datamv");
+		if (dataMV->outputM().size() != outputMeans.size())
+		    throw std::runtime_error("output dimension mismatch datamv");
+		for (int y = 0; y < outputMeans.size(); y++){
+		    outputMeans[y]  = dataMV->outputM()[y];
+		    outputStdevs[y] = dataMV->outputV()[y];
+		}
+		printf("Mean and var are over-written by %s.\n",
+		       config.datamvPath().c_str());
+	    }
+	    
+	    bool unstandardize = config.revertStd();
+	    bool htkoutput     = false;
+	    int  outputlayerID = config.outputFromWhichLayer();
 
+	    printf("Outputs from layer %d", config.outputFromWhichLayer());
+	    if (config.outputFromGateLayer()) {printf(", gate output");}
+	    if (config.mdnPara()>0 && neuralNetwork.isMDNLayer(outputlayerID))
+		printf(", MDN with para=%f",config.mdnPara());
+	    
+	    if (unstandardize){
+		if (neuralNetwork.isMDNLayer(outputlayerID)){
+		    // for MDNLayer output
+		    if (config.mdnPara() < -1.0 || config.mdnPara() > 0.0){
+			Cpu::real_vector mdnConfigVec = neuralNetwork.getMdnConfigVec();
+			if (!mdnConfigVec.empty()){    
+			    // if the unit is sigmoid or softmax, set the mean and std
+			    for (int x = 0; x < (mdnConfigVec.size()-1)/5; x++){
+				int mdnType  = (int)mdnConfigVec[5+x*5];
+				if (mdnType == MDN_TYPE_SIGMOID || mdnType == MDN_TYPE_SOFTMAX){
+				    int unitSOut = (int)mdnConfigVec[3+x*5];
+				    int unitEOut = (int)mdnConfigVec[4+x*5];
+				    for (int y = unitSOut; y < unitEOut; y++){
+					outputMeans[y] = 0.0;
+					outputStdevs[y] = 1.0;
+				    }
+				    printf("\n\t de-normalization is skipped for dimension ");
+				    printf("from %d to %d\n", unitSOut+1, unitEOut);
+				}else{
+				    // nothing for GMM unit
+				}
+			    }
+			}
+			unstandardize = true;
+			htkoutput     = true;
+			printf(", HTK format, de-normalized\n");
+		    }else{
+			unstandardize = false;
+			htkoutput     = true; // specical case, MDN parameter outptu is htk
+			printf(", HTK format, not de-normalized\n");
+		    }
+		}else{
+		    // for normal layers (including highway)
+		    if (neuralNetwork.layerSize(outputlayerID) == outputMeans.size() &&
+			(!config.outputFromGateLayer())){
+			// do normal de-normalization
+			unstandardize = true;
+			htkoutput     = true;
+			printf(", HTK format, de-normalized\n");
+		    }else{
+			unstandardize = false;
+			htkoutput     = false;
+			printf(", bin format, not de-normalized\n");
+		    }
+		}
+	    }else{
+		unstandardize = false;
+		htkoutput     = false;
+		printf(", bin format, de-normalized\n");
+	    }
+
+	    /*
 	    // Prepare the mean and variance for data de-normalization
-	    /* Modify 04-08 */
 	    if (unstandardize && config.outputFromWhichLayer() < 0 && 
 		(config.mdnPara() < -1.0 || config.mdnPara() > 0.0)){
 
@@ -591,51 +670,9 @@ int trainerMain(const Configuration &config)
 		// 3. MDN, output the distribution parameter
 	       	// 4. MDN, output is from the sigmoid or softmax unit
 		
-		// If the outputMeans and outputStdevs are not in test.nc file
-		// we can provide the data.mv through --datamv
-		if (config.datamvPath().size()>0){
-		    if (dataMV == NULL)
-			throw std::runtime_error("Can't read datamv");
-		    if (dataMV->outputM().size() != outputMeans.size())
-			throw std::runtime_error("output dimension mismatch datamv");
-		    for (int y = 0; y < outputMeans.size(); y++){
-			outputMeans[y]  = dataMV->outputM()[y];
-			outputStdevs[y] = dataMV->outputV()[y];
-		    }
-		    printf("Use mean and var from %s for de-normalization.\n",
-			   config.datamvPath().c_str());
-		}else{
-		    printf("Use mean and var in .nc file fro de-normalization.\n");
-		}
-
-		/* Add 05-31*/
-		// escape the dimension corresponding to the sigmoid or softmax units
-		Cpu::real_vector mdnConfigVec = neuralNetwork.getMdnConfigVec();
-		if (!mdnConfigVec.empty()){
-		    
-		    // if the unit is sigmoid or softmax, set the mean and std
-		    for (int x = 0; x < (mdnConfigVec.size()-1)/5; x++){
-			int mdnType  = (int)mdnConfigVec[5+x*5];
-			if (mdnType == MDN_TYPE_SIGMOID || mdnType == MDN_TYPE_SOFTMAX){
-			    int unitSOut = (int)mdnConfigVec[3+x*5];
-			    int unitEOut = (int)mdnConfigVec[4+x*5];
-			    for (int y = unitSOut; y < unitEOut; y++){
-				outputMeans[y] = 0.0;
-				outputStdevs[y] = 1.0;
-			    }
-			    printf("\n\t de-normalization is skipped for dimension ");
-			    printf("from %d to %d\n", unitSOut+1, unitEOut);
-			}else{
-			    // nothing for GMM unit
-			}
-		    }
-		}else{
-		    // nothing for network without MDN
-		}		
-
             }else{
 		printf("Outputs will NOT be scaled by mean and std specified in NC file.\n");
-	    }
+		}*/
 
 	    int output_lag = config.outputTimeLag();
             if (config.feedForwardFormat() == Configuration::FORMAT_SINGLE_CSV) {
@@ -645,16 +682,10 @@ int trainerMain(const Configuration &config)
                 // Block 20161111x02
 		printf("WARNING: output only for HTK format");
             }else if (config.feedForwardFormat() == Configuration::FORMAT_HTK) {
+		
                 // process all data set fractions
                 int fracIdx = 0;
                 boost::shared_ptr<data_sets::DataSetFraction> frac;
-		if (config.outputFromGateLayer()){
-		    printf("Outputs from layer %d gate output\n", config.outputFromWhichLayer());
-		}else if(config.mdnPara()>0){
-		    printf("Outputs from MDN with para=%f\n",config.mdnPara());
-		}else{
-		    printf("Outputs from layer %d \n", config.outputFromWhichLayer());
-		}
 		    
                 while (((frac = feedForwardSet->getNextFraction()))) {
                     printf("Computing outputs for data fraction %d...", ++fracIdx);
@@ -668,10 +699,11 @@ int trainerMain(const Configuration &config)
 		    //               this is sampling, scaled by mdnVarScake
 		    //      else
 		    //          directly use the mdnPara()
-		    int generationOpt = ((config.mdnVarScaleGen().size()>0) ? 
+		    real_t generationOpt = ((config.mdnVarScaleGen().size()>0) ? 
 					 ((config.mdnPara() > -1.5) ? config.mdnPara() : 1 ) : 
 					 (config.mdnPara()));
-
+		    neuralNetwork.notifyCurrentEpoch(config.fakeEpochNum());
+		    neuralNetwork.updateNNStateForGeneration();
                     neuralNetwork.loadSequences(*frac);
                     neuralNetwork.computeForwardPassGen(frac->maxSeqLength(), generationOpt);
 		    
@@ -691,12 +723,9 @@ int trainerMain(const Configuration &config)
                             }*/
                             //seqTag += ".htk";
                             //std::cout << seqTag << std::endl;
+			    
 			    std::string seqTagSuf;
-			    if (config.outputFromWhichLayer()<0){
-				seqTagSuf = ".htk";
-			    }else{
-				seqTagSuf = ".bin";
-			    }
+			    if (htkoutput) {seqTagSuf = ".htk";} else{seqTagSuf = ".bin";}
                             boost::filesystem::path seqPath(frac->seqInfo(psIdx).seqTag+seqTagSuf);
                             std::string filename(seqPath.filename().string());
                             boost::filesystem::path oPath = 
@@ -710,7 +739,7 @@ int trainerMain(const Configuration &config)
                             int nComps = outputs[psIdx][0].size();
 
                             // write header
-			    if (config.outputFromWhichLayer()<0){
+			    if (htkoutput){
 				unsigned tmp = (unsigned)outputs[psIdx].size();
 				swap32(&tmp);
 				file.write((const char*)&tmp, sizeof(unsigned));
@@ -735,16 +764,15 @@ int trainerMain(const Configuration &config)
 				    v = (time < outputs[psIdx].size() - output_lag) ? 
 					((float)outputs[psIdx][time+output_lag][outIdx]) :
 					((float)outputs[psIdx][outputs[psIdx].size()-1][outIdx]);
-                                    
 
-                                    if (unstandardize && config.outputFromWhichLayer()<0 && 
-					(config.mdnPara() < -1.0 || config.mdnPara() > 0.0)) {
+                                    if (unstandardize) {
                                         v *= outputStdevs[outIdx];
                                         v += outputMeans[outIdx];
                                     }
-				    if (config.outputFromWhichLayer()<0){
+				    
+				    if (htkoutput)
 					swapFloat(&v); 
-				    }
+				    
                                     file.write((const char*)&v, sizeof(float));
                                 }
                             }
@@ -939,9 +967,10 @@ template <typename TDevice>
 void printLayers(const NeuralNetwork<TDevice> &nn)
 {
     int weights = 0;
-
+    printf("     Name\t\tType\n");
     for (int i = 0; i < (int)nn.layers().size(); ++i) {
-        printf("(%d) %s ",  i, nn.layers()[i]->type().c_str());
+        printf("(%d) %s\t\t%s ",  i, nn.layers()[i]->name().c_str(),
+	       nn.layers()[i]->type().c_str());
         printf("[size: %d", nn.layers()[i]->size());
 
         const layers::TrainableLayer<TDevice>* tl = 
@@ -969,7 +998,7 @@ template <typename TDevice>
 void printOptimizer(const Configuration &config, const optimizers::Optimizer<TDevice> &optimizer)
 {
     if (dynamic_cast<const optimizers::SteepestDescentOptimizer<TDevice>*>(&optimizer)) {
-        printf("Optimizer type: Steepest descent with momentum\n");
+        //printf("Optimizer type: Steepest descent with momentum\n");
         printf("Max training epochs:       %d\n", config.maxEpochs());
         printf("Max epochs until new best: %d\n", config.maxEpochsNoBest());
         printf("Validation error every:    %d\n", config.validateEvery());

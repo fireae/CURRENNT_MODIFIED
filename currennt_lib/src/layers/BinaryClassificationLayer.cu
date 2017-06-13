@@ -156,9 +156,9 @@ namespace layers {
     }
 
     template <typename TDevice>
-    void BinaryClassificationLayer<TDevice>::loadSequences(const data_sets::DataSetFraction &fraction)
+    void BinaryClassificationLayer<TDevice>::loadSequences(const data_sets::DataSetFraction &fraction, const int nnState)
     {
-        PostOutputLayer<TDevice>::loadSequences(fraction);
+        PostOutputLayer<TDevice>::loadSequences(fraction, nnState);
 
         // In this case, we can copy the integer vector of target classes, since they are equal to the real target values (0/1)
         thrust::copy(fraction.targetClasses().begin(), fraction.targetClasses().end(), this->_targets().begin());
@@ -184,17 +184,18 @@ namespace layers {
     }
 
     template <typename TDevice>
-    void BinaryClassificationLayer<TDevice>::computeForwardPass()
+    void BinaryClassificationLayer<TDevice>::computeForwardPass(const int nnState)
     {
     }
 
     template <typename TDevice>
-    void BinaryClassificationLayer<TDevice>::computeForwardPass(const int timeStep)
+    void BinaryClassificationLayer<TDevice>::computeForwardPass(const int timeStep,
+								const int nnState)
     {
     }
 
     template <typename TDevice>
-    void BinaryClassificationLayer<TDevice>::computeBackwardPass()
+    void BinaryClassificationLayer<TDevice>::computeBackwardPass(const int nnState)
     {
         internal::ComputeOutputErrorFn fn;
         fn.patTypes = helpers::getRawPointer(this->patTypes());

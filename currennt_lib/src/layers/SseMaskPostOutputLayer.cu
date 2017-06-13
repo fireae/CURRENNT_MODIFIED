@@ -140,17 +140,18 @@ namespace layers {
     }
 
     template <typename TDevice>
-    void SseMaskPostOutputLayer<TDevice>::computeForwardPass()
+    void SseMaskPostOutputLayer<TDevice>::computeForwardPass(const int nnState)
     {
     }
 
     template <typename TDevice>
-    void SseMaskPostOutputLayer<TDevice>::computeForwardPass(const int timeStep)
+    void SseMaskPostOutputLayer<TDevice>::computeForwardPass(const int timeStep,
+							     const int nnState)
     {
     }
 
     template <typename TDevice>
-    void SseMaskPostOutputLayer<TDevice>::computeBackwardPass()
+    void SseMaskPostOutputLayer<TDevice>::computeBackwardPass(const int nnState)
     {
         // calculate the errors
         internal::ComputeOutputErrorFn fn;

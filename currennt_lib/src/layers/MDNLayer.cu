@@ -144,6 +144,8 @@ namespace layers {
 			  ((*layerChild)["uvSigmoidSoftmax"].GetString()) : (""));
 	m_quanMergeStr = ((layerChild->HasMember("quantizeMerge")) ? 
 			  ((*layerChild)["quantizeMerge"].GetString()) : (""));
+	m_oneSidedSmoothing = ((layerChild->HasMember("oneSidedSmoothGAN")) ? 
+			       ((*layerChild)["oneSidedSmoothGAN"].GetInt()) : (0));
 	if (m_quanMergeStr.size()){
 	    Cpu::int_vector temp;
 	    readQuanMerge(m_quanMergeStr, temp);
@@ -683,7 +685,7 @@ namespace layers {
     }
 
     template <typename TDevice>
-    void MDNLayer<TDevice>::computeForwardPass()
+    void MDNLayer<TDevice>::computeForwardPass(const int nnState)
     {
 	BOOST_FOREACH (boost::shared_ptr<MDNUnit<TDevice> > &mdnUnit, m_mdnUnits){
 	    mdnUnit->computeForward();
@@ -691,7 +693,7 @@ namespace layers {
     }
 
     template <typename TDevice>
-    void MDNLayer<TDevice>::computeForwardPass(const int timeStep)
+    void MDNLayer<TDevice>::computeForwardPass(const int timeStep, const int nnState)
     {
 	BOOST_FOREACH (boost::shared_ptr<MDNUnit<TDevice> > &mdnUnit, m_mdnUnits){
 	    mdnUnit->computeForward(timeStep);
@@ -699,20 +701,28 @@ namespace layers {
     }
 
     template <typename TDevice>
-    void MDNLayer<TDevice>::computeBackwardPass()
+    void MDNLayer<TDevice>::computeBackwardPass(const int nnState)
     {
 	thrust::fill(this->_outputErrors().begin(),
 		     this->_outputErrors().end(),
 		     (real_t)0.0);
 	int i = 0;
+	int ganState = 0;
+	
+	if (m_oneSidedSmoothing)
+	    ganState = PostOutputLayer<TDevice>::ganState();
+	    
 	BOOST_FOREACH (boost::shared_ptr<MDNUnit<TDevice> > &mdnUnit, m_mdnUnits){
 	    if (this->flagMseWeight() && this->_mseWeightCPU()[i] < 0.0){
 		//continue; // skip this unit if specified by the mseWeight
 	    }else{
-		mdnUnit->computeBackward(this->_targets());
+		mdnUnit->computeBackward(this->_targets(), ganState);
 	    }
 	    i++;
 	}
+	
+	// for GAN only
+	PostOutputLayer<TDevice>::computeBackwardPass(nnState);
     }
     
     template <typename TDevice>
@@ -998,7 +1008,7 @@ namespace layers {
     }
 
     template <typename TDevice>
-    MDNLayer<TDevice>::real_vector& MDNLayer<TDevice>::secondOutputs(const bool flagTrain)
+    MDNLayer<TDevice>::real_vector& MDNLayer<TDevice>::feedbackOutputs(const bool flagTrain)
     {
 	return this->m_secondOutput;
     }
@@ -1073,9 +1083,10 @@ namespace layers {
     }
 
     template <typename TDevice>
-    void MDNLayer<TDevice>::loadSequences(const data_sets::DataSetFraction &fraction)
+    void MDNLayer<TDevice>::loadSequences(const data_sets::DataSetFraction &fraction,
+					  const int nnState)
     {
-	PostOutputLayer<TDevice>::loadSequences(fraction);
+	PostOutputLayer<TDevice>::loadSequences(fraction, nnState);
 
 	// Load additional probabilistic data for biased generation in model with feedback link
 	// NOTE: this part should be moved to DataSet.cpp
@@ -1114,12 +1125,19 @@ namespace layers {
 					const helpers::JsonAllocator &allocator) const
     {
 	Layer<TDevice>::exportLayer(layersArray, allocator);
-        (*layersArray)[layersArray->Size() - 1].AddMember("uvSigmoidSoftmax",
-							  m_uvSigmoidStr.c_str(),
-							  allocator);
-	(*layersArray)[layersArray->Size() - 1].AddMember("quantizeMerge",
-							  m_quanMergeStr.c_str(),
-							  allocator);
+	if (m_uvSigmoidStr.size())
+	    (*layersArray)[layersArray->Size() - 1].AddMember("uvSigmoidSoftmax",
+							      m_uvSigmoidStr.c_str(),
+							      allocator);
+	if (m_quanMergeStr.size())
+	    (*layersArray)[layersArray->Size() - 1].AddMember("quantizeMerge",
+							      m_quanMergeStr.c_str(),
+							      allocator);
+	if (m_oneSidedSmoothing)
+	    (*layersArray)[layersArray->Size() - 1].AddMember("oneSidedSmoothGAN",
+							      m_oneSidedSmoothing,
+							      allocator);
+	
     }
 
     template class MDNLayer<Cpu>;

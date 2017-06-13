@@ -140,17 +140,18 @@ namespace layers {
     }
 
     template <typename TDevice>
-    void WeightedSsePostOutputLayer<TDevice>::computeForwardPass()
+    void WeightedSsePostOutputLayer<TDevice>::computeForwardPass(const int nnState)
     {
     }
 
     template <typename TDevice>
-    void WeightedSsePostOutputLayer<TDevice>::computeForwardPass(const int timeStep)
+    void WeightedSsePostOutputLayer<TDevice>::computeForwardPass(const int timeStep,
+								 const int nnState)
     {
     }
 
     template <typename TDevice>
-    void WeightedSsePostOutputLayer<TDevice>::computeBackwardPass()
+    void WeightedSsePostOutputLayer<TDevice>::computeBackwardPass(const int nnState)
     {
         // calculate the errors
         internal::ComputeOutputErrorFn fn;

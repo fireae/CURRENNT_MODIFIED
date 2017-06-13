@@ -135,7 +135,7 @@ namespace layers {
     }
 
     template <typename TDevice>
-    void RmsePostOutputLayer<TDevice>::computeForwardPass()
+    void RmsePostOutputLayer<TDevice>::computeForwardPass(const int nnState)
     {
         // calculate the RMSE for each pattern
         internal::ComputeRmseFn fn;
@@ -153,12 +153,12 @@ namespace layers {
     }
 
     template <typename TDevice>
-    void RmsePostOutputLayer<TDevice>::computeForwardPass(const int timeStep)
+    void RmsePostOutputLayer<TDevice>::computeForwardPass(const int timeStep, const int nnState)
     {
     }
 
     template <typename TDevice>
-    void RmsePostOutputLayer<TDevice>::computeBackwardPass()
+    void RmsePostOutputLayer<TDevice>::computeBackwardPass(const int nnState)
     {
         // calculate the errors
         internal::ComputeOutputErrorFn fn;

@@ -41,14 +41,17 @@ namespace optimizers {
         typedef typename TDevice::real_vector real_vector;
 
     private:
-        real_t       m_learningRate;
-	real_t       m_learningRateAdjust;
-        const real_t m_momentum;
+        real_t                   m_learningRate;
+	real_t                   m_learningRateAdjust;
+        const real_t             m_momentum;
         std::vector<real_vector> m_weightDeltas;
 
         /* Add 16-02-22 Wang: for WE updating */
 	const real_t m_weLearningRate;
-	
+
+	/* Add 17-05-19 Wang: for Adam*/
+	real_t  m_adamBeta1Accum;
+	real_t  m_adamBeta2Accum;
 
     protected:
         virtual void _updateWeights(int fracLength);
