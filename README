@@ -4,27 +4,34 @@
 This is a modified version of CURRENNT, by Xin WANG, wangxin@nii.ac.jp.
 
 New features added:
-1. Plain RNN and Clock RNN, Clock LSTM
+1. Components for general adverserial network
+
+2. 1-D and 2-D convolution layer
+
+3. Plain RNN and Clock RNN, Clock LSTM
    Koutnik, J., Greff, K., Gomez, F., & Schmidhuber, J. (2014). A Clockwork RNN. 
 
-2. Highway network abd Residual network
+4. Highway network abd Residual network
    Srivastava, Rupesh K., Klaus Greff, and Jurgen Schmidhuber. "Training very
    deep networks." Advances in Neural Information Processing Systems. 2015.
 
-3. Mixture density model
+5. Mixture density network
    Bishop, Christopher M. "Mixture density networks." (1994).
-
-4. Autoregressive output layer, with both real and complex poles in the AR model
-
-5. Multi-stream network (based on weight mask)
    
+   Autoregressive mixture density network
+   Ref. my work on ARRMDN, ICASSP 2017 (available at tonywangx.github.io)
+
 6. Output feedback loops (for Quantized F0 model)
 
-7. Batch normalization
+7. Autoregressive output layer, with both real and complex poles in the AR model
+
+8. Multi-stream network (based on weight mask)
+
+9. Batch normalization
    (simply add "batchnorm": 1 to feedforward layers in network.jsn)
 
 Other features:
-1. initialize selected layers using a trained network
+1. initialize selected layers using a trained network (e.g., for GAN, ARRMDN training)
 2. AdaGrad
 3. output of intermediate layers (e.g., from Highway gate)
 4. weighted SSE criterion
