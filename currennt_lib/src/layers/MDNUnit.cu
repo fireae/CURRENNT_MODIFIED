@@ -1973,6 +1973,7 @@ namespace {
 	real_t *varBuff;       // buffer of variance grandients
                                // 
 	int totalTime;         //
+	real_t  varFloor;
 
 	// from 1 to timesteps * numMixture*(featureDim) 
 	__host__ __device__ void operator() (const thrust::tuple<const real_t&, int> &t) const
@@ -2043,10 +2044,15 @@ namespace {
 	    // (*errorv2) += posterior*featureDim - (*errorm)*(*mean - *tardata);
 
 	    // calculate and store the gradient of variance
-	    // STUPID MISTAKE
+	    // Fatal error 
 	    // (*errorv)  = posterior*featureDim - (*errorm)*(*mean - *tardata);
 	    // How could I multiply featureDim here ! For each dimension, it should be 1
-	    if (flagUpdateV)
+	    
+	    // Fatal error
+	    // a Relu-finction (variance floor) is used in forwardcomputation
+	    // the gradient should also consider the gradient of Relu
+	    // here, just deliver the gradient when var is above the variance floor
+	    if (flagUpdateV && ((*var) < varFloor))
 		(*errorv)  = posterior - (*errorm)*(*mean - *tardata);
 	    else
 		(*errorv)  = 0.0;
@@ -5603,6 +5609,7 @@ namespace layers {
 		fn.featureDim   = this->m_featureDim;
 		fn.mixture_num  = this->m_numMixture;
 		fn.tieVar       = this->m_tieVar;
+		fn.varFloor     = this->m_varFloor;
 		fn.flagUpdateV  = flagUpdateVar(this->m_precedingLayer.getCurrTrainingEpoch(),
 						m_mdnVarEpochFix);
 				
