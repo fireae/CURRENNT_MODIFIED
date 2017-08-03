@@ -4,7 +4,8 @@
 This is a modified version of CURRENNT, by Xin WANG, wangxin@nii.ac.jp.
 
 New features added:
-1. Components for general adverserial network
+1. Components for general adverserial network (GAN)
+   Please check CURRENNT_SCRIPTS on the usage of GAN 
 
 2. 1-D and 2-D convolution layer
 
