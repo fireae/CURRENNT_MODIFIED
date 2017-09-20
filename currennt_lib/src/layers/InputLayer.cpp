@@ -48,27 +48,7 @@
 namespace internal {
 namespace {
 
-    struct ReadInput
-    {
-	const real_t *sourceW;
-	real_t       *targetW;
-	const real_t *index;
-	int           sourceDim;
-	int           targetDim;
-	int           startDim;
-	
-	__host__ __device__ void operator() (const int idx) const
-	{
-	    int dim  = (idx % targetDim);
-	    int time = (idx / targetDim);
-	    int sourcePos = index[time] * sourceDim + dim;
-	    int targetPos = time * targetDim + dim + startDim;
-	    *(targetW + targetPos) = *(sourceW + sourcePos);
-	}
-    };
-
-    
-    
+    // Block20170904x02
 }
 }
 
@@ -79,24 +59,15 @@ namespace layers {
     InputLayer<TDevice>::InputLayer(const helpers::JsonValue &layerChild,
 				    int parallelSequences,
 				    int maxSeqLength)
-        : Layer<TDevice>(layerChild, parallelSequences, maxSeqLength)
+        : Layer<TDevice>(layerChild, parallelSequences, maxSeqLength,
+			 Configuration::instance().trainingMode())
 	, m_weDim(-1)
 	, m_flagWeUpdate(false)
     {
-	m_weBufferInput.resize(parallelSequences*maxSeqLength*this->size(), 0.0);
+	// m_weBufferInput.resize(parallelSequences*maxSeqLength*this->size(), 0.0);
 	m_weMask.clear();
 	m_weMaskFlag = false;
 
-	const Configuration &config = Configuration::instance();
-	if (config.exInputDir().size()){
-	    ParseIntOpt(config.exInputDim(), m_extInputDim);
-	    ParseStrOpt(config.exInputDir(), m_extInputDir);
-	    ParseStrOpt(config.exInputExt(), m_extInputExt);
-	}else{
-	    m_extInputDir.clear();
-	    m_extInputDim.clear();
-	    m_extInputExt.clear();
-	}
     }
 
     template <typename TDevice>
@@ -121,11 +92,9 @@ namespace layers {
 		throw std::runtime_error("WE dimension is larger than input data dimension");
 	    }
 	    if (this->size() != fraction.inputPatternSize()-1+m_weDim){
+		printf("Input layer size should be: %d", fraction.inputPatternSize() -1 + m_weDim);
 		throw std::runtime_error("Input's dimension -1 + weDim != input layer size");
 	    }
-	}else if (m_extInputDir.size()){
-	    // no need to check again
-	    
 	}else{
 	    if (fraction.inputPatternSize() != this->size())
 		throw std::runtime_error(
@@ -138,54 +107,29 @@ namespace layers {
         Layer<TDevice>::loadSequences(fraction, nnState);
 	
 	/* Add 16-02-22 Wang: for WE updating */
+	// Original code of CURRENNT, just copy the input data from fraction to this->outputs()
 	// thrust::copy(fraction.inputs().begin(),fraction.inputs().end(),this->_outputs().begin());
 
-	// Three possible cases
-	// 1. external word vectors 
-	// 2. external input features
-	// 3. normal input
 	if (m_flagWeUpdate){
-	    
-	    // load in the embedded vectors from weBank
+	    // when embedded vectors are used
+
+	    // Before loadSequences(), readWeBank() should have been called
 	    int weidx=0;
 	    long unsigned int bias=0;
 	    long unsigned int fracTime=(fraction.inputs().size()/fraction.inputPatternSize());
-	    
-	    if (fracTime>m_weIdx.size()){
+	    if (fracTime>m_weIdx.size())
 		throw std::runtime_error("m_weIdx size is smaller than fracTime\n");
-	    }
 	    thrust::fill(m_weIdx.begin(), m_weIdx.end(), -1);
 	    
-	    /* Code based on Thrust parallel */
-	    /*{{
-		internal::ReadInput fn;
-		fn.sourceW   = helpers::getRawPointer(fraction.inputs());
-		fn.targetW   = helpers::getRawPointer(m_weBufferInput);
-		fn.weBank    = helpers::getRawPointer(m_weBank);
-		fn.sourceDim = fraction.inputs().size()/fracTime;
-		fn.targetDim = this->size();
-		fn.weDim     = m_weDim;
-		fn.weIdxDim  = m_weIDDim;
-		
-		int n = fracTime * this->size();
-		thrust::for_each(thrust::host, 
-				 thrust::counting_iterator<int> (0),
-				 thrust::counting_iterator<int> (0)+n,
-				 fn);
-		
-		thrust::copy(m_weBufferInput.begin(),
-			     m_weBufferInput.begin()+n,
-			     this->_outputs().begin());
-	    }}
-	    */
-
+	    // Block20170904x01
+	    
 	    //Code based on CPU sequential method
 	    Cpu::real_vector tempInput;
 	    tempInput.resize(this->size(), 0.0);
-	    for (int i=0; i<fracTime; i++){
-		bias = i*fraction.inputPatternSize();
+	    for (int i = 0; i < fracTime; i++){
+		bias = i * fraction.inputPatternSize();
 		
-		// copy the original input data
+		// copy the normal input data
 		thrust::copy(fraction.inputs().begin()+bias, 
 			     fraction.inputs().begin()+bias+fraction.inputPatternSize(), 
 			     tempInput.begin());
@@ -193,20 +137,19 @@ namespace layers {
 		// retrieve the embedded vector idx and save m_weIdx
 		weidx = (long unsigned int)(fraction.inputs()[i * fraction.inputPatternSize() + 
 							      m_weIDDim]);
-		if (weidx*m_weDim>m_weBank.size()){
+		if (weidx * m_weDim > m_weBank.size()){
 		    printf("Vector idx: %d\t", weidx);
 		    throw std::runtime_error("vector idx larger than weBank size");
 		}
-		// the number of valid m_weIdx is always equal to fracTime
-		m_weIdx[i]=weidx;
+		// store the idx of embedded vector
+		m_weIdx[i] = weidx;
 		
-		// copy the we data into the input data (output of the InputLayer)
+		// retrieve the embedded vector from m_weBank
 		thrust::copy(m_weBank.begin()  + weidx     * m_weDim, 
 			     m_weBank.begin()  + (weidx+1) * m_weDim, 
-			     tempInput.begin() +  
-			     fraction.inputPatternSize()  - 1);
-		
-		// Add 0902: add noise to the input
+			     tempInput.begin() + fraction.inputPatternSize()  - 1);
+
+		// Optinal: add noise to the input
 		// Note: this is different from the input_noise_sigma
 		//       here, the noise will be added every epoch
 		if (this->m_weNoiseStartDim > 0){		    
@@ -237,10 +180,11 @@ namespace layers {
 		std::cout << tempVec.size() << std::endl;
 	    }
 
-	}else{
-	    // if no we is utilized, just copy the input
-	    thrust::copy(fraction.inputs().begin(),
-			 fraction.inputs().end(),
+	}
+	else
+	{
+	    // Normal case
+	    thrust::copy(fraction.inputs().begin(), fraction.inputs().end(),
 			 this->_outputs().begin());
 	}
     }

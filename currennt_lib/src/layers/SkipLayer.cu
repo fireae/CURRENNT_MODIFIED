@@ -42,7 +42,8 @@ namespace layers{
 	: TrainableLayer<TDevice>(layerChild, weightsSection,
 				  (trainable ? 1 : 0), 0, *(precedingLayers.back()))
     {
-	m_outputErrorsFromSkipLayer = Cpu::real_vector(this->outputs().size(), (real_t)0.0);
+	if (this->flagTrainingMode())
+	    m_outputErrorsFromSkipLayer = Cpu::real_vector(this->outputs().size(), (real_t)0.0);
     }	
 
     // Destructor

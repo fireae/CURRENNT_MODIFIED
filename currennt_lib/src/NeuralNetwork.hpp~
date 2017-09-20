@@ -26,6 +26,8 @@
 #include "layers/InputLayer.hpp"
 #include "layers/TrainableLayer.hpp"
 #include "layers/PostOutputLayer.hpp"
+#include "layers/MDNLayer.hpp"
+#include "layers/SkipParaLayer.hpp"
 #include "data_sets/DataSet.hpp"
 #include "helpers/JsonClassesForward.hpp"
 
@@ -52,6 +54,14 @@ private:
     /* Add 02-24 Wang Residual Network*/
     std::vector<layers::Layer<TDevice>*> m_skipAddLayers;
 
+    int m_firstFeedBackLayer;                                  // ID of the first feedback Layer
+    int m_middlePostOutputLayer;
+    int m_featMatchLayer;
+    int m_vaeLayer;
+    int m_trainingEpoch;
+    int m_trainingFrac;
+    int m_trainingState;
+    
 public:
     /**
      * Creates the neural network from the process configuration
@@ -60,8 +70,8 @@ public:
      * @param parallelSequences The maximum number of sequences that shall be computed in parallel
      * @param maxSeqLength      The maximum length of a sequence
      */
-    NeuralNetwork(const helpers::JsonDocument &jsonDoc, int parallelSequences, int maxSeqLength,
-                  int inputSizeOverride, int outputSizeOverride);
+    NeuralNetwork(const helpers::JsonDocument &jsonDoc, int parallelSequences, 
+		  int maxSeqLength, int inputSizeOverride=-1, int outputSizeOverride=-1);
 
     /**
      * Destructs the neural network
@@ -87,7 +97,13 @@ public:
      *
      * @return The output layer
      */
-    layers::TrainableLayer<TDevice>& outputLayer();
+    /* Modify 04-08 Wang: to tap in the output of arbitary layer */
+    //layers::TrainableLayer<TDevice>& outputLayer();
+    layers::Layer<TDevice>& outputLayer(const int layerID=-1);
+
+    layers::SkipLayer<TDevice>* outGateLayer(const int layerID);
+    
+    layers::MDNLayer<TDevice>* outMDNLayer(const int layerID=-1);
 
     /**
      * Returns the post output layer
@@ -103,11 +119,18 @@ public:
      */
     void loadSequences(const data_sets::DataSetFraction &fraction);
 
+    void restoreTarget(const data_sets::DataSetFraction &fraction);
+    
     /**
      * Computes the forward pass
      */
-    void computeForwardPass();
+    void computeForwardPass(const int curMaxSeqLength, const real_t uttCnt);
 
+    /**
+     * Computes the forward pass
+     */
+    void computeForwardPassGen(const int curMaxSeqLength, const real_t generationOpt);
+    
     /**
      * Computes the backward pass, including the weight updates
      *
@@ -122,7 +145,7 @@ public:
      *
      * @return The computed error
      */
-    real_t calculateError() const;
+    real_t calculateError(const bool flagGenerateMainError) const;
 
     /**
      * Stores the description of the layers in a JSON tree
@@ -146,15 +169,71 @@ public:
      *
      * @return Outputs of the processed fraction
      */
-    std::vector<std::vector<std::vector<real_t> > > getOutputs();
-
+    std::vector<std::vector<std::vector<real_t> > > getOutputs(const int  layerID        = -1, 
+							       const bool gateFromOutput = false,
+							       const real_t  mdnoutput   = -4.0);
+    
+    /**
+     * Read in the weight from trained_network.jsn or .autosave
+     * 
+     */
+    void importWeights(const helpers::JsonDocument &jsonDoc, const std::string &ctrStr);
+    
     /* Add 16-02-22 Wang: for WE updating */
     // repare for we updateing
     bool initWeUpdate(const std::string weBankPath, const unsigned weDim, 
 		      const unsigned weIDDim, const unsigned maxLength);
     
+    bool initWeNoiseOpt(const int weNoiseStartDim, const int weNoiseEndDim,
+			const real_t weNoiseDev);
+    
     bool flagInputWeUpdate() const;
+
     bool saveWe(const std::string weFile) const;
+    
+    /* Add 04-01 Wang: for RMSE output mask */
+    bool initMseWeight(const std::string mseWeightPath);
+
+    /* Add 0413 Wang: for weight mask */
+    bool initWeightMask(const std::string weightMaskPath, const int weightMaskOpt);
+
+    void maskWeight();
+    
+    /* Add 0511 Wang: re-initialize the weight*/
+    void reInitWeight();
+
+    /* Add 0514 Wang: initialize the output layer for MDN */
+    void initOutputForMDN(const data_sets::DataSetMV &datamv);
+
+    /* Add 1012 Read the mean and variance to the output layer*/
+    void readMVForOutput(const data_sets::DataSetMV &datamv);
+    
+    /* Add 0531 Wang: get the mdn config*/
+    Cpu::real_vector getMdnConfigVec();
+
+    /* Add 0630 Wang: print the binary weight matrix */
+    void printWeightMatrix(const std::string weightPath, const int opt);
+    
+    /* Add 0928 Wang: notify the current training epoch to each layer*/
+    void notifyCurrentEpoch(const int trainingEpoch);
+
+    /* Add 0928 Wang: notify the current training epoch to each layer*/
+    void notifyCurrentFrac(const int fracNum);
+
+    /* Add 170515 update the current state*/
+    void updateNNState(const int trainingEpoch, const int fracNum);
+
+    void updateNNStateForGeneration();
+    
+    int  layerSize(const int layerID);
+
+    bool isMDNLayer(const int layerID);
+    
+    /* Add 17-05-02: support for the GAN training */
+    void cleanGradientsForDiscriminator();
+    
+    //
+    bool flagNetworkForGAN() const;
 };
 
 

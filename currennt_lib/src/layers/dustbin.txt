@@ -1568,3 +1568,521 @@ Block 20170421x03
 	}}
 	*/
 
+
+
+-----------
+Block20170702x01
+	if (m_quanMerge.size()){
+	    // merge the result
+	    internal::quantizationMerge fn;
+	    fn.buffer    = helpers::getRawPointer(fillBuffer);
+	    fn.bufDim    = bufferDim;
+	    fn.bufS      = dimStart;
+	    fn.paraDim   = this->m_paraDim;
+	    fn.quanOpt   = helpers::getRawPointer(m_quanMerge);
+	    fn.quanInter = m_quanMerge.size();
+	    fn.uvSigmoid = m_uvSigmoid;
+	    
+	    thrust::for_each(
+		thrust::make_zip_iterator(
+			thrust::make_tuple(this->m_paraVec.begin() + ts, 
+					   thrust::counting_iterator<int>(0) + ts)),
+		thrust::make_zip_iterator(
+			thrust::make_tuple(this->m_paraVec.begin() + te, 
+					   thrust::counting_iterator<int>(0) + te)),
+		fn);
+	}
+
+-----------
+Block20170702x02
+
+	// 
+	if (m_quanMerge.size()){
+	    // merge the result
+	    internal::quantizationMerge fn;
+	    fn.buffer    = helpers::getRawPointer(fillBuffer);
+	    fn.bufDim    = bufferDim;
+	    fn.bufS      = dimStart;
+	    fn.paraDim   = this->m_paraDim;
+	    fn.quanOpt   = helpers::getRawPointer(m_quanMerge);
+	    fn.quanInter = m_quanMerge.size();
+	    fn.uvSigmoid = m_uvSigmoid;
+	    int n = this->m_precedingLayer.curMaxSeqLength();
+	    n = n * this->m_precedingLayer.parallelSequences();
+
+	    
+	    thrust::for_each(
+		thrust::make_zip_iterator(
+			thrust::make_tuple(this->m_paraVec.begin(), 
+					   thrust::counting_iterator<int>(0))),
+		thrust::make_zip_iterator(
+			thrust::make_tuple(this->m_paraVec.begin() + n, 
+					   thrust::counting_iterator<int>(0) + n)),
+		fn);
+	    /*Cpu::real_vector temp2 = fillBuffer;
+	    for (int i = 0; i<128*400; i++){
+		if ((i%128)==0) printf("%3d: ",i)/128;
+		if (temp2[i]>0.2) printf("1 ");
+		else printf("  ");
+		if ((i%128)==127) printf("\n");
+		}*/
+
+	}
+
+
+
+----------------
+Block20170702x03
+	// option to merge quantized data
+	// Note: only used for feedback layer
+	m_quanMerge = quanMerge;
+	for (int i =0; i<m_quanMerge.size(); i++){
+	    if (m_quanMerge[i] < 0 || m_quanMerge[i] >= (endDim-startDim)){
+		throw std::runtime_error("Softmax quanMerge larger than dimension");
+	    }
+	}
+
+
+
+----------------
+Block20170702x04
+    struct quantizationMerge
+    {
+	real_t *buffer;
+	int     bufDim;
+	int     bufS;
+	int     paraDim;
+	int    *quanOpt;
+	int     quanInter;
+	bool    uvSigmoid;
+        __host__ __device__ void operator() (const thrust::tuple<real_t&, const int&> &values) const
+        {
+	    const int frameIdx = values.get<1>();
+	    int accumIdx = 0;
+	    if (quanInter > 1){
+		for (int i = 0; i < quanInter/2; i++){
+		    accumIdx = quanOpt[i*2];
+		    for (int dimIdx = (accumIdx + 1); dimIdx < quanOpt[i*2+1]; dimIdx++){
+			buffer[frameIdx * bufDim + bufS + accumIdx] +=
+			    buffer[frameIdx * bufDim + bufS + dimIdx];
+			buffer[frameIdx * bufDim + bufS + dimIdx] = 0.0;
+		    }
+		}
+	    }else if (quanInter == 1){
+		int tmp = (uvSigmoid)?1:0;
+		for (int i = tmp; i < paraDim; i++){
+		    if ((i-tmp) % quanOpt[0]){
+			accumIdx = i - ((i-tmp) % quanOpt[0]);
+			buffer[frameIdx * bufDim + bufS + accumIdx] +=
+			    buffer[frameIdx * bufDim + bufS + i];
+			buffer[frameIdx * bufDim + bufS + i] = 0.0;
+		    }
+		}
+	    }
+        }
+    };
+
+
+----------------
+Block20170702x05
+
+	m_quanMergeStr  = ((layerChild->HasMember("quantizeMerge")) ? 
+			       ((*layerChild)["quantizeMerge"].GetString()) : (""));
+	// quantization option for MDN_softmax that will be feedback
+	// should be moved to feedback layer
+	
+	if (m_quanMergeStr.size()){
+	    Cpu::int_vector temp;
+	    readQuanMerge(m_quanMergeStr, temp);
+	    m_quanMergeVal = temp;
+	}else{
+	    m_quanMergeVal.clear();
+	}
+
+    void readQuanMerge(const std::string options, Cpu::int_vector &quanOpt)
+    {
+	// read in the option
+	std::vector<std::string> tempArgs;
+	boost::split(tempArgs, options, boost::is_any_of("_"));
+	if ((tempArgs.size() % 2) != 0 && tempArgs.size()!= 1){
+	    printf("quanMerge: S_E_S_E");
+	    throw std::runtime_error("Error in MDN layer configuration");
+	}
+	quanOpt.resize(tempArgs.size(),-1);
+	for (int i=0; i < tempArgs.size(); i++){
+	    quanOpt[i] = boost::lexical_cast<int>(tempArgs[i]);
+	}
+    }
+
+
+----------------
+Block20170702x06
+    // FeedBackLayer.cu
+    // Obsolete
+    if (crossBoundary == 3 &&
+	input2[(timeStep - lookBackTime) * dimInput2 + dimInput2Start] > 0.98){
+	// Set the feedback to zero if previous frame is silence
+	output[outputIdx] = 0.0;
+	}
+
+
+Block20170702x07
+     if (crossBoundary == 3 && (inputIdx - dimInput2)>0 &&
+         input2[inputIdx - dimInput2 - dimIdxRel % dim1Band] > 0.98){
+         output[outputIdx] = 0;
+         // set the previous frame to zero if it is silence
+      }
+
+
+
+
+---------------
+Block20170904x01
+	    /* Code based on Thrust parallel */
+	    /*{{
+		internal::ReadInput fn;
+		fn.sourceW   = helpers::getRawPointer(fraction.inputs());
+		fn.targetW   = helpers::getRawPointer(m_weBufferInput);
+		fn.weBank    = helpers::getRawPointer(m_weBank);
+		fn.sourceDim = fraction.inputs().size()/fracTime;
+		fn.targetDim = this->size();
+		fn.weDim     = m_weDim;
+		fn.weIdxDim  = m_weIDDim;
+		
+		int n = fracTime * this->size();
+		thrust::for_each(thrust::host, 
+				 thrust::counting_iterator<int> (0),
+				 thrust::counting_iterator<int> (0)+n,
+				 fn);
+		
+		thrust::copy(m_weBufferInput.begin(),
+			     m_weBufferInput.begin()+n,
+			     this->_outputs().begin());
+	    }}
+	    */
+	    
+Block20170904x02
+    /*
+    struct ReadInput
+    {
+	const real_t *sourceW;
+	real_t       *targetW;
+	const real_t *index;
+	int           sourceDim;
+	int           targetDim;
+	int           startDim;
+	
+	__host__ __device__ void operator() (const int idx) const
+	{
+	    int dim  = (idx % targetDim);
+	    int time = (idx / targetDim);
+	    int sourcePos = index[time] * sourceDim + dim;
+	    int targetPos = time * targetDim + dim + startDim;
+	    *(targetW + targetPos) = *(sourceW + sourcePos);
+	}
+    };
+    */    
+
+
+Block20170904x03
+// copy the data from t.get<0> to the memory block started from Output 
+    struct CopySimple
+    {
+	real_t     *Output;           // output address to store data
+	int         paraDim;
+	
+	const char *patTypes;     // sentence termination check
+	
+        __host__ __device__ void operator() (const thrust::tuple<real_t&, int> &t) const
+        {
+            // unpack the tuple
+            int outputIdx = t.get<1>();
+	    int timeIdx   = outputIdx / paraDim;
+
+	    // skip dummy frame (for parallel sentence processing)
+	    if (patTypes[timeIdx] == PATTYPE_NONE)
+                return;
+
+            // store the result
+            *(Output+outputIdx) = t.get<0>();
+        }
+    };
+
+
+Block20170904x04
+    // Calculate the mixture distance \sum_d (x_d-\mu_d)^2/(2*std^2) for mixture model
+    // This function is used in EM-style generation
+    //  and forward anc backward propagation of mixture unit
+    struct ComputeMixtureDistanceWithTransForm
+    {
+	int startDOut;
+	int layerSizeOut;
+	int mixture_num;
+	int featureDim;
+	int totaltime;
+	bool tieVar;
+
+	const char *patTypes;
+	const real_t *output;    // targets data
+	const real_t *mdnPara;   // mean value of the mixture
+	const real_t *tranData; 
+	// from 1 to timesteps * num_mixture
+	__host__ __device__ real_t operator() (const int idx) const
+	{
+	    
+	    int timeStep = idx / mixture_num; //t.get<0>();
+	    int mixIndex = idx % mixture_num; //t.get<1>(); 
+	    
+	    // point to the targets data x
+	    int pos_data = (layerSizeOut * timeStep)+startDOut;
+		
+	    const real_t *data, *mean, *var, *trans;
+
+	    if (patTypes[timeStep] == PATTYPE_NONE)
+		return 0;
+	    
+	    // point to the mixture data (mean and variance)
+	    int pos =  totaltime * mixture_num;
+	    int pos_mean = pos+timeStep*featureDim*mixture_num+mixIndex*featureDim;
+	    pos     =  totaltime * (mixture_num + mixture_num * featureDim);
+
+            #ifdef ALTER_TIEVAR
+	    int pos_var  = pos+timeStep*mixture_num;
+            #else
+	    int pos_var  = pos+ (tieVar?
+				 (timeStep * mixture_num + mixIndex) :
+				 (timeStep * mixture_num * featureDim + mixIndex*featureDim));
+            #endif
+	    var  = mdnPara + pos_var;
+	    
+	    // pointer to the transformation part 
+	    int pos_trans = idx;
+	    
+	    // accumulate the distance over dimension
+	    real_t tmp = 0.0;
+	    for (int i = 0; i<featureDim; i++){
+		data = output    + pos_data + i;
+		mean = mdnPara   + pos_mean + i;
+		var  = mdnPara   + pos_var  + (tieVar?0:i);
+		trans= tranData  + pos_trans+ i;
+		tmp += (*data-*mean-*trans)*(*data-*mean-*trans)/((*var)*(*var))/2;
+		
+	    }
+	    return tmp;
+	}
+    };
+
+
+    // Copy the data from the output buffer to the target unit (for mixture_dyn unit)
+    struct CopyTargetData
+    {
+	int startDOut;
+	int layerSizeOut;
+	int featureDim;
+
+	const char *patTypes;
+	const real_t *output;   // targets data
+	real_t *target;   // 
+
+	// from 1 to timesteps * num_mixture
+	__host__ __device__ void operator() (const int idx) const
+	{
+	    
+	    int timeStep  = idx / featureDim; //t.get<0>();
+	    int featIndex = idx % featureDim; //t.get<1>(); 
+	    
+	    // point to the targets data x
+	    int pos_data = (layerSizeOut * timeStep)+startDOut+featIndex;
+		
+	    if (patTypes[timeStep] == PATTYPE_NONE)
+		return;
+	    *(target+idx) = *(output + pos_data);
+	    
+	}
+    };
+
+    // Shift the mean value u => u + w^To + b
+    struct ShiftBiasStep1
+    {
+	int featureDim;
+	int mixNum;
+	int totalTime;
+
+	real_t   *linearPart;   // Wx'
+	real_t   *biasPart;     // b
+	real_t   *mdnPara;      // 
+
+	// from 1 to timesteps * num_mixture
+	__host__ __device__ void operator() (const int idx) const
+	{
+	    
+	    int temp      = idx % (featureDim * mixNum); 
+	    int featIndex = temp % featureDim; 
+	    int timeStep  = idx / (featureDim * mixNum);
+	    int mixIndex  = temp / featureDim;
+
+	    int pos_mean;
+	    // Add to the mean value
+	    pos_mean = (totalTime * mixNum + 
+			timeStep  * featureDim * mixNum + 
+			mixIndex  * featureDim + featIndex); 
+		
+	    if (timeStep == 0){
+		// skip the first time step
+		return;
+	    }else{
+		*(mdnPara + pos_mean) = (*(mdnPara + pos_mean) + 
+					 *(linearPart + idx)   + 
+					 *(biasPart   + mixIndex * featureDim + featIndex)
+					 );
+	    }	    	    	    
+	}
+    };
+
+    // Accumulating the statistics for BP on the linear regression part W^T o+b
+    // -1 * posteriorP(k) * (O_t - (u + W_k ^ T O_t-1 + b_k)) / var^k_d / var^k_d
+    struct ShiftBiasStep2
+    {
+	int featureDim;
+	int mixNum;
+	int totalTime;
+	int startDOut;
+	int layerSizeOut;
+
+	real_t   *linearPart;   // Wx'
+	real_t   *biasPart;     // b
+	real_t   *target;       // x
+	real_t   *mdnPara;      // 
+	real_t   *postPbuff;
+	bool    tieVar;
+
+	// from 1 to timesteps * num_mixture
+	__host__ __device__ void operator() (const int idx) const
+	{
+	    
+	    int temp      = idx % (featureDim * mixNum); 
+	    int featIndex = temp % featureDim; 
+	    int timeStep  = idx / (featureDim * mixNum);
+	    int mixIndex  = temp / featureDim;
+
+	    // skip the first time step
+	    if (timeStep == 0)
+		return;
+	    
+	    // set the pointer
+	    int pos_mean, pos_var, pos_data;
+	    pos_mean = (totalTime * mixNum + 
+			timeStep  * featureDim * mixNum + 
+			mixIndex  * featureDim + featIndex); 
+	    pos_var  = (totalTime * (mixNum + mixNum * featureDim)      + 
+			timeStep  *  mixNum * (tieVar ? 1 : featureDim) + 
+			mixIndex  * (tieVar ? 1 : featureDim)           +
+			(tieVar ? 0 : featIndex)); 
+	    
+	    /*** FATAL ERROR **
+	     * Posterior probability should be updated 
+	     * Particularly, the size of the posterior probability buffer  will change !!!
+	     * Split ShiftBias into ShiftBiasStep1 and ShiftBiasStep2
+	     ******/
+	    // pointer to the posterior P and sum of posterior P
+	    const real_t *postP   = postPbuff + timeStep  * mixNum + mixIndex;
+	    const real_t *sumPost = postPbuff + totalTime * mixNum + timeStep;
+	    real_t posterior = helpers::safeExp((*postP) - (*sumPost));
+	    
+	    // point to the targets data x
+	    pos_data = (layerSizeOut * timeStep) + startDOut + featIndex;
+	    
+	    // save x - u - wx'-b to dataBuff now
+	    *(linearPart + idx) = (-1 * posterior * 
+				   (*(target + pos_data) - *(mdnPara + pos_mean)) /
+				   (*(mdnPara + pos_var)) / (*(mdnPara + pos_var)));
+	    // No need to re-order the data
+	    // save \phi(i)\sigma()(x-u-wx'-b) in time order
+	    // pos_data = (mixIndex * totalTime + timeStep) * featureDim + featIndex; 
+	    // *(tmpBuff+pos_data)=-1* posterior * (*(mdnPara + pos_var)) * (*(linearPart + idx));
+	    
+	}
+    };
+
+Block20170904x05
+
+    struct ShiftBiasStep1TiedCaseDimensionAxis
+    {
+	// Shift the mean value u => u + w^To + b
+	// This function is used by mixture_dyn and mixture_dynSqr
+	// The difference is the source of the parameter w and b
+	int startDOut;
+	int layerSizeOut;
+	int featureDim;
+	int mixNum;
+	int totalTime;
+	int trainableAPos;      // w, the w predicted by the network, I name it as a now
+	int trainableBPos;      // b, the b which is predicted by the network
+	int stepBack;           // how many steps to look back ?
+
+	real_t   *linearPart;   // w, where w is trainable but shared across time steps
+	real_t   *biasPart;     // b, where b is trainable but shared across time steps
+	real_t   *targets;      // o_t-1
+	real_t   *mdnPara;      // 
+	
+	bool      tieVar;
+
+	// from 1 to timesteps * num_mixture
+	__host__ __device__ void operator() (const int idx) const
+	{
+	    
+	    int timeStep  = idx  / (featureDim * mixNum);
+	    int temp      = idx  % (featureDim * mixNum); 
+	    int mixIndex  = temp /  featureDim;
+	    int featIndex = temp %  featureDim;
+	    
+	    if (featIndex < stepBack){
+		// skip the first dimension
+		return;
+	    }
+	    
+	    int pos_mean, pos_data;
+	    // Add to the mean value
+	    pos_mean = (totalTime * mixNum + 
+			timeStep  * featureDim * mixNum + 
+			mixIndex  * featureDim + featIndex); 
+	    pos_data = (timeStep  * layerSizeOut) + startDOut + featIndex - stepBack;
+	    
+	    if (linearPart != NULL && biasPart != NULL){
+		*(mdnPara + pos_mean) = ((*(mdnPara      + pos_mean))  + 
+					 ((*(linearPart)) * (*(targets+pos_data))) + 
+					 ((stepBack==1)  ? (*(biasPart)):0)
+					 );
+	    }else{
+		/* not implemented for context-dependent case */
+	    }
+	}
+    };
+
+Block20170904x06
+    struct TanhAutoRegWeightStep1
+    {
+	int     featureDim;
+	int     backOrder;
+	real_t *weight;
+	real_t *weightOut;
+        __host__ __device__ void operator() (const int &Idx) const
+        {
+            *(weightOut + Idx) =  (Idx < (backOrder * featureDim))? 
+		(activation_functions::Tanh::fn(*(weight+Idx))):0;
+        }
+    };
+
+    struct TanhAutoRegWeightStep2
+    {
+	int     featureDim;
+	real_t *weight;
+	real_t *weightOut;
+        __host__ __device__ void operator() (const int &idx) const
+        {
+	    *(weightOut + idx) = (idx < featureDim) ? 
+		((*(weight + idx)) + (*(weight + idx + featureDim))) : 
+		(-1 * (*(weight + idx - featureDim)) * (*(weight + idx)));
+        }
+    };
+

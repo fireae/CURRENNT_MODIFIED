@@ -1237,11 +1237,11 @@ namespace layers {
 	m_seqCurLength = fraction.maxSeqLength();
 	
 	// read in the string of word
-	m_chaCurLength = fraction.maxTxtLength();
+	m_chaCurLength = 0;//fraction.maxTxtLength();
 	int_vector tmpIdx;
-	tmpIdx = fraction.txtData();
-	if (m_chaCurLength != fraction.txtData().size())
-	    throw std::runtime_error("Please set parallel sequence = 1");
+	//tmpIdx = //fraction.txtData();
+	//if (m_chaCurLength != fraction.txtData().size())
+	//    throw std::runtime_error("Please set parallel sequence = 1");
 	
 	m_strWord.resize(m_chaCurLength * m_chaDim, 0.0);
 	m_strWordRev.resize(m_chaCurLength * m_chaDim, 0.0);

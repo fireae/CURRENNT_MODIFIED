@@ -99,10 +99,14 @@ namespace layers {
 
 	//int_vector      m_weightIdx;      // idx to access the weight of each window filter
 
-	real_vector     m_conBuffer;      // data buffer
-	int             m_winTotalL;      // sum of the width of filter
+	real_vector     m_conBuffer;        // data buffer
+	int             m_winTotalL;        // sum of the width of filter
 
+	int             m_causalFlag;       // whether the CNN filter is casual filter
 	
+	int             m_outputTanh;       //
+
+	int             m_1DCNNOnly;        // whether the CNN is only 1-D 
     public:
 	// initializer and destructor
 	CNNLayer(const helpers::JsonValue &layerChild,
@@ -124,6 +128,12 @@ namespace layers {
 	// export
 	virtual void exportLayer(const helpers::JsonValue &layersArray, 
 				 const helpers::JsonAllocator &allocator) const;
+
+	// memory save mode for generation in wavenet
+	virtual void reduceOutputBuffer();
+
+	virtual int  outputBufPtrBias(const int timeStepTimesParallel, const int nnState);
+	
     };
     
     

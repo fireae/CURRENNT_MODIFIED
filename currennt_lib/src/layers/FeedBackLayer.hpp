@@ -56,10 +56,18 @@ namespace layers {
 	// look back and aggregation
 	std::string     m_aggStr;         //
 	int_vector      m_aggOpt;         //
-	pattype_vector  m_boundaryInfo;   // buffer to store the boundary information
 	real_vector     m_aggBuffer;
 	int             m_crossBoundary;  //
 	int             m_aggOptSyn;
+	// Fatal Error: 
+	// pattype is char, which can only be -128 -> 128
+	// pattype_vector  m_boundaryInfo;   // buffer to store the boundary information
+	int_vector      m_boundaryInfo;
+
+	// configuration of the previous layer
+	int             m_prevDimStart;
+	int             m_prevDimEnd;
+	
     public:
 	
 	FeedBackLayer(

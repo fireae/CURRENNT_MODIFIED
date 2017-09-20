@@ -182,6 +182,9 @@ namespace layers {
 					      Layer<TDevice>           &precedingLayer)
 	: TrainableLayer<TDevice>(layerChild, weightsSection, 0, 0, precedingLayer)
     {
+
+	throw std::runtime_error("Maxpooling is not fully implemented");
+	
 	m_width = ((layerChild->HasMember("width")) ? 
 		   ((*layerChild)["width"].GetString()) : (""));
 	m_stride = ((layerChild->HasMember("stride")) ? 
@@ -209,6 +212,9 @@ namespace layers {
 	
 	m_maxWidth =  MaxCpuIntVec(m_width_H);
 	m_maxPos.resize(precedingLayer.outputs().size() * (2 * m_maxWidth + 1), 0);
+
+	if (this->precedingLayer().getSaveMemoryFlag())
+	    throw std::runtime_error("layer before maxpooling is reduced in mem");
     }
 
     template <typename TDevice>

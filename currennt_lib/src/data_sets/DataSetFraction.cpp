@@ -43,6 +43,11 @@ namespace data_sets {
         return m_outputPatternSize;
     }
 
+    int DataSetFraction::externalInputSize() const
+    {
+        return m_exInputDim;
+    }
+
     int DataSetFraction::maxSeqLength() const
     {
         return m_maxSeqLength;
@@ -53,6 +58,16 @@ namespace data_sets {
         return m_minSeqLength;
     }
 
+    int DataSetFraction::maxExInputLength() const
+    {
+        return m_maxExInputLength;
+    }
+
+    int DataSetFraction::minExInputLength() const
+    {
+        return m_minExInputLength;
+    }
+    
     int DataSetFraction::numSequences() const
     {
         return (int)m_seqInfo.size();
@@ -103,15 +118,20 @@ namespace data_sets {
 	return m_auxDataDim;
     }
 
+    const Cpu::real_vector& DataSetFraction::exInputData()    const
+    {
+	return m_exInputData;
+    }
+    
+    /*
     const Cpu::int_vector& DataSetFraction::txtData() const
     {
         return m_txtData;
     }
-
     int DataSetFraction::maxTxtLength() const
     {
         return m_maxTxtLength;
-    }
+	}*/
   
     int DataSetFraction::fracTimeLength() const
     {

@@ -83,8 +83,10 @@ namespace layers {
                                             int inputWeightsPerBlock, 
 					    int internalWeightsPerBlock, 
 					    Layer<TDevice> &precedingLayer)
-        : Layer<TDevice>           (layerChild, precedingLayer.parallelSequences(), 
-				    precedingLayer.maxSeqLength())
+        : Layer<TDevice>           (layerChild,
+				    precedingLayer.parallelSequences(), 
+				    precedingLayer.maxSeqLength(),
+				    Configuration::instance().trainingMode())
         , m_precedingLayer         (precedingLayer)
         , m_inputWeightsPerBlock   (inputWeightsPerBlock)
         , m_internalWeightsPerBlock(internalWeightsPerBlock)
@@ -108,6 +110,9 @@ namespace layers {
 	// extract the weights if they are given in the network file
         Cpu::real_vector weights;
 
+	if (m_learningRate == 0)
+	    printf("\n\tlearning rate = 0\n");
+	
         if (weightsSection.isValid() && weightsSection->HasMember(this->name().c_str())) {
 	    printf("Trainable layer: re-read weight");
             if (!weightsSection->HasMember(this->name().c_str()))

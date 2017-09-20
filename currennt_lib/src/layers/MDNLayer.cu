@@ -48,6 +48,7 @@
 #include "../activation_functions/Relu.cuh"
 
 #include "../Configuration.hpp"
+#include "../MacroDefine.hpp"
 
 #include <boost/foreach.hpp>
 #include <boost/random/normal_distribution.hpp>
@@ -81,22 +82,6 @@ namespace layers {
 	}
 	return tmp;
     }
-
-    void readQuanMerge(const std::string options, Cpu::int_vector &quanOpt)
-    {
-	// read in the option
-	std::vector<std::string> tempArgs;
-	boost::split(tempArgs, options, boost::is_any_of("_"));
-	if ((tempArgs.size() % 2) != 0 && tempArgs.size()!= 1){
-	    printf("quanMerge: S_E_S_E");
-	    throw std::runtime_error("Error in MDN layer configuration");
-	}
-	quanOpt.resize(tempArgs.size(),-1);
-	for (int i=0; i < tempArgs.size(); i++){
-	    quanOpt[i] = boost::lexical_cast<int>(tempArgs[i]);
-	}
-    }
-
     
     /********************************************************
      MDNLayer
@@ -110,6 +95,10 @@ namespace layers {
 	: PostOutputLayer<TDevice>(layerChild, precedingLayer, -1)
     {
         const Configuration &config = Configuration::instance();
+
+	if (this->precedingLayer().getSaveMemoryFlag())
+	    throw std::runtime_error("The layer before MDN is reduced in mem");
+	
 	
         // parse the MDN vector
 	int numEle;
@@ -124,6 +113,9 @@ namespace layers {
 	// get the flag for variance tying
 	m_tieVarMDNUnit   = config.getTiedVariance();
 	
+	// get the generation paramter
+	m_genPara         = config.mdnPara();
+
 	// get the string for secondoutput configuration
 	m_secondOutputOpt = parseSecondOutputOpt(config.secondOutputOpt());
 	m_secondOutputDim = 0;
@@ -140,19 +132,15 @@ namespace layers {
 	
 	/******************* Read config ********************/
 	//
-	m_uvSigmoidStr = ((layerChild->HasMember("uvSigmoidSoftmax")) ? 
-			  ((*layerChild)["uvSigmoidSoftmax"].GetString()) : (""));
-	m_quanMergeStr = ((layerChild->HasMember("quantizeMerge")) ? 
-			  ((*layerChild)["quantizeMerge"].GetString()) : (""));
+	m_uvSigmoidStr      = ((layerChild->HasMember("uvSigmoidSoftmax")) ? 
+			       ((*layerChild)["uvSigmoidSoftmax"].GetString()) : (""));
 	m_oneSidedSmoothing = ((layerChild->HasMember("oneSidedSmoothGAN")) ? 
 			       ((*layerChild)["oneSidedSmoothGAN"].GetInt()) : (0));
-	if (m_quanMergeStr.size()){
-	    Cpu::int_vector temp;
-	    readQuanMerge(m_quanMergeStr, temp);
-	    m_quanMergeVal = temp;
-	}else{
-	    m_quanMergeVal.clear();
-	}
+	m_mdnConfigPath     = ((layerChild->HasMember("mdnConfig")) ? 
+			       ((*layerChild)["mdnConfig"].GetString()) : (""));
+	m_conValSigStr      = ((layerChild->HasMember("continuousValuedSigmoid")) ? 
+			       ((*layerChild)["continuousValuedSigmoid"].GetString()) : (""));
+	// Block20170702x05
 	
 	// I should put this to the layerChild section
 	// read in the configuration from .autosave 
@@ -209,14 +197,22 @@ namespace layers {
 		     it != BuftieVarianceFlag.End(); ++it)
 		    m_secondOutputOpt.push_back(static_cast<int>(it->GetInt()));
 	    }
-	    
+
+	    // clear configPath
+	    // config has been written into network.jsn/autosave
+	    // no need to read mdnConfig anymore
+	    m_mdnConfigPath = "";
+				      
 	// read in the configuration from mdn_config (binary file)
         }else{
-	    std::ifstream ifs(config.mdnFlagPath().c_str(), 
+	    
+	    if (m_mdnConfigPath.size() == 0)
+		m_mdnConfigPath = config.mdnFlagPath();
+	    
+	    std::ifstream ifs(m_mdnConfigPath.c_str(), 
 			      std::ifstream::binary | std::ifstream::in);
 	    if (!ifs.good())
-		throw std::runtime_error(std::string("Can't open MDNConfig:" +
-						     config.mdnFlagPath()));
+		throw std::runtime_error(std::string("Can't open MDNConfig:" + m_mdnConfigPath));
 	    
 	    std::streampos numEleS, numEleE;
 	    numEleS = ifs.tellg();
@@ -250,6 +246,7 @@ namespace layers {
 		m_mdnConfigVec[5+i*5] = tempVal;
 	    }
 	    ifs.close();
+	    m_mdnConfigPath.clear();
 	}
 
 	// check configuration
@@ -323,26 +320,26 @@ namespace layers {
 	    
 	    // binomial distribution (parametrized as sigmoid function)
 	    if (mdnType==MDN_TYPE_SIGMOID){
+		bool tmpFlag = (m_conValSigStr[0]=='y');
 		mdnUnit = new MDNUnit_sigmoid<TDevice>(unitS, unitE, unitSOut, unitEOut, mdnType, 
 						       precedingLayer, this->size(),
-						       MDNUNIT_TYPE_0, m_secondOutputOpt[i]);
+						       MDNUNIT_TYPE_0, m_secondOutputOpt[i],
+						       tmpFlag);
 		m_mdnParaDim += (unitE - unitS);
 		outputSize += (unitE - unitS);
-		printf("\tMDN sigmoid\n");
+		printf("\tMDN sigmoid (conVal [%d])\n", (int)tmpFlag);
 		
 	    // multi-nomial distribution (parameterized by softmax function)
 	    }else if(mdnType==MDN_TYPE_SOFTMAX){
 		bool uvSig = (i < m_uvSigmoidStr.size())?(m_uvSigmoidStr[i]=='y'):(false);
 		mdnUnit = new MDNUnit_softmax<TDevice>(unitS, unitE, unitSOut, unitEOut, mdnType, 
 						       precedingLayer, this->size(),
-						       uvSig, m_quanMergeVal,
-						       config.mdnUVSigThreshold(),
+						       uvSig, config.mdnUVSigThreshold(),
 						       MDNUNIT_TYPE_0, m_secondOutputOpt[i]);
 		m_mdnParaDim += (unitE - unitS);
 		outputSize += 1;
-		printf("\tMDN softmax (uvSig [%d], uvT [%f], quanMerge [%s], genM [%d])\n",
-		       uvSig, config.mdnUVSigThreshold(),m_quanMergeStr.c_str(),
-		       config.mdnSoftMaxGenMethod());
+		printf("\tMDN softmax (uvSig [%d], uvT [%f], genM [%d])\n",
+		       uvSig, config.mdnUVSigThreshold(), config.mdnSoftMaxGenMethod());
 		
 	    // Gaussian mixture distribution
 	    }else if(mdnType > 0){
@@ -595,9 +592,13 @@ namespace layers {
 	    }
 	    printf("\n\tMDN trainable mixture is used."); 
 	    printf("\tThe number of trainable parameter is %d\n", weightsNum);
+
+	    // Allocate memory for trainable weights
 	    m_sharedWeights       = weights;
 	    m_sharedWeightUpdates = weights;
-	    
+	    // Set the intial gradients to zero
+	    thrust::fill(m_sharedWeightUpdates.begin(), m_sharedWeightUpdates.end(), (real_t)0.0);
+
 	    // link the shared weights to each trainable MDNUnits
 	    BOOST_FOREACH (boost::shared_ptr<MDNUnit<TDevice> > &mdnUnit, m_mdnUnits){
 		mdnUnit->linkWeight(m_sharedWeights, m_sharedWeightUpdates);
@@ -689,23 +690,37 @@ namespace layers {
     {
 	BOOST_FOREACH (boost::shared_ptr<MDNUnit<TDevice> > &mdnUnit, m_mdnUnits){
 	    mdnUnit->computeForward();
+	    
+	    // if this MDN is in the middle of a network, generate the output
+	    if (this->_postLayerType() == NN_POSTOUTPUTLAYER_NOTLASTMDN &&
+		nnState != NN_STATE_GAN_NOGAN)
+		mdnUnit->getOutput(0.0001, (this->_targets()));
 	}
     }
 
     template <typename TDevice>
     void MDNLayer<TDevice>::computeForwardPass(const int timeStep, const int nnState)
     {
+
 	BOOST_FOREACH (boost::shared_ptr<MDNUnit<TDevice> > &mdnUnit, m_mdnUnits){
 	    mdnUnit->computeForward(timeStep);
+
+	    // if this MDN is in the middle of a network, generate the output
+	    if (this->_postLayerType() == NN_POSTOUTPUTLAYER_NOTLASTMDN && 
+		nnState != NN_STATE_GAN_NOGAN){
+		mdnUnit->getOutput(timeStep,    0.0001, (this->_targets()));
+		mdnUnit->getParameter(timeStep, helpers::getRawPointer(this->m_mdnParaVec));
+	    }
+	    // this->getOutput(timeStep, 0.0001); // by default, use 0.0001 as the parameter
 	}
     }
 
     template <typename TDevice>
     void MDNLayer<TDevice>::computeBackwardPass(const int nnState)
     {
-	thrust::fill(this->_outputErrors().begin(),
-		     this->_outputErrors().end(),
-		     (real_t)0.0);
+	thrust::fill(this->_outputErrors().begin(), this->_outputErrors().end(), (real_t)0.0);
+	thrust::fill(m_sharedWeightUpdates.begin(), m_sharedWeightUpdates.end(), (real_t)0.0);
+	
 	int i = 0;
 	int ganState = 0;
 	
@@ -850,6 +865,7 @@ namespace layers {
                 weights.push_back(static_cast<real_t>(it->GetDouble()));	    
 	    m_sharedWeights       = weights;
 	    m_sharedWeightUpdates = weights;
+	    thrust::fill(m_sharedWeightUpdates.begin(), m_sharedWeightUpdates.end(), (real_t)0.0);
 	    
 	}else{
 	    printf("not read weight for layer %s", this->name().c_str());
@@ -996,14 +1012,14 @@ namespace layers {
     {
         static std::string s;
         if (s == "" && opt==1){
-	    if (m_secondOutputOpt.size()<1 || m_secondOutputOpt.size() != m_mdnUnits.size())
-		throw std::runtime_error("Feedback is invalid");
-	    	    
+	    /*if (m_secondOutputOpt.size()<1 || m_secondOutputOpt.size() != m_mdnUnits.size())
+	      throw std::runtime_error("Feedback is invalid");*/
             std::ostringstream Convert;
 	    Convert << m_secondOutputDim << "_";
 	    s = Convert.str();
-	}else
-	    s = "";
+	}
+	/*else
+	  s = "";*/
         return s;
     }
 
@@ -1077,11 +1093,31 @@ namespace layers {
 		dimStart += mdnUnit->feedBackDim();
 		cnt++;
 	    }
-	}
-	*/
-	
+	}*/
     }
 
+    template <typename TDevice>
+    void MDNLayer<TDevice>::setFeedBackData(const int timeStep, const int state)
+    {
+	int dimStart = 0;
+	int cnt      = 0;
+	BOOST_FOREACH (boost::shared_ptr<MDNUnit<TDevice> > &mdnUnit, m_mdnUnits){
+	    mdnUnit->setFeedBackData(this->m_secondOutput,  m_secondOutputDim,  dimStart,
+				     state, timeStep);
+	    dimStart += mdnUnit->feedBackDim();
+	    cnt++;
+	}
+    }
+
+    template <typename TDevice>
+    real_t MDNLayer<TDevice>::retrieveProb(const int timeStep, const int state)
+    {
+	// This function is specifically used by MDNSoftmax !
+	if (m_mdnUnits.size()>1)
+	    throw std::runtime_error("Not implemented for retrieveProb");
+	return m_mdnUnits[0]->retrieveProb(timeStep, state);
+    }
+    
     template <typename TDevice>
     void MDNLayer<TDevice>::loadSequences(const data_sets::DataSetFraction &fraction,
 					  const int nnState)
@@ -1129,15 +1165,22 @@ namespace layers {
 	    (*layersArray)[layersArray->Size() - 1].AddMember("uvSigmoidSoftmax",
 							      m_uvSigmoidStr.c_str(),
 							      allocator);
-	if (m_quanMergeStr.size())
+	if (m_conValSigStr.size())
+	    (*layersArray)[layersArray->Size() - 1].AddMember("continuousValuedSigmoid",
+							      m_conValSigStr.c_str(),
+							      allocator);
+	/*if (m_quanMergeStr.size())
 	    (*layersArray)[layersArray->Size() - 1].AddMember("quantizeMerge",
 							      m_quanMergeStr.c_str(),
-							      allocator);
+							      allocator);*/
 	if (m_oneSidedSmoothing)
 	    (*layersArray)[layersArray->Size() - 1].AddMember("oneSidedSmoothGAN",
 							      m_oneSidedSmoothing,
 							      allocator);
-	
+	if (m_mdnConfigPath.size())
+	    (*layersArray)[layersArray->Size() - 1].AddMember("mdnConfig",
+							      m_mdnConfigPath.c_str(),
+							      allocator);
     }
 
     template class MDNLayer<Cpu>;

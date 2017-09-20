@@ -284,6 +284,19 @@ namespace layers {
 	virtual void exportLayer(const helpers::JsonValue &layersArray, 
 				 const helpers::JsonAllocator &allocator) const;
 
+
+	/*
+	 * 
+	 */
+	virtual int hiddenStateSize();
+	
+	// retreve the hidden state
+	virtual void retrieveHiddenState(const int timeStep, real_vector& readBuffer);
+
+	// set the hidden state
+	virtual void setHiddenState(const int timeStep, real_vector& writeBuffer);
+
+	
     };
 
 } // namespace layers

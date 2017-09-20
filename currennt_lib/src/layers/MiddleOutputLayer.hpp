@@ -48,8 +48,8 @@ namespace layers {
 	int          m_natSecDim;
 	
 	int          m_state;            // state of this layer
-	int          m_generatorEpoch;
-	int          m_discriminatorEpoch;
+	//int          m_generatorEpoch;
+	//int          m_discriminatorEpoch;
 	real_t       m_ganRatio;
 	real_t       m_ganGradEnhance;
 	

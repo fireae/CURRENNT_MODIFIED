@@ -33,6 +33,7 @@
 #include "helpers/misFuncs.hpp"
 #include <vector>
 #include <stdexcept>
+#include <algorithm>
 #include <cassert>
 
 #include <boost/foreach.hpp>
@@ -41,30 +42,414 @@
 #include <boost/random/mersenne_twister.hpp>
 
 
+/* ----- Definition for beam-search generation ----- */
+/*   Internal class defined for NeuralNetwork only   */
+/* --------------------------------------------------*/
+namespace beamsearch{
+
+    // Search state
+    template <typename TDevice>
+    class searchState
+    {
+	typedef typename TDevice::real_vector real_vector;
+	typedef typename Cpu::real_vector cpu_real_vector;
+	typedef typename TDevice::int_vector  int_vector;
+	typedef typename Cpu::int_vector      cpu_int_vector;
+
+    private:
+	int          m_stateID;    // ID of the current state
+	real_t       m_prob;       // probability
+	int          m_timeStep;
+	int_vector   m_stateTrace; // trace of the state ID
+	real_vector  m_probTrace;  // trace of the probability distribution
+
+	std::vector<int>         m_netStateSize;   // pointer in m_netState
+	std::vector<real_vector> m_netState;     // hidden variables of the network
+	
+	
+    public:
+	searchState();
+	searchState(std::vector<int> &netStateSize, const int maxSeqLength, const int stateNM);
+	~searchState();
+
+	const int      getStateID();
+	const real_t   getProb();
+	const int      getStateID(const int id);
+	const real_t   getProb(const int id);
+	const int      getTimeStep();
+	int_vector&    getStateTrace();
+	real_vector&   getProbTrace();
+	real_vector&   getNetState(const int id);
+	
+	void setStateID(const int stateID);
+	void setTimeStep(const int timeStep);
+	void setProb(const real_t prob);
+	void mulProb(const real_t prob);
+	void setStateTrace(const int time, const int stateID);
+	void setProbTrace(const int time, const real_t prob);
+	void setNetState(const int layerID, real_vector& state);
+	void liteCopy(searchState<TDevice>& sourceState);
+	void fullCopy(searchState<TDevice>& sourceState);
+	void print();
+    };
+
+    template <typename TDevice>
+    searchState<TDevice>::searchState()
+	: m_stateID(-1)
+	, m_prob(1.0)
+	, m_timeStep(-1)
+    {
+	m_netState.clear();
+	m_stateTrace.clear();
+	m_probTrace.clear();
+	m_netStateSize.clear();
+    }
+    
+    template <typename TDevice>
+    searchState<TDevice>::searchState(std::vector<int> &netStateSize,
+				      const int maxSeqLength, const int stateNM)
+	: m_stateID(-1)
+	, m_prob(0.0)
+	, m_timeStep(-1)
+    {
+	m_netState.resize(netStateSize.size());
+	
+	cpu_real_vector tmp;
+	int tmpBuf = 0;
+	for (int i = 0; i < netStateSize.size(); i++) {
+	    tmpBuf += netStateSize[i];
+	    tmp.resize(netStateSize[i], 0.0);
+	    m_netState[i] = tmp;
+	}
+
+	m_netStateSize = netStateSize;
+
+	cpu_real_vector tmp2(maxSeqLength * stateNM, 0.0);
+	m_probTrace = tmp2;
+
+	cpu_int_vector tmp3(maxSeqLength, 0);
+	m_stateTrace = tmp3;
+	
+    }
+    
+    template <typename TDevice>
+    searchState<TDevice>::~searchState()
+    {
+    }
+
+    template <typename TDevice>
+    const int searchState<TDevice>::getStateID()
+    {
+	return m_stateID;
+    }
+
+    template <typename TDevice>
+    const real_t searchState<TDevice>::getProb()
+    {
+	return m_prob;
+    }
+    
+    template <typename TDevice>
+    const int searchState<TDevice>::getTimeStep()
+    {
+	return m_timeStep;
+    }
+
+    template <typename TDevice>
+    const int searchState<TDevice>::getStateID(const int id)
+    {
+	if (id >= m_stateTrace.size())
+	    throw std::runtime_error("state ID is larger than expected");
+	return m_stateTrace[id];
+    }
+
+    template <typename TDevice>
+    typename searchState<TDevice>::int_vector& searchState<TDevice>::getStateTrace()
+    {
+	return m_stateTrace;
+    }
+
+    template <typename TDevice>
+    typename searchState<TDevice>::real_vector& searchState<TDevice>::getProbTrace()
+    {
+	return m_probTrace;
+    }
+
+    template <typename TDevice>
+    void searchState<TDevice>::liteCopy(searchState<TDevice>& sourceState)
+    {
+	m_stateID    = sourceState.getStateID();
+	m_prob       = sourceState.getProb();
+	m_timeStep   = sourceState.getTimeStep();
+	thrust::copy(sourceState.getStateTrace().begin(),
+		     sourceState.getStateTrace().end(), m_stateTrace.begin());
+	thrust::copy(sourceState.getProbTrace().begin(),
+		     sourceState.getProbTrace().end(), m_probTrace.begin());
+    }
+
+    template <typename TDevice>
+    void searchState<TDevice>::fullCopy(searchState<TDevice>& sourceState)
+    {
+	m_stateID    = sourceState.getStateID();
+	m_prob       = sourceState.getProb();
+	m_timeStep   = sourceState.getTimeStep();
+	thrust::copy(sourceState.getStateTrace().begin(),
+		     sourceState.getStateTrace().end(), m_stateTrace.begin());
+	thrust::copy(sourceState.getProbTrace().begin(),
+		     sourceState.getProbTrace().end(), m_probTrace.begin());
+	for (int i = 0; i < m_netStateSize.size(); i++){
+	    this->setNetState(i, sourceState.getNetState(i));
+	}
+    }
+
+    template <typename TDevice>
+    const real_t searchState<TDevice>::getProb(const int id)
+    {
+	if (id >= m_probTrace.size())
+	    throw std::runtime_error("prob ID is larger than expected");
+	return m_probTrace[id];
+    }
+
+    template <typename TDevice>
+    typename searchState<TDevice>::real_vector& searchState<TDevice>::getNetState(const int id)
+    {
+	if (id >= m_netStateSize.size())
+	    throw std::runtime_error("layer ID is larger than expected");
+	return m_netState[id];
+    }
+    
+    template <typename TDevice>
+    void searchState<TDevice>::setStateID(const int stateID)
+    {
+	m_stateID = stateID;
+    }
+
+    template <typename TDevice>
+    void searchState<TDevice>::setTimeStep(const int timeStep)
+    {
+	m_timeStep = timeStep;
+    }
+
+    template <typename TDevice>
+    void searchState<TDevice>::setProb(const real_t prob)
+    {
+	m_prob = prob;
+    }
+
+    template <typename TDevice>
+    void searchState<TDevice>::mulProb(const real_t prob)
+    {
+	if (prob < 1.1754944e-038f)
+	    m_prob += (-1e30f);
+	else
+	    m_prob += std::log(prob);
+    }
+    
+    template <typename TDevice>
+    void searchState<TDevice>::setStateTrace(const int time, const int stateID)
+    {
+	if (time >= m_stateTrace.size())
+	    throw std::runtime_error("setStateTrace, time is larger than expected");
+	m_stateTrace[time] = stateID;
+    }
+
+    template <typename TDevice>
+    void searchState<TDevice>::setProbTrace(const int time, const real_t prob)
+    {
+	if (time >= m_probTrace.size())
+	    throw std::runtime_error("setProbTrace, time is larger than expected");
+	m_probTrace[time] = prob;
+    }
+
+    template <typename TDevice>
+    void searchState<TDevice>::setNetState(const int layerID, real_vector& state)
+    {
+	if (layerID >= m_netStateSize.size())
+	    throw std::runtime_error("setNetState, time is larger than expected");
+	if (m_netStateSize[layerID] > 0)
+	    thrust::copy(state.begin(), state.begin()+m_netStateSize[layerID],
+			 m_netState[layerID].begin());
+    }
+
+    template <typename TDevice>
+    void searchState<TDevice>::print()
+    {
+	printf("%d:%d\t%f\t", m_timeStep, m_stateID, m_prob);
+	//printf("%d", m_stateTrace.size());
+	cpu_int_vector tmp = m_stateTrace;
+	for (int i = 0; i <= m_timeStep; i++)
+	    printf("%d ", tmp[i]);
+	printf("\n");
+    }
+    
+
+    //
+    struct sortUnit{
+	real_t prob;
+	int    idx;
+    };
+    
+    bool compareFunc(sortUnit& a, sortUnit& b){
+	return a.prob >= b.prob;
+    }
+
+    
+    // Macro search state
+    template <typename TDevice>
+    class searchEngine
+    {
+	typedef typename TDevice::real_vector real_vector;
+	typedef typename Cpu::real_vector cpu_real_vector;
+	typedef typename TDevice::int_vector  int_vector;
+	typedef typename Cpu::int_vector      cpu_int_vector;
+	
+    private:
+	std::vector<searchState<TDevice> > m_stateSeq;
+	std::vector<sortUnit> m_sortUnit;
+	
+	int m_beamSize;
+	int m_stateLength;
+	int m_validStateNum;
+	
+    public:
+	searchEngine(const int beamSize);	
+	~searchEngine();
+	
+
+	void setState(const int id, searchState<TDevice> &state);
+	void setSortUnit(const int id, searchState<TDevice> &state);
+	void setValidBeamSize(const int num);
+	
+	void addState(searchState<TDevice> &state);
+	void sortSet(const int size);
+	void printBeam();
+	
+	searchState<TDevice>& retrieveState(const int id);
+	int  getBeamSize();
+	int  getValidBeamSize();
+
+    };
+
+    
+    template <typename TDevice>
+    searchEngine<TDevice>::searchEngine(const int beamSize)
+	: m_beamSize(beamSize)
+	, m_stateLength(0)
+	, m_validStateNum(0)
+    {
+	m_stateSeq.clear();
+    }
+
+    template <typename TDevice>
+    searchEngine<TDevice>::~searchEngine()
+    {
+    }
+
+    template <typename TDevice>
+    void searchEngine<TDevice>::addState(searchState<TDevice> &state)
+    {
+	sortUnit tmp;
+	m_stateSeq.push_back(state);
+	m_sortUnit.push_back(tmp);
+    }
+
+    template <typename TDevice>
+    void searchEngine<TDevice>::setState(const int id, searchState<TDevice> &state)
+    {
+	if (id > m_stateSeq.size())
+	    throw std::runtime_error("beam search state not found");
+	m_stateSeq[id].fullCopy(state);
+    }
+    
+    template <typename TDevice>
+    void searchEngine<TDevice>::setSortUnit(const int id, searchState<TDevice> &state)
+    {
+	if (id > m_sortUnit.size())
+	    throw std::runtime_error("beam search state not found");
+	m_sortUnit[id].prob = state.getProb();
+	m_sortUnit[id].idx  = id;
+    }
+
+    template <typename TDevice>
+    void searchEngine<TDevice>::setValidBeamSize(const int num)
+    {
+	m_validStateNum = num;
+    }
+
+    template <typename TDevice>
+    int searchEngine<TDevice>::getBeamSize()
+    {
+	return m_beamSize;
+    }
+
+    template <typename TDevice>
+    int searchEngine<TDevice>::getValidBeamSize()
+    {
+	return m_validStateNum;
+    }
+
+    template <typename TDevice>
+    searchState<TDevice>& searchEngine<TDevice>::retrieveState(const int id)
+    {
+	if (id > m_stateSeq.size())
+	    throw std::runtime_error("beam search state not found");
+	return m_stateSeq[id];
+    }
+	
+    template <typename TDevice>
+    void searchEngine<TDevice>::sortSet(const int size)
+    {
+	m_validStateNum = (m_beamSize < size)?(m_beamSize):(size);
+	std::sort(m_sortUnit.begin(), m_sortUnit.begin() + size, compareFunc);
+	for (int i = 0; i < m_validStateNum; i++){
+	    if ((m_beamSize + m_sortUnit[i].idx) < m_stateSeq.size())
+		m_stateSeq[i] = m_stateSeq[m_beamSize + m_sortUnit[i].idx];
+	    else{
+		printf("beam search %d unit invalid", m_beamSize + m_sortUnit[i].idx);
+		throw std::runtime_error("beam search sort error");
+	    }
+	}
+    }
+
+    template <typename TDevice>
+    void searchEngine<TDevice>::printBeam()
+    {
+	for (int i = 0; i < m_validStateNum; i++)
+	    m_stateSeq[i].print();
+    }
+}
+
+namespace internal {
+    
+    bool invalidMiddleMDN(const std::string layerType){
+	// check whether the next layer is skip layer
+	return (layerType !="skipini" && layerType!="skipadd" && layerType!="skipcat" &&
+		layerType !="operator");
+    }
+}
+
+/* ----- Definition for NeuralNetwork  ----- */
+/* ------------------------------------------*/
 template <typename TDevice>
 NeuralNetwork<TDevice>::NeuralNetwork(
  const helpers::JsonDocument &jsonDoc,
  int parallelSequences, 
  int maxSeqLength,
- int chaDim,
- int maxTxtLength,
  int inputSizeOverride,
  int outputSizeOverride
  )
 {
     try {
-
-	//
+	
+	/* ----- initialization ----- */
 	const Configuration &config = Configuration::instance();
 	
         // check the layers and weight sections
         if (!jsonDoc->HasMember("layers"))
             throw std::runtime_error("Missing section 'layers'");
         rapidjson::Value &layersSection  = (*jsonDoc)["layers"];
-
         if (!layersSection.IsArray())
             throw std::runtime_error("Section 'layers' is not an array");
-
         helpers::JsonValue weightsSection;
         if (jsonDoc->HasMember("weights")) {
             if (!(*jsonDoc)["weights"].IsObject())
@@ -72,48 +457,90 @@ NeuralNetwork<TDevice>::NeuralNetwork(
             weightsSection = helpers::JsonValue(&(*jsonDoc)["weights"]);
         }
 	
-	int cnt = 0;
 	
 	// Add 1220, support to the FeedBackLayer
-	std::vector<int> feedBacklayerId; // layer Idx for the FeedBackLayer
+	std::vector<int> feedBacklayerId; // Idx of all the feedBackLayers
 	feedBacklayerId.clear();
-	bool flagMDNOutput      = false;
 	
-	m_firstFeedBackLayer    = -1;
-	m_middlePostOutputLayer = -1;
-	m_featMatchLayer        = -1;
-	m_trainingEpoch         = -1;
-	m_trainingFrac          = -1;
-	m_trainingState         = -1;
-        // extract the layers
-        for (rapidjson::Value::ValueIterator layerChild = layersSection.Begin(); 
-	     layerChild != layersSection.End(); 
-	     ++layerChild, cnt++){
-	    
-            printf("\nLayer (%d)", cnt);
-	    
-	    // check the layer child type
-            if (!layerChild->IsObject())
-                throw std::runtime_error("A layer section in the 'layers' array is not an object");
+	m_firstFeedBackLayer    = -1;     // Idx of the first feedback layer
+	m_middlePostOutputLayer = -1;     // Idx of the PostOutputLayer inside the network
+	m_featMatchLayer        = -1;     // Idx of the featMatching layer (for GAN)
+	m_vaeLayer              = -1;     // Idx of the VAE interface layer
+	int tmp_wavNetCore      = -1;     // Idx of the first waveNet core module (for waveNet)
+	bool flagSaveMemWavNet  = false;  // Flag to save the mem usage of wavenet in generation
+	int outputLayerIdx      = -1;     // Idx of the output layer (before postoutput)           
+	
+	m_trainingEpoch         = -1;     // initialize the training epoch counter
+	m_trainingFrac          = -1;     // initialize the training data counter
+	m_trainingState         = -1;     // initialize the training state of the network
 
-            // extract the layer type and create the layer
+	/* ----- processing loop ----- */
+	// preloop to determine type o fnetwork
+	int counter = 0;
+        for (rapidjson::Value::ValueIterator layerChild = layersSection.Begin(); 
+	     layerChild != layersSection.End();
+	     ++layerChild, counter++){
+	    
+            if (!layerChild->IsObject())
+                throw std::runtime_error("A layer in the 'layers' array is not an object");
             if (!layerChild->HasMember("type"))
                 throw std::runtime_error("Missing value 'type' in layer description");
+            std::string layerType = (*layerChild)["type"].GetString();
+
+	    // logging information
+	    if (layerType == "feedback"){
+		// feedback layer
+		feedBacklayerId.push_back(counter);
+		if (m_firstFeedBackLayer < 0) m_firstFeedBackLayer = counter;
+	    }else if (layerType == "middleoutput"){
+		// for GAN
+		m_middlePostOutputLayer = counter;
+	    }else if (layerType == "featmatch"){
+		// for GAN
+		m_featMatchLayer = counter;
+	    }else if (layerType == "vae"){
+		// for vae
+		m_vaeLayer       = counter;
+	    }else if (layerType == "wavnetc" && tmp_wavNetCore < 0){
+		// for the wavenet component
+		tmp_wavNetCore   = counter;
+
+		// if this is a wavenet and the generation stage requires
+		// loop over time, turn on the mem-save mode
+		if (!config.trainingMode() && m_firstFeedBackLayer > 0)
+		    flagSaveMemWavNet = true;
+	    }
+	}
+	outputLayerIdx = counter - 2; // an output before the postoutput layer
+
+	// loop to build each layer
+	counter = 0;
+        for (rapidjson::Value::ValueIterator layerChild = layersSection.Begin(); 
+	     layerChild != layersSection.End();
+	     ++layerChild, counter++){
 	    
+            printf("\nLayer (%d)", counter);
+	    
+	    // get layer name and type
             std::string layerName = (*layerChild)["name"].GetString();
 	    printf(" [ %s ] ", layerName.c_str());
             std::string layerType = (*layerChild)["type"].GetString();
 	    printf(" %s ", layerType.c_str());
 
-            // override input/output sizes
+            // update the input layer size
+	    // (I don't know why the original CURRENNT does this, by Xin)
+	    // this part is transparent to the user
             if (inputSizeOverride > 0 && layerType == "input"){
-		// with WE 
+		// for word embedding, input layer size can be changed here
 		if (config.weUpdate() && config.trainingMode())
 		    inputSizeOverride += (config.weDim() - 1);
+		// overwrite the layer size
 		(*layerChild)["size"].SetInt(inputSizeOverride);
             }
+
 	    
-	    /*  Does not work yet, need another way to identify a) postoutput layer (last!) and 
+	    /*  Original code of CURRENNT, I don't know why this is necessary
+		Does not work yet, need another way to identify a) postoutput layer (last!) and 
                 then the corresponging output layer and type!
 		if (outputSizeOverride > 0 && (*layerChild)["name"].GetString() == "output") {
 		(*layerChild)["size"].SetInt(outputSizeOverride);
@@ -122,23 +549,26 @@ NeuralNetwork<TDevice>::NeuralNetwork(
 		(*layerChild)["size"].SetInt(outputSizeOverride);
 		}
 	    */
-	    
+
+	    // create a layer
             try {
+		
             	layers::Layer<TDevice> *layer;
 		
-		/* Add 02-24 Wang for Residual Network*/
-		/*
+		/* Original code of CURRENNT
                 if (m_layers.empty())
-		layer = LayerFactory<TDevice>::createLayer(layerType, 
-		&*layerChild, weightsSection, parallelSequences, maxSeqLength);
+		   layer = LayerFactory<TDevice>::createLayer(layerType, 
+		           &*layerChild, weightsSection, parallelSequences, maxSeqLength);
                 else
-                    layer = LayerFactory<TDevice>::createLayer(layerType, 
-		    &*layerChild, weightsSection, 
-		    parallelSequences, maxSeqLength, m_layers.back().get()); */
+		   layer = LayerFactory<TDevice>::createLayer(layerType, 
+		           &*layerChild, weightsSection, parallelSequences, maxSeqLength, 
+                           m_layers.back().get()); */
 		
-		// first layer
-                if (m_layers.empty()){
-		    
+		
+                if (m_layers.empty())
+		{
+		    // create the first layer
+		    // check the layer type
 		    if (layerType == "skipadd"           || layerType == "skipini"       ||
 			layerType == "skipcat"           ||
 			layerType == "skippara_logistic" || layerType == "skippara_relu" || 
@@ -148,19 +578,20 @@ NeuralNetwork<TDevice>::NeuralNetwork(
 			printf("SkipAdd, SkipPara can not be the first hidden layer");
 			throw std::runtime_error("Error in network.jsn: layer type error\n");
 		    }
-		    
+		    // create the layer
 		    layer = LayerFactory<TDevice>::createLayer(
 				layerType,     &*layerChild, 
 				weightsSection, parallelSequences, 
-				maxSeqLength,   chaDim,   maxTxtLength);
+				maxSeqLength);
 
-		}else if(layerType == "skipadd"           || layerType == "skipini"       ||
-			 layerType == "skipcat"           ||
-			 layerType == "skippara_logistic" || layerType == "skippara_relu" || 
-			 layerType == "skippara_tanh"     || 
-			 layerType == "skippara_identity")
+		}
+		else if(layerType == "skipadd"           || layerType == "skipini"       ||
+			layerType == "skipcat"           ||
+			layerType == "skippara_logistic" || layerType == "skippara_relu" || 
+			layerType == "skippara_tanh"     || 
+			layerType == "skippara_identity")
 		{
-
+		    
 		    // SkipLayers: all the layers that link to the current skip layer
 		    //  here, it includes the last skip layer and the previous normal 
 		    //  layer connected to this skip layer
@@ -175,87 +606,103 @@ NeuralNetwork<TDevice>::NeuralNetwork(
 		    //   check it in SkipParaLayer.cu
 
 
-		    if (m_skipAddLayers.size() == 0){
+		    if (m_skipAddLayers.size() == 0)
+		    {
 			if (layerType == "skipini" || layerType == "skipadd" ||
-			    layerType == "skipcat"){
+			    layerType == "skipcat")
+		        {
 			    // do nothing
-			}else{
+			}
+			else
+			{
 			    // skippara requires previous skip layers
 			    throw std::runtime_error("Error: no skipini layer been found");
 			}
-		    }else{
-			if (layerType == "skipini"){
+		    }
+		    else
+		    {
+			if (layerType == "skipini")
+			{
 			    // do nothing
-			}else if (layerType == "skipadd" || layerType == "skipcat"){
-			    BOOST_FOREACH (layers::Layer<TDevice>* skiplayer, m_skipAddLayers){
+			}
+			else if (layerType == "skipadd" || layerType == "skipcat")
+			{
+			    // skipadd and skipcat can take multiple skiplayers
+			    BOOST_FOREACH (layers::Layer<TDevice>* skiplayer, m_skipAddLayers)
+			    {
 				SkipLayers.push_back(skiplayer);
 			    }
-			}else{
-			    // skippara
+			}
+			else{
+			    // skippara (highway block) only takes one skiplayer as input source
 			    SkipLayers.push_back(m_skipAddLayers.back());
 			}
 		    }
 
-		    // Add the previous normal layer
+		    // a skiplayer can additionally take the previous layer as input source.
+		    // note, this layer may be a normal layer or a skip layer. 
 		    SkipLayers.push_back(m_layers.back().get());
+		    // I should check whether the previous layer is still a skip layer
 		    
 		    if (layerType == "skipadd" || layerType == "skipini" || layerType == "skipcat")
+		    {
 			layer = LayerFactory<TDevice>::createSkipAddLayer(
 				  layerType,     &*layerChild,
 				  weightsSection, parallelSequences, 
 				  maxSeqLength,   SkipLayers);
+		    }
 		    else
+		    {
 			layer = LayerFactory<TDevice>::createSkipParaLayer(
 				  layerType,     &*layerChild,
 				  weightsSection, parallelSequences, 
 				  maxSeqLength,   SkipLayers);
-		    
-		    // add the skipadd layer to Network buffer
+		    }
+		    // add the skipadd layer to the buffer of the network
 		    m_skipAddLayers.push_back(layer);
 		
-		}else{
+		}
+		else
+		{
 		    // other layers types
                     layer = LayerFactory<TDevice>::createLayer(
 			       layerType,      &*layerChild,
 			       weightsSection, parallelSequences, 
-			       maxSeqLength,   chaDim, maxTxtLength, 
+			       maxSeqLength, 
 			       m_layers.back().get());
-		    
-		    if (layerType == "mdn")
-			flagMDNOutput = true;
 		}
 		
-                m_layers.push_back(boost::shared_ptr<layers::Layer<TDevice> >(layer));
 
-		// Write down the ID of specific layers
-		if (layerType == "feedback"){
-		    // feedback layer
-		    feedBacklayerId.push_back(cnt);
-		    m_firstFeedBackLayer    = cnt;
-		}else if (layerType == "middleoutput"){
-		    // for GAN
-		    m_middlePostOutputLayer = cnt;
-		}else if (layerType == "featmatch"){
-		    // for GAN
-		    m_featMatchLayer = cnt;
+		// post processing for the layer
+		{
+		    // for wavenet, reduce the memory in generation
+		    if (flagSaveMemWavNet){
+			// only save the memory for layers between the feedback and output layer
+			if (counter < outputLayerIdx && counter > m_firstFeedBackLayer){
+			    if (counter != Configuration::instance().outputFromWhichLayer())
+				layer->reduceOutputBuffer();
+			}
+		    }
+		    
+		    // other optimization methods can be used for other types of network
 		}
-		
+
+		// save the layer
+                m_layers.push_back(boost::shared_ptr<layers::Layer<TDevice> >(layer));
+	       		
             }
             catch (const std::exception &e) {
                 throw std::runtime_error(std::string("Could not create layer: ") + e.what());
             }
-        }
+        } // Processing loop done
 	
 	
-	
-        // check if we have at least one input, one output and one post output layer
+	/* ----- post-processing check ----- */
         if (m_layers.size() < 3)
             throw std::runtime_error("Error in network.jsn: there must be a hidden layer\n");
-
         // check if only the first layer is an input layer
         if (!dynamic_cast<layers::InputLayer<TDevice>*>(m_layers.front().get()))
             throw std::runtime_error("The first layer is not an input layer");
-
         for (size_t i = 1; i < m_layers.size(); ++i) {
             if (dynamic_cast<layers::InputLayer<TDevice>*>(m_layers[i].get()))
                 throw std::runtime_error("Multiple input layers defined");
@@ -273,18 +720,42 @@ NeuralNetwork<TDevice>::NeuralNetwork(
 	    layers::PostOutputLayer<TDevice>* midPOLayer;
 	    for (size_t i = 0; i < m_layers.size()-1; ++i) {
 		midPOLayer = dynamic_cast<layers::PostOutputLayer<TDevice>*>(m_layers[i].get());
+
+	
 		if (midPOLayer && midPOLayer->type() == "middleoutput"){
+		    // tell the last postoutput layer about the existence of middleoutput
 		    lastPOLayer->linkMiddleOutptu(midPOLayer);
-		}else if (midPOLayer && midPOLayer->type() == "featmatch"){
-		    // do nothing
+		    midPOLayer->setPostLayerType(NN_POSTOUTPUTLAYER_MIDDLEOUTPUT);
+		    if (internal::invalidMiddleMDN(m_layers[i+1]->type()))
+			throw std::runtime_error("No skipini/add/cat layer after middleoutput");
+		    
+		}else if (midPOLayer && midPOLayer->type() == "featmatch" && flagNetworkForGAN()){
+		    midPOLayer->setPostLayerType(NN_POSTOUTPUTLAYER_FEATMATCH);
+		    if (internal::invalidMiddleMDN(m_layers[i+1]->type()))
+			throw std::runtime_error("No skipini/add/cat layer after featmatch");
+		    
+		}else if (midPOLayer && midPOLayer->type() == "mdn" && flagNetworkForGAN()){
+		    midPOLayer->setPostLayerType(NN_POSTOUTPUTLAYER_NOTLASTMDN);
+		    if (internal::invalidMiddleMDN(m_layers[i+1]->type()))
+			throw std::runtime_error("No skipini/add/cat layer after MDN(GAN)");
+		    
+		}else if (midPOLayer && midPOLayer->type() == "vae"){
+		    midPOLayer->setPostLayerType(NN_POSTOUTPUTLAYER_VAEKL);
+		    if (flagNetworkForGAN())
+			throw std::runtime_error("GAN + VAE is not implemented");
+		    
+		    if (internal::invalidMiddleMDN(m_layers[i+1]->type()))
+			throw std::runtime_error("No skipini/add/cat layer after VAE");
+		    
 		}else if (midPOLayer){
 		    throw std::runtime_error("Multiple post output layers defined");
+
 		}else{
-		    //
-		}
+		    // no other postoutput layer
+		}		    
 	    }
 	}
-
+	
         // check if two layers have the same name
         for (size_t i = 0; i < m_layers.size(); ++i) {
             for (size_t j = 0; j < m_layers.size(); ++j) {
@@ -297,10 +768,13 @@ NeuralNetwork<TDevice>::NeuralNetwork(
 	
 	// Link the target layer with the feedback layer
 	if (!feedBacklayerId.empty()){
+	    if (flagNetworkForGAN())
+		throw std::runtime_error("GAN + Feedback is not implemented");
+
 	    for (size_t i = 0; i<feedBacklayerId.size(); i++){
 		m_layers[feedBacklayerId[i]]->linkTargetLayer(*(m_layers.back().get()));
 	    }
-	    // check the bi-directional rnn
+	    // check the bi-directional RNN after the feedback layer
 	    for (size_t i = m_firstFeedBackLayer; i < m_layers.size()-1; i++){
 		if (m_layers[i]->type()==std::string("brnn") ||
 		    m_layers[i]->type()==std::string("blstm")){
@@ -315,6 +789,15 @@ NeuralNetwork<TDevice>::NeuralNetwork(
 		}
 	    }
 	}
+
+	// Link the wavnet copmonents 
+	if (tmp_wavNetCore > 0){
+	    for (size_t i = 0; i < m_layers.size(); ++i) {
+		if (m_layers[i]->type() == std::string("wavnetc")){
+		    m_layers[i]->linkTargetLayer(*(m_layers[tmp_wavNetCore].get()));
+		}
+	    }
+	}
 	
     }
     catch (const std::exception &e) {
@@ -326,6 +809,17 @@ template <typename TDevice>
 NeuralNetwork<TDevice>::~NeuralNetwork()
 {
 }
+
+
+template <typename TDevice>
+bool NeuralNetwork<TDevice>::flagNetworkForGAN() const{
+    // Whether this network is for GAN
+    // output: 
+    //    true: this network is for training GAN
+    //   false: a normal NN
+    return (m_middlePostOutputLayer > 0);
+}
+
 
 template <typename TDevice>
 const std::vector<boost::shared_ptr<layers::Layer<TDevice> > >& NeuralNetwork<TDevice>::layers() const
@@ -435,8 +929,8 @@ void NeuralNetwork<TDevice>::computeForwardPass(const int curMaxSeqLength,
 	    layer->computeForwardPass(m_trainingState);
 
 	// For GAN with featMatch, do additional propagation
-	if (m_trainingState == NN_STATE_GAN_GEN_FEATMAT &&
-	    m_middlePostOutputLayer > 0 && m_featMatchLayer > 0){
+	if (m_trainingState == NN_STATE_GAN_GEN_FEATMAT && flagNetworkForGAN() && 
+	    m_featMatchLayer > 0){
 	    m_trainingState = NN_STATE_GAN_GEN; // return to the normal state
 	    for (int i = m_middlePostOutputLayer; i < m_layers.size(); i++)
 		m_layers[i]->computeForwardPass(m_trainingState);
@@ -468,24 +962,30 @@ void NeuralNetwork<TDevice>::computeForwardPass(const int curMaxSeqLength,
 	}else{
 	    
 	}*/
+	
+	// Ask the postoutputLayer to retrieve the training data for feedback
+	// postOutputLayer loads the target training data during loadSequences()
 	this->postOutputLayer().retrieveFeedBackData();
 
-	//
+	// Depends on the training method, start the training
 	int methodCode;
 	switch (scheduleSampOpt){
+
+	 // Case0: use ground truth directly, without dropout or sampling
 	case NN_FEEDBACK_GROUND_TRUTH:
 	    {
-		// Case0: use ground truth directly
 		BOOST_FOREACH (boost::shared_ptr<layers::Layer<TDevice> > &layer, m_layers)
 		    layer->computeForwardPass(m_trainingState);
 		break;
 	    }
+
+	// Case 1 & 2: schedule dropout, set data to 1/N (case 1) or 0 (case 2)
 	case NN_FEEDBACK_DROPOUT_1N:
 	case NN_FEEDBACK_DROPOUT_ZERO:
 	    {
-		// Case 1 & 2: schedule back-off, using either 1/N (case 1) or zero (case 2)
 		real_t threshold = ((real_t)scheduleSampPara)/100;
 
+		// Prepare the random vector
 		Cpu::real_vector randNum;
 		randNum.reserve(curMaxSeqLength);
 		for (size_t i = 0; i < curMaxSeqLength; ++i){
@@ -495,24 +995,50 @@ void NeuralNetwork<TDevice>::computeForwardPass(const int curMaxSeqLength,
 			randNum.push_back(1);
 		    }
 		}
-		
-		// drop out the feedback data
-		typename TDevice::real_vector temp = randNum;
-		this->postOutputLayer().retrieveFeedBackData(temp, scheduleSampOpt);
-		// ComputeForward
-		BOOST_FOREACH (boost::shared_ptr<layers::Layer<TDevice> > &layer, m_layers)
-		    layer->computeForwardPass(m_trainingState);
+
+		//
+		if (m_vaeLayer > 0){
+		    // If vae exists, don't dropout until after VAE layers
+		    // ComputeForward
+		    BOOST_FOREACH (boost::shared_ptr<layers::Layer<TDevice> > &layer, m_layers){
+			layer->computeForwardPass(m_trainingState);
+			if (layer->type() == "vae") break;
+		    }
+		    // Drop out the feedback data randomly
+		    typename TDevice::real_vector temp = randNum;
+		    this->postOutputLayer().retrieveFeedBackData(temp, scheduleSampOpt);
+		    // computeforward after VAE layers
+		    int cnt = 0;
+		    BOOST_FOREACH (boost::shared_ptr<layers::Layer<TDevice> > &layer, m_layers){
+			if (cnt > m_vaeLayer)
+			    layer->computeForwardPass(m_trainingState);
+			cnt++;
+		    }
+		    
+		}else{
+		    // Normal cases, dropout before feedback
+		    // Drop out the feedback data randomly
+		    typename TDevice::real_vector temp = randNum;
+		    this->postOutputLayer().retrieveFeedBackData(temp, scheduleSampOpt);
+
+		    // ComputeForward
+		    BOOST_FOREACH (boost::shared_ptr<layers::Layer<TDevice> > &layer, m_layers)
+			layer->computeForwardPass(m_trainingState);
+		}
 		break;
 	    }
+
+	// Case 3,  4, 5: schedule sampling
+	// use soft vector as feedback (case 3) or one-hot (case 4), or random output as feedback
 	case NN_FEEDBACK_SC_SOFT:
 	case NN_FEEDBACK_SC_MAXONEHOT:
 	case NN_FEEDBACK_SC_RADONEHOT:
 	    {
-		// Case 3 & 4: use soft vector as feedback (case 3) or one-hot (case 4)
+		
 		real_t sampThreshold;
 		methodCode = scheduleSampOpt;
 		
-		// Forward computation for layers below Feedback
+		// Forward computation for layers before the Feedback layer
 		int cnt = 0;
 		BOOST_FOREACH (boost::shared_ptr<layers::Layer<TDevice> > &layer, m_layers)
 		{
@@ -520,6 +1046,7 @@ void NeuralNetwork<TDevice>::computeForwardPass(const int curMaxSeqLength,
 		    layer->computeForwardPass(m_trainingState);
 		    cnt++;
 		}
+		
 		// Determine the threshold 
 		if (scheduleSampPara > 0){
 		    // randomly use the generated sample
@@ -542,6 +1069,8 @@ void NeuralNetwork<TDevice>::computeForwardPass(const int curMaxSeqLength,
 		    BOOST_FOREACH (boost::shared_ptr<layers::Layer<TDevice> > &layer, m_layers)
 		    {
 			if (cnt >= m_firstFeedBackLayer){
+			    // For Rnn and LSTM, prepareStepGeneration is necessary
+			    // to prepare the data matrix per frame
 			    layer->prepareStepGeneration(timeStep); 
 			    layer->computeForwardPass(timeStep, m_trainingState);    
 			}
@@ -590,6 +1119,7 @@ void NeuralNetwork<TDevice>::computeForwardPassGen(const int curMaxSeqLength,
     // feedback layer exists
     }else{
 
+	// Prepare the random seed
 	static boost::mt19937 *gen = NULL;
 	if (!gen) {
 	    gen = new boost::mt19937;
@@ -597,28 +1127,37 @@ void NeuralNetwork<TDevice>::computeForwardPassGen(const int curMaxSeqLength,
 	}
 	boost::random::uniform_real_distribution<real_t> dist(0, 1);
 
+	
 	int scheduleSampOpt = config.scheduleSampOpt();
 	int scheduleSampPara= config.scheduleSampPara();
 	printf("SSAMPOpt: %d, SSAMPPara: %d\n", scheduleSampOpt, scheduleSampPara);
 	
-	int methodCode;
-	real_t sampThreshold;
-	int cnt = 0;
-	// layers below Feedback, use normal computation
+	int    methodCode    = 0;
+	real_t sampThreshold = 0.0;
+	int    cnt           = 0;
+	//int    beamSize      = 0;
+	
+	// Forward computation for layers before Feedback
 	BOOST_FOREACH (boost::shared_ptr<layers::Layer<TDevice> > &layer, m_layers){
 	    if (cnt == m_firstFeedBackLayer) break; 
 	    layer->computeForwardPass(m_trainingState);
 	    cnt++;
 	}
-	
-	// determine the sampling parameter
+
+	// Parameter for genreation
 	switch (scheduleSampOpt){
+
+	// Case 0: use probability vector for feedback
+	//         1. native training approach
+	//         2. schedule sampling (soft-feedback training)
 	case NN_FEEDBACK_GROUND_TRUTH:
 	case NN_FEEDBACK_SC_SOFT:
 	    // always uses the soft vector (default option)
 	    sampThreshold  = 1;
 	    methodCode     = NN_FEEDBACK_GROUND_TRUTH;
 	    break;
+
+	// Case 1: use one hot vector
 	case NN_FEEDBACK_SC_MAXONEHOT:
 	    if (scheduleSampPara > 0){
 		sampThreshold = 1;
@@ -627,9 +1166,10 @@ void NeuralNetwork<TDevice>::computeForwardPassGen(const int curMaxSeqLength,
 		sampThreshold = (-1.0 * (real_t)scheduleSampPara / 100.0);
 		methodCode = NN_FEEDBACK_SC_MAXONEHOT;
 	    }
-	    
 	    // use the one-hot best
 	    break;
+	    
+	// Case 2: dropout
 	case NN_FEEDBACK_DROPOUT_1N:
 	    methodCode = NN_FEEDBACK_DROPOUT_1N;
 	    sampThreshold = ((real_t)scheduleSampPara)/100;
@@ -638,37 +1178,176 @@ void NeuralNetwork<TDevice>::computeForwardPassGen(const int curMaxSeqLength,
 	    methodCode = NN_FEEDBACK_DROPOUT_ZERO;
 	    sampThreshold = ((real_t)scheduleSampPara)/100;
 	    break;
-	    //
+	    
+	// Case 3: beam search
+	case NN_FEEDBACK_BEAMSEARCH:
+	    methodCode = NN_FEEDBACK_SC_MAXONEHOT;
+	    //beamSize   = (int)scheduleSampPara;
+	    break;
 	}
-		    
-	// layer above feedback
-	for (int timeStep = 0, cnt = 0; timeStep < curMaxSeqLength; timeStep ++, cnt = 0){
-	    BOOST_FOREACH (boost::shared_ptr<layers::Layer<TDevice> > &layer, m_layers){
-		if (cnt >= m_firstFeedBackLayer){
-		    layer->prepareStepGeneration(timeStep); // prepare the matrix (for rnn, lstm)
-		    layer->computeForwardPass(timeStep, m_trainingState);    // compute for 1 frame
+
+
+	//Generation
+	// Normal generation (Greedy)
+	if (scheduleSampOpt != NN_FEEDBACK_BEAMSEARCH){
+	    for (int timeStep = 0, cnt = 0; timeStep < curMaxSeqLength; timeStep ++, cnt = 0){
+		BOOST_FOREACH (boost::shared_ptr<layers::Layer<TDevice> > &layer, m_layers){
+		    if (cnt >= m_firstFeedBackLayer){
+			// prepare the matrix (for rnn, lstm)
+			layer->prepareStepGeneration(timeStep);
+			// compute for 1 frame
+			layer->computeForwardPass(timeStep, m_trainingState);    
+		    }
+		    cnt++;
 		}
-		cnt++;
+		
+		// Generate the output from MDN
+		olm = outMDNLayer();
+		if (olm != NULL) olm->getOutput(timeStep, generationOpt);
+		
+		// Feedback the data
+		if (dist(*gen) < sampThreshold){
+		    this->postOutputLayer().retrieveFeedBackData(timeStep, 0);
+		}else{
+		    this->postOutputLayer().retrieveFeedBackData(timeStep, methodCode);
+		    printf("%d ", timeStep);
+		}
 	    }
+	    
+	// Beam search generation
+	}else{
+	    
+	    int stateNum;       // number of states per time step
+	    int layerCnt;       // counter of the hidden layers
+	    int beamSize   = (int)scheduleSampPara; // size of beam
+	    
+	    /* ----- pre-execution check  ----- */
+	    if (beamSize < 0)
+		throw std::runtime_error("beam size cannot be < 1");
+	    if (m_firstFeedBackLayer < 0)
+		throw std::runtime_error("No need to use beam size for network without feedback");
+	    olm = outMDNLayer();
+	    if (olm == NULL)
+		throw std::runtime_error("Beam size is used for non-MDN output layer");
+	    stateNum = olm->mdnParaDim();
+	    if (beamSize >= stateNum)
+		throw std::runtime_error("Beam size is larger than the number of state");
+
+	    /* ----- initialization ----- */
+	    // count the number of hidden elements in the network
+	    std::vector<int> netStateSize;
+	    int hidEleNum = 0;	// number of hidden elements in the network
+	    
+	    layerCnt  = 0;
+	    BOOST_FOREACH (boost::shared_ptr<layers::Layer<TDevice> > &layer, m_layers){
+		if (layerCnt >= m_firstFeedBackLayer){
+		    netStateSize.push_back(layer->hiddenStateSize());
+		    hidEleNum += layer->hiddenStateSize();
+		}
+		layerCnt++;
+	    }
+	    // allocate memory spaces for searching 
+	    beamsearch::searchState<TDevice>  bmState(netStateSize, curMaxSeqLength, stateNum);
+	    beamsearch::searchEngine<TDevice> bmEngine(beamSize);
+	    for (int i = 0; i < beamSize + beamSize * stateNum; i++)
+		bmEngine.addState(bmState);
+	    bmEngine.setValidBeamSize(1);
+	    std::vector<beamsearch::sortUnit> preSortVec(stateNum);
+	    // allocate memory spaces for hidden features of network
+	    Cpu::real_vector netStateTmpTmp(hidEleNum, 0.0);
+	    typename TDevice::real_vector netStateTmp = netStateTmpTmp;
+
 
 	    
-	    // if the output is MDN, we need to do one step further to get the output
-	    olm = outMDNLayer();
-	    if (olm != NULL)
-		olm->getOutput(timeStep, generationOpt); // infer the output from MDN
+	    /* ----- Search loop ----- */
+	    for (int timeStep = 0; timeStep < curMaxSeqLength; timeStep++){
+
+		// Count the extended number of states
+		int stateCnt = 0;
 		
-	    if (dist(*gen) < sampThreshold){
-		this->postOutputLayer().retrieveFeedBackData(timeStep, 0);
-	    }else{
-		this->postOutputLayer().retrieveFeedBackData(timeStep, methodCode);
-		printf("%d ", timeStep);
+		// loop over beam
+		for (int searchPT = 0; searchPT < bmEngine.getValidBeamSize(); searchPT ++){
+
+		    // get the state to be extended
+		    beamsearch::searchState<TDevice>& bmState2 = bmEngine.retrieveState(searchPT);
+		    
+		    // prepare states from bmState2
+		    bmState.liteCopy(bmState2);
+		    
+		    // set the network state
+		    // 1. set the feedback data
+		    if (timeStep > 0)
+			this->postOutputLayer().setFeedBackData(timeStep-1, bmState2.getStateID());
+		    
+		    // 2. set the hidde layers and compute
+		    layerCnt = 0;
+		    BOOST_FOREACH (boost::shared_ptr<layers::Layer<TDevice> > &layer, m_layers){
+			if (layerCnt >= m_firstFeedBackLayer){
+			    int layerID = layerCnt - m_firstFeedBackLayer;
+			    layer->prepareStepGeneration(timeStep);
+			    if (timeStep > 0)
+				layer->setHiddenState(timeStep-1, bmState2.getNetState(layerID));
+			    layer->computeForwardPass(timeStep, m_trainingState);
+
+			    // store the state of network in new states 
+			    // this should be in step3. but this is more efficient
+			    layer->retrieveHiddenState(timeStep, netStateTmp);
+			    bmState.setNetState(layerID, netStateTmp);
+			}
+			layerCnt++;
+		    }
+		    // 3. pre-select the states to be explored
+		    for (int newStateID = 0; newStateID < stateNum; newStateID++){
+			preSortVec[newStateID].prob = olm->retrieveProb(timeStep, newStateID);
+			preSortVec[newStateID].idx  = newStateID;
+		    }
+		    std::sort(preSortVec.begin(), preSortVec.end(), beamsearch::compareFunc);
+		    
+		    // 4. add new search state
+		    //  probability before this step
+		    for (int i = 0; i < bmEngine.getBeamSize(); i++){
+			
+			bmState.setStateID(preSortVec[i].idx);
+			bmState.setStateTrace(timeStep, preSortVec[i].idx);
+			bmState.setTimeStep(timeStep);
+			if (preSortVec[i].prob < 1e-15f)
+			    continue; // trim the zero probability path
+			else
+			    bmState.setProb(bmState2.getProb() + std::log(preSortVec[i].prob));
+			bmState.setProbTrace(timeStep, preSortVec[i].prob);
+			bmEngine.setState(bmEngine.getBeamSize() + stateCnt, bmState);
+			bmEngine.setSortUnit(stateCnt, bmState);
+			stateCnt++;
+		    }
+		}	
+		bmEngine.sortSet(stateCnt);
+		bmEngine.printBeam();
 	    }
-	}
-	/*olm = outMDNLayer();
-	if (olm != NULL){	
-	    olm->getOutput(generationOpt);
-	    }*/
-    }
+	    
+	    // Finish the beam search, finally, generate
+	    bmEngine.printBeam();
+	    bmState.fullCopy(bmEngine.retrieveState(0));
+	    for (int timeStep = 0; timeStep < curMaxSeqLength; timeStep++){
+		if (timeStep > 0)
+		    this->postOutputLayer().setFeedBackData(timeStep-1,
+							    bmState.getStateID(timeStep-1));
+		
+		layerCnt = 0;
+		BOOST_FOREACH (boost::shared_ptr<layers::Layer<TDevice> > &layer, m_layers){
+		    if (layerCnt >= m_firstFeedBackLayer){
+			layer->prepareStepGeneration(timeStep);
+			layer->computeForwardPass(timeStep, m_trainingState);
+		    }
+		    layerCnt++;
+		}
+		
+		olm = outMDNLayer();
+		if (olm != NULL) olm->getOutput(timeStep, generationOpt);
+	    }
+	    
+	} // Beam search generation
+	
+    } // Generation for network with feedback layers (structured prediction)
 }
 
 template <typename TDevice>
@@ -676,12 +1355,21 @@ void NeuralNetwork<TDevice>::computeBackwardPass()
 {
     BOOST_REVERSE_FOREACH (boost::shared_ptr<layers::Layer<TDevice> > &layer, m_layers) {
 
-	// For all types of networks
+	// runningMode
 	if (Configuration::instance().runningMode() > 0){
+
 	    // Stop the backpropagation when the layer's learning rate is specified as 0
 	    layers::TrainableLayer<TDevice> *trainableLayer = 
 		dynamic_cast<layers::TrainableLayer<TDevice>*>(layer.get());
 	    if (trainableLayer && closeToZero(trainableLayer->learningRate()))
+		break;
+
+	    // Or, stop if it is a mdn output layer in acoustic model
+	    // Note, this is specific for GAN
+	    /* To be revised for non-gan network */
+	    layers::PostOutputLayer<TDevice> *mdnlayer = 
+		dynamic_cast<layers::PostOutputLayer<TDevice>*>(layer.get());
+	    if (mdnlayer && mdnlayer->postLayerType() == NN_POSTOUTPUTLAYER_NOTLASTMDN)
 		break;
 	    
 	}
@@ -699,7 +1387,7 @@ template <typename TDevice>
 void NeuralNetwork<TDevice>::cleanGradientsForDiscriminator()
 {
     // For GAN
-    if (m_middlePostOutputLayer > 0 && m_trainingState == NN_STATE_GAN_GEN){
+    if (flagNetworkForGAN() && m_trainingState == NN_STATE_GAN_GEN){
 	// clean the discrminator gradients when only generator is trained
 	int cnt = 0;
 	BOOST_FOREACH (boost::shared_ptr<layers::Layer<TDevice> > &layer, m_layers) {
@@ -718,17 +1406,24 @@ void NeuralNetwork<TDevice>::cleanGradientsForDiscriminator()
 template <typename TDevice>
 real_t NeuralNetwork<TDevice>::calculateError(const bool flagGenerateMainError) const
 {
-    if (m_middlePostOutputLayer >0 && flagGenerateMainError){
-	// there is middle post output
-	return static_cast<layers::PostOutputLayer<TDevice>&>(*m_layers[m_middlePostOutputLayer]).calculateError();
-    }else if(m_middlePostOutputLayer>0 && (!flagGenerateMainError)){
-	return static_cast<layers::PostOutputLayer<TDevice>&>(*m_layers.back()).calculateError();
-    }else if(flagGenerateMainError){
-	return static_cast<layers::PostOutputLayer<TDevice>&>(*m_layers.back()).calculateError();
+    if (flagNetworkForGAN()){
+	if (flagGenerateMainError)
+	    // there is middle post output
+	    return static_cast<layers::PostOutputLayer<TDevice>&>(*m_layers[m_middlePostOutputLayer]).calculateError();
+	else
+	    return static_cast<layers::PostOutputLayer<TDevice>&>(*m_layers.back()).calculateError();
+	
+    }else if (m_vaeLayer > 0){
+	if (flagGenerateMainError)
+	    return static_cast<layers::PostOutputLayer<TDevice>&>(*m_layers.back()).calculateError();
+	else
+	    return static_cast<layers::PostOutputLayer<TDevice>&>(*m_layers[m_vaeLayer]).calculateError();
     }else{
-	return 0;
+	if(flagGenerateMainError)
+	    return static_cast<layers::PostOutputLayer<TDevice>&>(*m_layers.back()).calculateError();
+	else
+	    return 0;
     }
-
 }
 
 template <typename TDevice>
@@ -1099,27 +1794,33 @@ void NeuralNetwork<TDevice>::notifyCurrentFrac(const int fracNum)
 template <typename TDevice>
 void NeuralNetwork<TDevice>::updateNNState(const int trainingEpoch, const int fracNum)
 {
-    // Rule:
-    //  temp == 1: train discriminator using natural data
-    //  temp == 2: train discriminator using generated data
-    //  temp == 0:
-    //         if featMatch is used, train the generator using feature matching
-    //         else the normal way
-    int temp = ((fracNum + 1) % 3);
-    if (temp == 1)
-	m_trainingState = NN_STATE_GAN_DIS_NATDATA;
-    else if (temp == 2)
-	m_trainingState = NN_STATE_GAN_DIS_GENDATA;
-    else if (temp == 0)
-	m_trainingState = (m_featMatchLayer > 0)?(NN_STATE_GAN_GEN_FEATMAT):(NN_STATE_GAN_GEN);
-    else
-	throw std::runtime_error("Undefined nnstate");
+
+    if (flagNetworkForGAN()){
+	// Rule:
+	//  temp == 1: train discriminator using natural data
+	//  temp == 2: train discriminator using generated data
+	//  temp == 0:
+	//         if featMatch is used, train the generator using feature matching
+	//         else the normal way
+	
+	int temp = ((fracNum + 1) % 3);
+	if (temp == 1)
+	    m_trainingState = NN_STATE_GAN_DIS_NATDATA;
+	else if (temp == 2)
+	    m_trainingState = NN_STATE_GAN_DIS_GENDATA;
+	else if (temp == 0)
+	    m_trainingState = (m_featMatchLayer > 0)?(NN_STATE_GAN_GEN_FEATMAT):(NN_STATE_GAN_GEN);
+	else
+	    throw std::runtime_error("Undefined nnstate");
+    }else{
+	m_trainingState = NN_STATE_GAN_NOGAN;
+    }
 }
 
 template <typename TDevice>
 void NeuralNetwork<TDevice>::updateNNStateForGeneration()
 {
-    m_trainingState = NN_STATE_GAN_GENERATION_STAGE;
+    m_trainingState = NN_STATE_GENERATION_STAGE;
 }
 
 
@@ -1133,16 +1834,20 @@ void NeuralNetwork<TDevice>::reInitWeight()
 }
 
 template <typename TDevice>
-void NeuralNetwork<TDevice>::initOutputForMDN(
- const data_sets::DataSetMV &datamv)
+void NeuralNetwork<TDevice>::initOutputForMDN(const helpers::JsonDocument &jsonDoc,
+					      const data_sets::DataSetMV &datamv)
 {
+    if (jsonDoc->HasMember("weights")) {
+	printf("\nEscapre MDN initialization\n");
+	return;
+    }
     BOOST_FOREACH (boost::shared_ptr<layers::Layer<TDevice> > &layer,
 		   m_layers){
 	layers::MDNLayer<TDevice>* mdnLayer = 
 	    dynamic_cast<layers::MDNLayer<TDevice>*>(layer.get());
 	if (mdnLayer){
 	    mdnLayer->initPreOutput(datamv.outputM(), datamv.outputV());
-	    printf("MDN initialization \t");
+	    printf("\nRe-initialize the layer before MDN \t");
 	    if (datamv.outputM().size()<1)
 		printf("using global zero mean and uni variance");
 	    else
@@ -1152,8 +1857,7 @@ void NeuralNetwork<TDevice>::initOutputForMDN(
 }
 
 template <typename TDevice>
-void NeuralNetwork<TDevice>::readMVForOutput(
- const data_sets::DataSetMV &datamv)
+void NeuralNetwork<TDevice>::readMVForOutput(const data_sets::DataSetMV &datamv)
 {
     BOOST_FOREACH (boost::shared_ptr<layers::Layer<TDevice> > &layer,
 		   m_layers){
@@ -1175,11 +1879,13 @@ void NeuralNetwork<TDevice>::importWeights(const helpers::JsonDocument &jsonDoc,
 					   const std::string &ctrStr)
 {
     try{
-	// Read in the control vector, a sequence of 1 0
+	// Step1. read in the control vector, a sequence of 1 0
 	Cpu::int_vector tempctrStr;
 	tempctrStr.resize(m_layers.size(), 1);
 	if (ctrStr.size() > 0 && ctrStr.size()!= m_layers.size()){
-	    throw std::runtime_error("Length of trainedParameterCtr unequal #layer.");
+	    printf("\n\tLength of trainedModelCtr is unequal to the number of layers in ");
+	    printf("the network to be trained\n");
+	    throw std::runtime_error("Please check trainedModelCtr");
 	}else if (ctrStr.size()>0){
 	    for (int i=0; i<ctrStr.size(); i++)
 		tempctrStr[i] = ctrStr[i]-'0';
@@ -1187,7 +1893,7 @@ void NeuralNetwork<TDevice>::importWeights(const helpers::JsonDocument &jsonDoc,
 	    // nothing
 	}
 	
-	// Read in the weight parameter as a whole
+	// Step2. read in the weights from the pre-trained network
 	helpers::JsonValue weightsSection;
         if (jsonDoc->HasMember("weights")) {
             if (!(*jsonDoc)["weights"].IsObject())
@@ -1197,7 +1903,12 @@ void NeuralNetwork<TDevice>::importWeights(const helpers::JsonDocument &jsonDoc,
 	    throw std::runtime_error("No weight section found");
 	}
 
-	// Assign parameter to each layer
+	// Step3. for each layer in the network to be traiend
+	//        load the weights from the pre-trained network
+	//        if 
+	//         1. control option is 1
+	//         2. the name matches (checked handles in Layer->reReadWeight())
+	
 	int cnt=0;
 	BOOST_FOREACH (boost::shared_ptr<layers::Layer<TDevice> > &layer, m_layers)
 	{
@@ -1208,17 +1919,7 @@ void NeuralNetwork<TDevice>::importWeights(const helpers::JsonDocument &jsonDoc,
 	    if (Layer && tempctrStr[cnt] > 0){
 		printf("\n\t(%d) ", cnt);
 		Layer->reReadWeight(weightsSection, Layer->size(), tempctrStr[cnt]);
-		/*
-		layers::LstmLayerCharW<TDevice>* LstmCharWLayer = 
-		    dynamic_cast<layers::LstmLayerCharW<TDevice>*>(layer.get());
-		if (LstmCharWLayer){
-		    // Because LstmCharWLayer is special
-		    Layer->reReadWeight(weightsSection, LstmCharWLayer->lstmSize(), 
-					tempctrStr[cnt]);
-		}else{
-		   Layer->reReadWeight(weightsSection, Layer->size(), tempctrStr[cnt]); 
-		}*/
-		
+				
 	    // Read in the parameter for MDN layer with trainable link
 	    }else if(tempctrStr[cnt] > 0){
 		layers::MDNLayer<TDevice>* mdnlayer = 
@@ -1239,14 +1940,13 @@ void NeuralNetwork<TDevice>::importWeights(const helpers::JsonDocument &jsonDoc,
 	printf("\tdone\n\n");
 	
     }catch (const std::exception &e){
-	printf("\nTo read weight from another trained network (refer to net2):\n");
-	printf("\n\t1. prepare network.jsn (net1). Set the name of the layer to be initialized\n");
-	printf("\n\t   as the same name of the source layer in net2. \n");
-	printf("\n\t2. set the --trainedModelCtr as the a string of number (0/1/2/3), whose \n");
-	printf("\n\t   length is the same as number of layers in the net1.\n");
-	printf("\n\t   Please check currennt --help for the mearning of 0/1/2/3. \n");
-	printf("\n\t   If the number for one layer in net1 is 0, or its name can not be found \n");
-	printf("\n\t   in net2, that layer will not be initilized using the weights in net2.\n");
+	printf("\n\t%s\n", e.what());
+	printf("\n\tError in reading weight from a pre-trained network:");
+	printf("\n\tPlease check the configuration of trainedModel and trainedModelCtr");
+	printf("\n\t1. trainedModel points to the correct pre-trained network.jsn ?");
+	printf("\n\t2. trainedModelCtr, a sequence of 0/1, has the same length as");
+	printf("the number of layers in network.jsn to be trained?");
+	printf("\n\t3. the layer to be initialized has the same name as the pre-trained layer?\n");
 	throw std::runtime_error(std::string("Fail to read network weight")+e.what());
     }
 }
@@ -1385,6 +2085,13 @@ bool NeuralNetwork<TDevice>::isMDNLayer(const int layerID)
     else
 	return ((dynamic_cast<layers::MDNLayer<TDevice>*>(m_layers[layerID].get())) != NULL);
 }
+
+
+template class beamsearch::searchEngine<Gpu>;
+template class beamsearch::searchEngine<Cpu>;
+
+template class beamsearch::searchState<Gpu>;
+template class beamsearch::searchState<Cpu>;
 
 // explicit template instantiations
 template class NeuralNetwork<Cpu>;

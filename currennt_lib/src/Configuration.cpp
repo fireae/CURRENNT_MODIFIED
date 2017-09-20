@@ -128,6 +128,8 @@ Configuration::Configuration(int argc, const char *argv[])
     commonOptions.add_options()
         ("help",                                                                              
 	 "shows this help message")
+	("version",
+	 "shows the version")
         ("options_file",       
 	 po::value(&optionsFile),                                       
 	 "reads the command line options from the file")
@@ -170,11 +172,11 @@ Configuration::Configuration(int argc, const char *argv[])
 	 "sets the name(s) of the input file(s) in forward pass mode")
         ("revert_std",     
 	 po::value(&m_revertStd)->default_value(true),                        
-	 "for regression task, de-normalize the generated data using mean and variance in data.nc")
+	 "de-normalize the generated data using mean and variance in data.nc (default: true)")
 	/* Add 16-04-08 to tap in the output of arbitary layer */
 	("output_from",    
 	 po::value(&m_outputTapLayer)->default_value(-1),                     
-	 "from which layer to get the output ? (input layer is 0. Default from the output layer) ")
+	 "from which layer to get the output ? (input layer is 0. Default: from the output layer) ")
 	("output_from_gate",
 	 po::value(&m_outputGateOut)->default_value(false),                  
 	 std::string(
@@ -182,14 +184,23 @@ Configuration::Configuration(int argc, const char *argv[])
 	      std::string("of transformation units? (default false)")).c_str())
 	("mdnUVSigThreshold",
 	 po::value(&m_mdnUVSigThreshold)->default_value(0.5),                  
-	 std::string("Threhold for uvsigmoid (0.5)").c_str())
+	 std::string("Threhold for uvsigmoid (default 0.5)").c_str())
 	("mdnSoftmaxGenMethod",
 	 po::value(&m_mdnSoftMaxGenMethod)->default_value(0),
-	 std::string("Method to generate from softmax (0: one-hot (def); 1: soft merge)").c_str())
+	 std::string(
+	      std::string("Method to generate from softmax:")+
+	      std::string("\n\t0: one-hot (default)") + 
+	      std::string("\n\t1: soft merge") + 
+	      std::string("\n\t2: random sampling")).c_str())
 	("fakeEpochNum",
 	 po::value(&m_fakeEpochNum)->default_value(-1),
-	 "")
-        ;
+	 "Not used")
+	("vaeGenMethod",
+	 po::value(&m_vaePlotManifold)->default_value(0),
+	 std::string(
+	      std::string("Option for inference in VAE. When z is 2-Dim and vaeManifold=1, ") +
+	      std::string("vae layer will read in the code z from fraction.outputs()")).c_str())
+	;
 
     po::options_description trainingOptions("Training options");
     trainingOptions.add_options()
@@ -349,7 +360,8 @@ Configuration::Configuration(int argc, const char *argv[])
 	      std::string("\n\t1: AdaGrad (except the Trainable MDNLayer).") + 
 	      std::string("\n\t2: Average SGC over the utterance.") + 
 	      std::string("\n\t3: SGD then AdaGrad (together with --OptimizerSecondLR)")+
-	      std::string("\n\t4: SGD decay the learning rate after validation failed")).c_str())
+	      std::string("\n\t4: SGD decay the learning rate after validation failed")+
+	      std::string("\n\t5: Adam  (except the Trainable MDNLayer) ")).c_str())
 	("OptimizerSecondLR",    
 	 po::value(&m_secondLearningRate)  ->default_value(0.01), 
 	 "Optimizer==3, it requirs additional learning rate for AdaGrad (0.01 default)")
@@ -500,7 +512,16 @@ Configuration::Configuration(int argc, const char *argv[])
 	 po::value(&m_exInputExt) ->default_value(""),
 	 "External inut extension")
 	("ExtInputDim",
-	 po::value(&m_exInputDim) ->default_value(""),
+	 po::value(&m_exInputDim) ->default_value(0),
+	 "External input dimension")
+	("ExtInputDirs",
+	 po::value(&m_exInputDirs) ->default_value(""),
+	 "External input directory")
+	("ExtInputExts",
+	 po::value(&m_exInputExts) ->default_value(""),
+	 "External inut extension")
+	("ExtInputDims",
+	 po::value(&m_exInputDims) ->default_value(""),
 	 "External input dimension")
         ;
 
@@ -583,6 +604,13 @@ Configuration::Configuration(int argc, const char *argv[])
         exit(0);
     }
 
+    if (vm.count("version")){
+	//std::cout << "2017/09/02: checked the bug on wavNetCore" << std::endl;
+	std::cout << "2017/09/07: hack on reducing the memory usage for wavNetCore, CNN" << std::endl;
+	std::cout << "2017/09/11: add multiple external files, leakyReLU" << std::endl;
+	exit(0);
+    }
+    
     // load options from autosave
     if (!m_continueFile.empty()) {
         try {
@@ -766,16 +794,19 @@ Configuration::Configuration(int argc, const char *argv[])
 	}
     }
 
-    if (m_auxDataDir.size() > 0){
+    /*if (m_auxDataDir.size() > 0){
 	std::cout << "\tUsing auxilary data. ";
 	if (m_parallelSequences > 1){
 	    std::cout << "Parallel training will be turned off." << std::endl;
 	    m_parallelSequences = 1;
 	}	
 	std::cout << std::endl;
+	}*/
+
+    if (m_scheduleSampOpt == 6){
+	m_parallelSequences = 1; // for beamsize generation in computeForwardPassGen()
     }
-
-
+    
     if (m_feedForwardOutputFile.size() > 0 &&
 	m_mdnVarFixEpochNum > 0 && m_mdnVarFixEpochNum < 999){
 	std::cout << "\nGeneration mode, mdnVarFixEpochNum is not used";
@@ -802,6 +833,11 @@ const std::string& Configuration::serializedOptions() const
 bool Configuration::trainingMode() const
 {
     return m_trainingMode;
+}
+
+bool Configuration::generatingMode() const
+{
+    return !m_trainingMode;
 }
 
 bool Configuration::hybridOnlineBatch() const
@@ -1314,10 +1350,24 @@ const std::string& Configuration::exInputExt() const
 {
     return m_exInputExt;
 }
-const std::string& Configuration::exInputDim() const
+const int& Configuration::exInputDim() const
 {
     return m_exInputDim;
 }
+
+const std::string& Configuration::exInputDirs() const
+{
+    return m_exInputDirs;
+}
+const std::string& Configuration::exInputExts() const
+{
+    return m_exInputExts;
+}
+const std::string& Configuration::exInputDims() const
+{
+    return m_exInputDims;
+}
+
 
 const int& Configuration::verboseLevel() const
 {
@@ -1338,4 +1388,9 @@ const int& Configuration::runningMode()  const
 const int& Configuration::mdnVarUpdateEpoch() const
 {
     return m_mdnVarFixEpochNum;
+}
+
+const int& Configuration::vaePlotManifold() const
+{
+    return m_vaePlotManifold;
 }

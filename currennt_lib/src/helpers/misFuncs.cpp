@@ -39,6 +39,9 @@
 #include <boost/random/uniform_real_distribution.hpp>
 #include <boost/random/mersenne_twister.hpp>
 
+#include <stdexcept>
+#include <fstream>
+
 /* ***** Functions for string process ***** */
 void ParseStrOpt(const std::string stringOpt, std::vector<std::string> &optVec,
 		 const std::string para){
@@ -109,6 +112,38 @@ int MaxCpuIntVec(Cpu::int_vector &temp){
     }else{
 	printf("Input vector is void");
 	return 0;
+    }
+}
+
+void PrintVecBinH(Cpu::real_vector &temp){
+    std::string outFile("./temp.bin");
+    std::ofstream ofs(outFile.c_str(), std::ofstream::binary);
+    if (!ofs.good()){
+	std::cout << "Fail to open " << outFile << std::endl;
+	return;
+    }else{
+	std::vector<real_t> tempVec(temp.begin(), temp.end());
+	for(int i=0; i<tempVec.size(); i++){
+	    ofs.write((char *)&(tempVec[i]), sizeof(real_t));
+	}
+	ofs.close();
+	std::cout << "Save to " << outFile << std::endl;
+    }
+}
+
+void PrintVecBinH(Cpu::int_vector &temp){
+    std::string outFile("./temp.bin");
+    std::ofstream ofs(outFile.c_str(), std::ofstream::binary);
+    if (!ofs.good()){
+	std::cout << "Fail to open " << outFile << std::endl;
+	return;
+    }else{
+	std::vector<real_t> tempVec(temp.begin(), temp.end());
+	for(int i=0; i<tempVec.size(); i++){
+	    ofs.write((char *)&(tempVec[i]), sizeof(real_t));
+	}
+	ofs.close();
+	std::cout << "Save to " << outFile << std::endl;
     }
 }
 

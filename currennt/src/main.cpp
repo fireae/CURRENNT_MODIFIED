@@ -197,9 +197,7 @@ int trainerMain(const Configuration &config)
 
         int parallelSequences = config.parallelSequences();
 	
-        
-	// Add wang 0620: get the maxTxtDataLength and chaDim
-	// No long used
+        /* 
 	int chaDim = config.txtChaDim();
 	int maxTxtLength;
 	if (config.trainingMode()){
@@ -212,7 +210,7 @@ int trainerMain(const Configuration &config)
 	    maxTxtLength = 0;
 	}else{
 	    maxTxtLength = feedForwardSet->maxTxtLength();
-	}
+        }*/
 
         // create the neural network
         printf("Creating the neural network...");
@@ -244,11 +242,8 @@ int trainerMain(const Configuration &config)
 	}
 	*/
 	
-	NeuralNetwork<TDevice> neuralNetwork(
-	    netDoc,       parallelSequences, 
-	    maxSeqLength,
-	    chaDim,       maxTxtLength,
-	    inputSize,    outputSize);
+	NeuralNetwork<TDevice> neuralNetwork(netDoc, parallelSequences, maxSeqLength,
+					     inputSize, outputSize);
 
 	// Check the network configuration
         /*if (!trainingSet->empty() && trainingSet->outputPatternSize() != 
@@ -313,7 +308,7 @@ int trainerMain(const Configuration &config)
 	// step2: initialize for MDN 
 	// As data has been normalized, no need to read MV for MDN 
 	if (config.trainingMode() && config.continueFile().empty())
-	    neuralNetwork.initOutputForMDN(*dataMV);
+	    neuralNetwork.initOutputForMDN(netDoc, *dataMV);
 	// Note: config.continueFile().empty() make sure it is the first epoch
 
 
@@ -572,7 +567,7 @@ int trainerMain(const Configuration &config)
 		printf("Translate the network in '%s'... ",
 		       config.trainedNetworkFile().c_str());
 		saveNetwork(neuralNetwork,
-			    config.trainedNetworkFile(), 
+			    config.printWeightPath(),//config.trainedNetworkFile(), 
 			    config.learningRate(),
 			    config.weLearningRate());
 		printf("done.\n");
@@ -656,7 +651,7 @@ int trainerMain(const Configuration &config)
 	    }else{
 		unstandardize = false;
 		htkoutput     = false;
-		printf(", bin format, de-normalized\n");
+		printf(", bin format, not de-normalized\n");
 	    }
 
 	    /*
@@ -688,7 +683,10 @@ int trainerMain(const Configuration &config)
                 boost::shared_ptr<data_sets::DataSetFraction> frac;
 		    
                 while (((frac = feedForwardSet->getNextFraction()))) {
-                    printf("Computing outputs for data fraction %d...", ++fracIdx);
+		    // print fraction information
+                    printf("Computing outputs for data fraction %d ... ", ++fracIdx);
+		    for (int i = 0; i<frac->numSequences(); i++)
+			printf("%s ", frac->seqInfo(i).seqTag.c_str());
                     fflush(stdout);
 		    
 		    // generationOpt:
@@ -705,8 +703,12 @@ int trainerMain(const Configuration &config)
 		    neuralNetwork.notifyCurrentEpoch(config.fakeEpochNum());
 		    neuralNetwork.updateNNStateForGeneration();
                     neuralNetwork.loadSequences(*frac);
+		    boost::posix_time::ptime sTime=boost::posix_time::microsec_clock::local_time();
                     neuralNetwork.computeForwardPassGen(frac->maxSeqLength(), generationOpt);
+		    boost::posix_time::ptime eTime=boost::posix_time::microsec_clock::local_time();
 		    
+		    printf("\nTime (s): %f\n", (real_t)(eTime-sTime).total_milliseconds()/1000.0);
+
                     std::vector<std::vector<std::vector<real_t> > > outputs = 
 			neuralNetwork.getOutputs(config.outputFromWhichLayer(), 
 						 config.outputFromGateLayer(),
@@ -903,7 +905,7 @@ boost::shared_ptr<data_sets::DataSet> loadDataSet(data_set_type dsType)
         type           = "validation set";
         filenames      = Configuration::instance().validationFiles();
         fraction       = Configuration::instance().validationFraction();
-        cachePath      = Configuration::instance().cachePath();
+        truncSeqLength = Configuration::instance().truncateSeqLength();
         break;
 
     case DATA_SET_TEST:

@@ -15,7 +15,7 @@
  * but WITHOUT ANY WARRANTY; without even the implied warranty of
  * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
  * GNU General Public License for more details.
- *
+ * 
  * You should have received a copy of the GNU General Public License
  * along with CURRENNT.  If not, see <http://www.gnu.org/licenses/>.
  *****************************************************************************/
@@ -23,6 +23,7 @@
 #include "../../currennt_lib/src/Configuration.hpp"
 #include "../../currennt_lib/src/NeuralNetwork.hpp"
 #include "../../currennt_lib/src/layers/LstmLayer.hpp"
+#include "../../currennt_lib/src/layers/MDNLayer.hpp"
 #include "../../currennt_lib/src/layers/BinaryClassificationLayer.hpp"
 #include "../../currennt_lib/src/layers/MulticlassClassificationLayer.hpp"
 #include "../../currennt_lib/src/optimizers/SteepestDescentOptimizer.hpp"
@@ -82,15 +83,52 @@ enum data_set_type
 };
 
 // helper functions (implementation below)
-void readJsonFile(rapidjson::Document *doc, const std::string &filename);
-boost::shared_ptr<data_sets::DataSet> loadDataSet(data_set_type dsType);
-template <typename TDevice> void printLayers(const NeuralNetwork<TDevice> &nn);
-template <typename TDevice> void printOptimizer(const optimizers::Optimizer<TDevice> &optimizer);
-template <typename TDevice> void saveNetwork(const NeuralNetwork<TDevice> &nn, const std::string &filename, const real_t nnlr, const real_t welr);
-void createModifiedTrainingSet(data_sets::DataSet *trainingSet, int parallelSequences, bool outputsToClasses, boost::mutex &swapTrainingSetsMutex);
-template <typename TDevice> void saveState(const NeuralNetwork<TDevice> &nn, const optimizers::Optimizer<TDevice> &optimizer, const std::string &infoRows, const real_t nnlr, const real_t welr);
-template <typename TDevice> void restoreState(NeuralNetwork<TDevice> *nn, optimizers::Optimizer<TDevice> *optimizer, std::string *infoRows);
-std::string printfRow(const char *format, ...);
+void readJsonFile(
+ rapidjson::Document *doc,           
+ const std::string   &filename
+);
+
+boost::shared_ptr<data_sets::DataSet> loadDataSet(
+ data_set_type dsType
+);
+
+template <typename TDevice> void printLayers(
+ const NeuralNetwork<TDevice> &nn
+);
+
+template <typename TDevice> void printOptimizer(
+ const optimizers::Optimizer<TDevice> &optimizer
+);
+
+template <typename TDevice> void saveNetwork(
+ const NeuralNetwork<TDevice> &nn, 
+ const std::string &filename, const real_t nnlr, 
+ const real_t welr
+);
+
+void createModifiedTrainingSet(
+ data_sets::DataSet *trainingSet, 
+ int parallelSequences, 
+ bool outputsToClasses, 
+ boost::mutex &swapTrainingSetsMutex
+);
+
+template <typename TDevice> void saveState(
+ const NeuralNetwork<TDevice> &nn, 
+ const optimizers::Optimizer<TDevice> &optimizer, 
+ const std::string &infoRows, const real_t nnlr, 
+ const real_t welr
+);
+
+template <typename TDevice> void restoreState(
+ NeuralNetwork<TDevice> *nn, 
+ optimizers::Optimizer<TDevice> *optimizer, 
+ std::string *infoRows
+);
+
+std::string printfRow(
+ const char *format, ...
+);
 
 
 // main function
@@ -98,18 +136,21 @@ template <typename TDevice>
 int trainerMain(const Configuration &config)
 {
     try {
+
+	/*********** Initialize the network and data set *****************/
+	
         // read the neural network description file 
-        std::string networkFile = config.continueFile().empty() ? config.networkFile() : config.continueFile();
+        std::string networkFile =
+	    (config.continueFile().empty() ? 
+	     config.networkFile() : config.continueFile());
         printf("Reading network from '%s'... ", networkFile.c_str());
         fflush(stdout);
 	
-	// Here I add two Document pointers
-	// ---- DELETE 1. netDocParameter: used to load parameters only
-	// ---- DELETE 2. netDoc: the normal pointer to file
-	// netDoc only loads the model parameters and the network structures
-	// thus, there is no need to use netDocParameter. Just specify "network" will be OK
-	// parameter can be directly add to .jsn files
-	rapidjson::Document *netDocPtr(0);
+	// Modify 0302 Wang: 
+	// netDocParameter: pointer to network parameter
+	//  (trained_network.jsn or .autosave)
+	// netDoc: the normal pointer to network.jsn
+	// rapidjson::Document *netDocPtr(0); No Need to use netDocPtr
 	rapidjson::Document netDocParameter;
         rapidjson::Document netDoc;
 
@@ -118,10 +159,14 @@ int trainerMain(const Configuration &config)
         printf("\n");
 	
         // load data sets
-        boost::shared_ptr<data_sets::DataSet> trainingSet    = boost::make_shared<data_sets::DataSet>();
-        boost::shared_ptr<data_sets::DataSet> validationSet  = boost::make_shared<data_sets::DataSet>();
-        boost::shared_ptr<data_sets::DataSet> testSet        = boost::make_shared<data_sets::DataSet>();
-        boost::shared_ptr<data_sets::DataSet> feedForwardSet = boost::make_shared<data_sets::DataSet>();
+        boost::shared_ptr<data_sets::DataSet> trainingSet    = 
+	    boost::make_shared<data_sets::DataSet>();
+        boost::shared_ptr<data_sets::DataSet> validationSet  = 
+	    boost::make_shared<data_sets::DataSet>();
+        boost::shared_ptr<data_sets::DataSet> testSet        = 
+	    boost::make_shared<data_sets::DataSet>();
+        boost::shared_ptr<data_sets::DataSet> feedForwardSet = 
+	    boost::make_shared<data_sets::DataSet>();
 
         if (config.trainingMode()) {
             trainingSet = loadDataSet(DATA_SET_TRAINING);
@@ -131,79 +176,155 @@ int trainerMain(const Configuration &config)
             
             if (!config.testFiles().empty())
                 testSet = loadDataSet(DATA_SET_TEST);
-        }
-        else {
+        }else if(config.printWeightPath().size()>0){
+	    
+        }else {
             feedForwardSet = loadDataSet(DATA_SET_FEEDFORWARD);
         }
 
         // calculate the maximum sequence length
         int maxSeqLength;
         if (config.trainingMode())
-            maxSeqLength = std::max(trainingSet->maxSeqLength(), std::max(validationSet->maxSeqLength(), testSet->maxSeqLength()));
+            maxSeqLength = std::max(
+			       trainingSet->maxSeqLength(), 
+			       std::max(
+				   validationSet->maxSeqLength(), 
+				   testSet->maxSeqLength()));
+	else if(config.printWeightPath().size()>0)
+	    maxSeqLength = 0;
         else
             maxSeqLength = feedForwardSet->maxSeqLength();
 
         int parallelSequences = config.parallelSequences();
-       
-        // modify input and output size in netDoc to match the training set size 
-        // trainingSet->inputPatternSize
-        // trainingSet->outputPatternSize
+	
+        /* 
+	int chaDim = config.txtChaDim();
+	int maxTxtLength;
+	if (config.trainingMode()){
+	    maxTxtLength = std::max(
+			       trainingSet->maxTxtLength(),
+			       std::max(
+				   validationSet->maxTxtLength(),
+				   testSet->maxTxtLength()));
+	}else if(config.printWeightPath().size()>0){
+	    maxTxtLength = 0;
+	}else{
+	    maxTxtLength = feedForwardSet->maxTxtLength();
+        }*/
 
         // create the neural network
-        printf("Creating the neural network... ");
+        printf("Creating the neural network...");
         fflush(stdout);
-        int inputSize = -1;
+        int inputSize  = -1;
         int outputSize = -1;
-        inputSize = trainingSet->inputPatternSize();
+        inputSize  = trainingSet->inputPatternSize();
         outputSize = trainingSet->outputPatternSize();
 
+	/* Move 17-03-26: inside neuralNetwork */
 	/* Add 16-02-22 Wang: for WE updating */
-	// NeuralNetwork<TDevice> neuralNetwork(netDoc, parallelSequences, maxSeqLength, inputSize, outputSize);	
-	if (config.weUpdate() && config.trainingMode()){
-	    // change input size when external WE is used
-	    // this inputSize will be checked against parameter set in neuralNetwork()
-	    inputSize = inputSize-1+config.weDim();
-	}
+	// NeuralNetwork<TDevice> neuralNetwork(netDoc, parallelSequences, 
+	//    maxSeqLength, inputSize, outputSize);
+	//
+	//if (config.weUpdate() && config.trainingMode()){
+	//    inputSize = inputSize - 1 + config.weDim(); // change input size 
+	//}
+
+	// Re-Modify 03-02
+	/* Don't need this anymore. 
+	   Just directly use --network trained_network.jsn or .autosave
 	if (!config.trainedParameterPath().empty()){
 	    // just read in the network parameter (not any parameter else)
-	    // can only be used through --trainedModel
+	    // this option can only be used through --trainedModel
 	    readJsonFile(&netDocParameter, config.trainedParameterPath());
 	    netDocPtr = &netDocParameter;
 	}else{
 	    netDocPtr = &netDoc;
 	}
-        
-	NeuralNetwork<TDevice> neuralNetwork(*netDocPtr, parallelSequences, maxSeqLength, inputSize, outputSize);
-
-	/* Add 16-02-22 Wang: for WE updating */
-	if (config.weUpdate()){
-	    // Call the method and ask neuralNetwork to load the input
-	    neuralNetwork.initWeUpdate(config.weBankPath(), config.weDim(), config.weIDDim(), maxSeqLength*parallelSequences);
-	}
+	*/
 	
+	NeuralNetwork<TDevice> neuralNetwork(netDoc, parallelSequences, maxSeqLength,
+					     inputSize, outputSize);
 
-        if (!trainingSet->empty() && trainingSet->outputPatternSize() != neuralNetwork.postOutputLayer().size())
-            throw std::runtime_error("Post output layer size != target pattern size of the training set");
-        if (!validationSet->empty() && validationSet->outputPatternSize() != neuralNetwork.postOutputLayer().size())
-            throw std::runtime_error("Post output layer size != target pattern size of the validation set");
-        if (!testSet->empty() && testSet->outputPatternSize() != neuralNetwork.postOutputLayer().size())
-            throw std::runtime_error("Post output layer size != target pattern size of the test set");
+	// Check the network configuration
+        /*if (!trainingSet->empty() && trainingSet->outputPatternSize() != 
+	    neuralNetwork.postOutputLayer().size())
+            throw std::runtime_error(
+		"Post output layer size != target size(training set)");
+        if (!validationSet->empty() && validationSet->outputPatternSize() != 
+	    neuralNetwork.postOutputLayer().size())
+            throw std::runtime_error(
+		"Post output layer size != target size(validation set)");
+        if (!testSet->empty() && testSet->outputPatternSize() != 
+	    neuralNetwork.postOutputLayer().size())
+            throw std::runtime_error(
+	    "Post output layer size != target size(test set)");*/
 
-        printf("done.\n");
-        printf("Layers:\n");
+	printf("\nNetwork construction done.\n\n");
+        printf("Network summary:\n");
         printLayers(neuralNetwork);
         printf("\n");
 
+	/* Add 16-02-22 Wang: for WE updating */
+	if (config.weUpdate()){
+	    // Load the vector bank
+	    neuralNetwork.initWeUpdate(
+		 config.weBankPath(),
+		 config.weDim(),
+		 config.weIDDim(),
+		 maxSeqLength * parallelSequences
+		 );
+	    
+	    // Initialize the noise to be added for WE (optional)
+	    if (!neuralNetwork.initWeNoiseOpt(
+		 config.weNoiseStartDim(),
+		 config.weNoiseEndDim(),
+		 config.weNoiseDev())){
+		throw std::runtime_error("Error in configuration of weNoise");
+	    }
+	}
+	
+	/* Add 16-04-01 Wang: for MSE weight */
+	if (config.mseWeightPath().size()>0)
+	    neuralNetwork.initMseWeight(config.mseWeightPath());
+	
+	
+	/* Add 0413 Wang: for weight mask */
+	if (config.weightMaskPath().size()>0)
+	    neuralNetwork.initWeightMask(config.weightMaskPath(),
+					 config.weightMaskOpt());
+	
+	
+	/* Add 0514 Wang: read data mean and variance (MV), initialize MDN */
+	// step1: read MV if provided (optional)
+	boost::shared_ptr<data_sets::DataSetMV> dataMV =
+	    boost::make_shared<data_sets::DataSetMV>();
+	if (config.datamvPath().size()>0){
+	    printf("Read in data mean var %s", config.datamvPath().c_str());
+	    dataMV =
+		boost::make_shared<data_sets::DataSetMV>(config.datamvPath());
+	    neuralNetwork.readMVForOutput(*dataMV);
+	}
+	
+	// step2: initialize for MDN 
+	// As data has been normalized, no need to read MV for MDN 
+	if (config.trainingMode() && config.continueFile().empty())
+	    neuralNetwork.initOutputForMDN(*dataMV);
+	// Note: config.continueFile().empty() make sure it is the first epoch
+
+
         // check if this is a classification task
         bool classificationTask = false;
-        if (dynamic_cast<layers::BinaryClassificationLayer<TDevice>*>(&neuralNetwork.postOutputLayer())
-            || dynamic_cast<layers::MulticlassClassificationLayer<TDevice>*>(&neuralNetwork.postOutputLayer())) {
+        if (dynamic_cast<layers::BinaryClassificationLayer<TDevice>*>(
+	     &neuralNetwork.postOutputLayer()) ||
+	    dynamic_cast<layers::MulticlassClassificationLayer<TDevice>*>(
+	     &neuralNetwork.postOutputLayer())) {
                 classificationTask = true;
         }
-
         printf("\n");
 
-        // create the optimizer
+
+	/********************* Train the network *************************/
+        // Training Mode: 
         if (config.trainingMode()) {
             printf("Creating the optimizer... ");
             fflush(stdout);
@@ -214,8 +335,15 @@ int trainerMain(const Configuration &config)
             case Configuration::OPTIMIZER_STEEPESTDESCENT:
                 sdo = new optimizers::SteepestDescentOptimizer<TDevice>(
                     neuralNetwork, *trainingSet, *validationSet, *testSet,
-                    config.maxEpochs(), config.maxEpochsNoBest(), config.validateEvery(), config.testEvery(),
-                    config.learningRate(), config.momentum(), config.weLearningRate()
+                    config.maxEpochs(),
+		    config.maxEpochsNoBest(), 
+		    config.validateEvery(),
+		    config.testEvery(),
+                    config.learningRate(),
+		    config.momentum(),
+		    config.weLearningRate(),
+		    config.optimizerOption(),
+		    config.lrDecayRate()
                     );
                 optimizer.reset(sdo);
                 break;
@@ -224,7 +352,7 @@ int trainerMain(const Configuration &config)
                 throw std::runtime_error("Unknown optimizer type");
             }
 
-            printf("done.\n");
+            //printf("done.\n");
             printOptimizer(config, *optimizer);
 
             std::string infoRows;
@@ -238,85 +366,164 @@ int trainerMain(const Configuration &config)
             }
 	    
 	    
+	    // Add 05-27: Add the function to read in the weight
+	    // Note: this part is only utilized in the training stage
+	    if (config.continueFile().empty() && !config.trainedParameterPath().empty()){
+		// Modify 05-29
+		// Note: no need to re-initialize a .autosave
+		//if (config.continueFile().empty()){
+		//    printf("WARNING: Network parameter will be over-written by %s\n", 
+		//	   config.trainedParameterPath().c_str());
+		//}
+		printf("Read NN parameter from %s\n",
+		       config.trainedParameterPath().c_str());
+		readJsonFile(&netDocParameter,
+			     config.trainedParameterPath());
+		
+		neuralNetwork.importWeights(netDocParameter,
+					    config.trainedParameterCtr());
+		
+	    }else if (!config.continueFile().empty() &&
+		      !config.trainedParameterPath().empty()){
+		printf("Re-initialize .autosave using another network is unnecessary\n");
+		
+	    }else{
+		// nothing
+	    }
 
-            // train the network
-            printf("Starting training...\n");
+	    
+            printf("Starting training...");
+	    printf("\nPrint error per sequence / per timestep / secondary error (optional)");
             printf("\n");
+	    printf(" Epoch | Duration |           Training error         |");
+	    printf("           Validation error       |");
+	    printf("           Test error             |");
+	    printf("New best \n");
+            printf("-------+----------+----------------------------------+");
+	    printf("----------------------------------+");
+	    printf("----------------------------------+");
+	    printf("---------\n");
+	    std::cout << infoRows;
 
-            printf(" Epoch | Duration |  Training error  | Validation error |    Test error    | New best \n");
-            printf("-------+----------+------------------+------------------+------------------+----------\n");
-            std::cout << infoRows;
-
-            bool finished = false;
+	    
+	    // tranining loop
+            bool finished   = false;	    
             while (!finished) {
-                const char *errFormat = (classificationTask ? "%6.2lf%%%10.3lf |" : "%17.3lf |");
-                const char *errSpace  = "                  |";
+		
+                const char *errFormat = (classificationTask ? 
+					 "%6.2lf%%%10.3lf |" : "%12.3lf / %9.3lf/ %8.3f|");
+                const char *errSpace  = "                                  |";
 
                 // train for one epoch and measure the time
-                infoRows += printfRow(" %5d | ", optimizer->currentEpoch() + 1);
-                
-                boost::posix_time::ptime startTime = boost::posix_time::microsec_clock::local_time();
+                infoRows += printfRow(" %5d | ", optimizer->currentEpoch() + 1);                
+                boost::posix_time::ptime startTime=boost::posix_time::microsec_clock::local_time();
+
+		// train
                 finished = optimizer->train();
+		
+		// Add 0511: if optimizer is blowed, decrease the learning_rate and start again
+		if (optimizer->blowed()) {continue;}
+		
                 boost::posix_time::ptime endTime = boost::posix_time::microsec_clock::local_time();
                 double duration = (double)(endTime - startTime).total_milliseconds() / 1000.0;
-
                 infoRows += printfRow("%8.1lf |", duration);
+
+		
+		// print errors
                 if (classificationTask)
-                    infoRows += printfRow(errFormat, (double)optimizer->curTrainingClassError()*100.0, (double)optimizer->curTrainingError());
+                    infoRows += printfRow(errFormat, 
+					  (double)optimizer->curTrainingClassError()*100.0, 
+					  (double)optimizer->curTrainingError(),
+					  (double)optimizer->curTrainingErrorSec());
                 else
-                    infoRows += printfRow(errFormat, (double)optimizer->curTrainingError());
+                    infoRows += printfRow(errFormat, 
+					  (double)optimizer->curTrainingError(),
+					  (double)optimizer->curTrainingErrorPerFrame(),
+					  (double)optimizer->curTrainingErrorSec());
                 
-                if (!validationSet->empty() && optimizer->currentEpoch() % config.validateEvery() == 0) {
+                if (!validationSet->empty() && 
+		    optimizer->currentEpoch() % config.validateEvery() == 0) {
                     if (classificationTask)
-                        infoRows += printfRow(errFormat, (double)optimizer->curValidationClassError()*100.0, (double)optimizer->curValidationError());
+                        infoRows += printfRow(errFormat, 
+					      (double)optimizer->curValidationClassError()*100.0, 
+					      (double)optimizer->curValidationError(),
+					      (double)optimizer->curValidationErrorSec());
                     else
-                        infoRows += printfRow(errFormat, (double)optimizer->curValidationError());
+                        infoRows += printfRow(errFormat, 
+					      (double)optimizer->curValidationError(),
+					      (double)optimizer->curValidationErrorPerFrame(),
+					      (double)optimizer->curValidationErrorSec());
                 }
                 else
                     infoRows += printfRow("%s", errSpace);
 
-                if (!testSet->empty() && optimizer->currentEpoch() % config.testEvery() == 0) {
+                if (!testSet->empty() && optimizer->currentEpoch() %
+		    config.testEvery() == 0) {
                     if (classificationTask)
-                        infoRows += printfRow(errFormat, (double)optimizer->curTestClassError()*100.0, (double)optimizer->curTestError());
+                        infoRows += printfRow(errFormat, 
+					      (double)optimizer->curTestClassError()*100.0, 
+					      (double)optimizer->curTestError(),
+					      (double)optimizer->curTestErrorSec());
                     else
-                        infoRows += printfRow(errFormat, (double)optimizer->curTestError());
+                        infoRows += printfRow(errFormat, 
+					      (double)optimizer->curTestError(),
+					      (double)optimizer->curTestErrorPerFrame(),
+					      (double)optimizer->curTestErrorSec());
                 }
                 else
                     infoRows += printfRow("%s", errSpace);
-
-                if (!validationSet->empty() && optimizer->currentEpoch() % config.validateEvery() == 0) {
+		
+		// check whether to terminate training
+                if (!validationSet->empty()&&
+		    optimizer->currentEpoch()%config.validateEvery()==0){
+		    
                     if (optimizer->epochsSinceLowestValidationError() == 0) {
-                        infoRows += printfRow("  yes   \n");
+                        infoRows += printfRow("  yes %s\n",
+					      optimizer->optStatus().c_str());
                         if (config.autosaveBest()) {
                             std::stringstream saveFileS;
+			    
                             if (config.autosavePrefix().empty()) {
                                 size_t pos = config.networkFile().find_last_of('.');
                                 if (pos != std::string::npos && pos > 0)
                                     saveFileS << config.networkFile().substr(0, pos);
                                 else
                                     saveFileS << config.networkFile();
-                            }
-                            else
+                            }else{
                                 saveFileS << config.autosavePrefix();
+			    }
+			    
                             saveFileS << ".best.jsn";
-                            saveNetwork(neuralNetwork, saveFileS.str(), config.learningRate(), config.weLearningRate());
+                            saveNetwork(neuralNetwork,
+					saveFileS.str(), 
+					config.learningRate(),
+					config.weLearningRate());
                         }
-                    }
-                    else
-                        infoRows += printfRow("  no    \n");
-                }
-                else
+                    }else{
+			infoRows += printfRow("  no  %s\n", optimizer->optStatus().c_str());
+		    }
+		    
+                }else{
                     infoRows += printfRow("        \n");
-
+		}
+		
                 // autosave
-                if (config.autosave())
-                    saveState(neuralNetwork, *optimizer, infoRows, config.learningRate(), config.weLearningRate());
+                if (config.autosave()){
+                    saveState(neuralNetwork,
+			      *optimizer,
+			      infoRows, 
+			      config.learningRate(), 
+			      config.weLearningRate());
+		}
             }
+	    
 
+	    // Finish training
             printf("\n");
 
             if (optimizer->epochsSinceLowestValidationError() == config.maxEpochsNoBest())
-                printf("No new lowest error since %d epochs. Training stopped.\n", config.maxEpochsNoBest());
+                printf("No new lowest error since %d epochs. Training stopped.\n", 
+		       config.maxEpochsNoBest());
             else
                 printf("Maximum number of training epochs reached. Training stopped.\n");
 
@@ -327,8 +534,12 @@ int trainerMain(const Configuration &config)
             printf("\n");
 
             // save the trained network to the output file
-            printf("Storing the trained network in '%s'... ", config.trainedNetworkFile().c_str());
-            saveNetwork(neuralNetwork, config.trainedNetworkFile(), config.learningRate(), config.weLearningRate());
+            printf("Storing the trained network in '%s'... ",
+		   config.trainedNetworkFile().c_str());
+            saveNetwork(neuralNetwork,
+			config.trainedNetworkFile(), 
+			config.learningRate(),
+			config.weLearningRate());
             printf("done.\n");
 
             std::cout << "Removing cache file(s) ..." << std::endl;
@@ -338,129 +549,170 @@ int trainerMain(const Configuration &config)
                 boost::filesystem::remove(validationSet->cacheFileName());
             if (testSet != boost::shared_ptr<data_sets::DataSet>())
                 boost::filesystem::remove(testSet->cacheFileName());
-        }
-        // evaluation mode
-        else {
+
+	/********************* Convert the Json network file  *************************/
+        }else if(config.printWeightPath().size()>0){
+	    // print to binary format
+	    if (config.printWeightOpt() < 2){
+		printf("Print binary weight file in '%s' with option %d\n",
+		       config.printWeightPath().c_str(),
+		       config.printWeightOpt());
+		neuralNetwork.printWeightMatrix(config.printWeightPath(),
+						config.printWeightOpt());
+		printf("done.\n");
+		
+	    // print to HTS-engine format
+	    }else if (config.printWeightOpt() == 2){
+		// save the trained network to the output file
+		printf("Translate the network in '%s'... ",
+		       config.trainedNetworkFile().c_str());
+		saveNetwork(neuralNetwork,
+			    config.printWeightPath(),//config.trainedNetworkFile(), 
+			    config.learningRate(),
+			    config.weLearningRate());
+		printf("done.\n");
+	    }
+	    
+	/********************* Data Generation    *************************/
+        }else {
+
+	    // Load data mean and std
             Cpu::real_vector outputMeans  = feedForwardSet->outputMeans();
             Cpu::real_vector outputStdevs = feedForwardSet->outputStdevs();
             assert (outputMeans.size()  == feedForwardSet->outputPatternSize());
             assert (outputStdevs.size() == feedForwardSet->outputPatternSize());
-            //for (int i = 0; i < outputMeans.size(); ++i) 
-             //   printf("outputMeans[%d] = %f outputStdevs[%d] = %f\n", i, outputMeans[i], i, outputStdevs[i]);
-            bool unstandardize = config.revertStd(); 
-            if (unstandardize) {
-                printf("Outputs will be scaled by mean and standard deviation specified in NC file.\n");
-            }
+	    if (config.datamvPath().size()>0){
+		if (dataMV == NULL)
+		    throw std::runtime_error("Can't read datamv");
+		if (dataMV->outputM().size() != outputMeans.size())
+		    throw std::runtime_error("output dimension mismatch datamv");
+		for (int y = 0; y < outputMeans.size(); y++){
+		    outputMeans[y]  = dataMV->outputM()[y];
+		    outputStdevs[y] = dataMV->outputV()[y];
+		}
+		printf("Mean and var are over-written by %s.\n",
+		       config.datamvPath().c_str());
+	    }
+	    
+	    bool unstandardize = config.revertStd();
+	    bool htkoutput     = false;
+	    int  outputlayerID = config.outputFromWhichLayer();
 
-            int output_lag = config.outputTimeLag();
+	    printf("Outputs from layer %d", config.outputFromWhichLayer());
+	    if (config.outputFromGateLayer()) {printf(", gate output");}
+	    if (config.mdnPara()>0 && neuralNetwork.isMDNLayer(outputlayerID))
+		printf(", MDN with para=%f",config.mdnPara());
+	    
+	    if (unstandardize){
+		if (neuralNetwork.isMDNLayer(outputlayerID)){
+		    // for MDNLayer output
+		    if (config.mdnPara() < -1.0 || config.mdnPara() > 0.0){
+			Cpu::real_vector mdnConfigVec = neuralNetwork.getMdnConfigVec();
+			if (!mdnConfigVec.empty()){    
+			    // if the unit is sigmoid or softmax, set the mean and std
+			    for (int x = 0; x < (mdnConfigVec.size()-1)/5; x++){
+				int mdnType  = (int)mdnConfigVec[5+x*5];
+				if (mdnType == MDN_TYPE_SIGMOID || mdnType == MDN_TYPE_SOFTMAX){
+				    int unitSOut = (int)mdnConfigVec[3+x*5];
+				    int unitEOut = (int)mdnConfigVec[4+x*5];
+				    for (int y = unitSOut; y < unitEOut; y++){
+					outputMeans[y] = 0.0;
+					outputStdevs[y] = 1.0;
+				    }
+				    printf("\n\t de-normalization is skipped for dimension ");
+				    printf("from %d to %d\n", unitSOut+1, unitEOut);
+				}else{
+				    // nothing for GMM unit
+				}
+			    }
+			}
+			unstandardize = true;
+			htkoutput     = true;
+			printf(", HTK format, de-normalized\n");
+		    }else{
+			unstandardize = false;
+			htkoutput     = true; // specical case, MDN parameter outptu is htk
+			printf(", HTK format, not de-normalized\n");
+		    }
+		}else{
+		    // for normal layers (including highway)
+		    if (neuralNetwork.layerSize(outputlayerID) == outputMeans.size() &&
+			(!config.outputFromGateLayer())){
+			// do normal de-normalization
+			unstandardize = true;
+			htkoutput     = true;
+			printf(", HTK format, de-normalized\n");
+		    }else{
+			unstandardize = false;
+			htkoutput     = false;
+			printf(", bin format, not de-normalized\n");
+		    }
+		}
+	    }else{
+		unstandardize = false;
+		htkoutput     = false;
+		printf(", bin format, not de-normalized\n");
+	    }
 
+	    /*
+	    // Prepare the mean and variance for data de-normalization
+	    if (unstandardize && config.outputFromWhichLayer() < 0 && 
+		(config.mdnPara() < -1.0 || config.mdnPara() > 0.0)){
+
+		// when de-normalization is not used ?
+		// 1. unstandardize == false
+		// 2. generate from hidden layers
+		// 3. MDN, output the distribution parameter
+	       	// 4. MDN, output is from the sigmoid or softmax unit
+		
+            }else{
+		printf("Outputs will NOT be scaled by mean and std specified in NC file.\n");
+		}*/
+
+	    int output_lag = config.outputTimeLag();
             if (config.feedForwardFormat() == Configuration::FORMAT_SINGLE_CSV) {
-                // open the output file
-                std::ofstream file(config.feedForwardOutputFile().c_str(), std::ofstream::out);
-
+                // Block 20161111x01
+		printf("WARNING: output only for HTK format");
+            }else if (config.feedForwardFormat() == Configuration::FORMAT_CSV) {
+                // Block 20161111x02
+		printf("WARNING: output only for HTK format");
+            }else if (config.feedForwardFormat() == Configuration::FORMAT_HTK) {
+		
                 // process all data set fractions
                 int fracIdx = 0;
                 boost::shared_ptr<data_sets::DataSetFraction> frac;
+		    
                 while (((frac = feedForwardSet->getNextFraction()))) {
-                    printf("Computing outputs for data fraction %d...", ++fracIdx);
+		    // print fraction information
+                    printf("Computing outputs for data fraction %d ... ", ++fracIdx);
+		    for (int i = 0; i<frac->numSequences(); i++)
+			printf("%s ", frac->seqInfo(i).seqTag.c_str());
                     fflush(stdout);
-
-                    // compute the forward pass for the current data fraction and extract the outputs
+		    
+		    // generationOpt:
+		    //      if mdnVarScale is specified 
+		    //          if config.mdnPara is -1, 
+		    //               this is MDN parameter generation with mdnVarScale specified
+		    //          else
+		    //               this is sampling, scaled by mdnVarScake
+		    //      else
+		    //          directly use the mdnPara()
+		    real_t generationOpt = ((config.mdnVarScaleGen().size()>0) ? 
+					 ((config.mdnPara() > -1.5) ? config.mdnPara() : 1 ) : 
+					 (config.mdnPara()));
+		    neuralNetwork.notifyCurrentEpoch(config.fakeEpochNum());
+		    neuralNetwork.updateNNStateForGeneration();
                     neuralNetwork.loadSequences(*frac);
-                    neuralNetwork.computeForwardPass();
-                    std::vector<std::vector<std::vector<real_t> > > outputs = neuralNetwork.getOutputs();
+		    boost::posix_time::ptime sTime=boost::posix_time::microsec_clock::local_time();
+                    neuralNetwork.computeForwardPassGen(frac->maxSeqLength(), generationOpt);
+		    boost::posix_time::ptime eTime=boost::posix_time::microsec_clock::local_time();
+		    
+		    printf("\nTime (s): %f\n", (real_t)(eTime-sTime).total_milliseconds()/1000.0);
 
-                    // write the outputs in the file
-                    for (int psIdx = 0; psIdx < (int)outputs.size(); ++psIdx) {
-                        // write the sequence tag
-                        file << frac->seqInfo(psIdx).seqTag;
-
-                        // write the patterns
-                        for (int timestep = 0; timestep < (int)outputs[psIdx].size(); ++timestep) {
-                            for (int outputIdx = 0; outputIdx < (int)outputs[psIdx][timestep].size(); ++outputIdx) {
-                                real_t v;
-                                if (timestep < outputs[psIdx].size() - output_lag)
-                                    v = outputs[psIdx][timestep + output_lag][outputIdx];
-                                else
-                                    v = outputs[psIdx][outputs[psIdx].size() - 1][outputIdx];
-                                if (unstandardize) {
-                                    v *= outputStdevs[outputIdx];
-                                    v += outputMeans[outputIdx];
-                                }
-                                file << ';' << v; 
-                            }
-                        }
-
-                        file << '\n';
-                    }
-
-                    printf(" done.\n");
-                }
-
-                // close the file
-                file.close();
-            } // format: FORMAT_SINGLE_CSV
-
-            else if (config.feedForwardFormat() == Configuration::FORMAT_CSV) {
-                // process all data set fractions
-                int fracIdx = 0;
-                boost::shared_ptr<data_sets::DataSetFraction> frac;
-                while (((frac = feedForwardSet->getNextFraction()))) {
-                    printf("Computing outputs for data fraction %d...", ++fracIdx);
-                    fflush(stdout);
-
-                    // compute the forward pass for the current data fraction and extract the outputs
-                    neuralNetwork.loadSequences(*frac);
-                    neuralNetwork.computeForwardPass();
-                    std::vector<std::vector<std::vector<real_t> > > outputs = neuralNetwork.getOutputs();
-
-                    // write one output file per sequence
-                    for (int psIdx = 0; psIdx < (int)outputs.size(); ++psIdx) {
-                        boost::filesystem::path seqPath(frac->seqInfo(psIdx).seqTag);
-                        seqPath.replace_extension(".csv");
-                        std::string filename(seqPath.filename().string());
-                        boost::filesystem::path oPath = boost::filesystem::path(config.feedForwardOutputFile()) / seqPath.relative_path().parent_path();
-                        boost::filesystem::create_directories(oPath);
-                        boost::filesystem::path filepath = oPath / filename;
-                        std::ofstream file(filepath.string().c_str(), std::ofstream::out);
-
-                        // write the patterns
-                        for (int timestep = 0; timestep < (int)outputs[psIdx].size(); ++timestep) {
-                            for (int outputIdx = 0; outputIdx < (int)outputs[psIdx][timestep].size(); ++outputIdx) {
-                                real_t v;
-                                if (timestep < outputs[psIdx].size() - output_lag)
-                                    v = outputs[psIdx][timestep + output_lag][outputIdx];
-                                else
-                                    v = outputs[psIdx][outputs[psIdx].size() - 1][outputIdx];
-                                if (unstandardize) {
-                                    v *= outputStdevs[outputIdx];
-                                    v += outputMeans[outputIdx];
-                                }
-                                if (outputIdx > 0)
-                                    file << ';';
-                                file << v; 
-                            }
-                            file << '\n';
-                        }
-                        file.close();
-                    }
-
-                    printf(" done.\n");
-                }
-            } // format: FORMAT_CSV
-
-            else if (config.feedForwardFormat() == Configuration::FORMAT_HTK) {
-                // process all data set fractions
-                int fracIdx = 0;
-                boost::shared_ptr<data_sets::DataSetFraction> frac;
-                while (((frac = feedForwardSet->getNextFraction()))) {
-                    printf("Computing outputs for data fraction %d...", ++fracIdx);
-                    fflush(stdout);
-
-                    // compute the forward pass for the current data fraction and extract the outputs
-                    neuralNetwork.loadSequences(*frac);
-                    neuralNetwork.computeForwardPass();
-                    std::vector<std::vector<std::vector<real_t> > > outputs = neuralNetwork.getOutputs();
+                    std::vector<std::vector<std::vector<real_t> > > outputs = 
+			neuralNetwork.getOutputs(config.outputFromWhichLayer(), 
+						 config.outputFromGateLayer(),
+						 generationOpt); 
 
                     // write one output file per sequence
                     for (int psIdx = 0; psIdx < (int)outputs.size(); ++psIdx) {
@@ -473,55 +725,67 @@ int trainerMain(const Configuration &config)
                             }*/
                             //seqTag += ".htk";
                             //std::cout << seqTag << std::endl;
-                            boost::filesystem::path seqPath(frac->seqInfo(psIdx).seqTag + ".htk");
+			    
+			    std::string seqTagSuf;
+			    if (htkoutput) {seqTagSuf = ".htk";} else{seqTagSuf = ".bin";}
+                            boost::filesystem::path seqPath(frac->seqInfo(psIdx).seqTag+seqTagSuf);
                             std::string filename(seqPath.filename().string());
-                            boost::filesystem::path oPath = boost::filesystem::path(config.feedForwardOutputFile()) / seqPath.relative_path().parent_path();
+                            boost::filesystem::path oPath = 
+				boost::filesystem::path(config.feedForwardOutputFile()) / 
+				seqPath.relative_path().parent_path();
                             boost::filesystem::create_directories(oPath);
                             boost::filesystem::path filepath = oPath / filename;
-                            std::ofstream file(filepath.string().c_str(), std::ofstream::out | std::ios::binary);
+                            std::ofstream file(filepath.string().c_str(), 
+					       std::ofstream::out | std::ios::binary);
 
                             int nComps = outputs[psIdx][0].size();
 
                             // write header
-                            unsigned tmp = (unsigned)outputs[psIdx].size();
-                            swap32(&tmp);
-                            file.write((const char*)&tmp, sizeof(unsigned));
-                            tmp = (unsigned)(config.featurePeriod() * 1e4);
-                            swap32(&tmp);
-                            file.write((const char*)&tmp, sizeof(unsigned));
-                            unsigned short tmp2 = (unsigned short)(nComps) * sizeof(float);
-                            swap16(&tmp2);
-                            file.write((const char*)&tmp2, sizeof(unsigned short));
-                            tmp2 = (unsigned short)(config.outputFeatureKind());
-                            swap16(&tmp2);
-                            file.write((const char*)&tmp2, sizeof(unsigned short));
+			    if (htkoutput){
+				unsigned tmp = (unsigned)outputs[psIdx].size();
+				swap32(&tmp);
+				file.write((const char*)&tmp, sizeof(unsigned));
+				tmp = (unsigned)(config.featurePeriod() * 1e4);
+				swap32(&tmp);
+				file.write((const char*)&tmp, sizeof(unsigned));
+				unsigned short tmp2 = (unsigned short)(nComps) * sizeof(float);
+				swap16(&tmp2);
+				file.write((const char*)&tmp2, sizeof(unsigned short));
+				tmp2 = (unsigned short)(config.outputFeatureKind());
+				swap16(&tmp2);
+				file.write((const char*)&tmp2, sizeof(unsigned short));
+			    }
+			    
 
-                            float v;
                             // write the patterns
-                            for (int timestep = 0; timestep < (int)outputs[psIdx].size(); ++timestep) {
-                                for (int outputIdx = 0; outputIdx < (int)outputs[psIdx][timestep].size(); ++outputIdx) {
+                            for (int time=0; time<(int)outputs[psIdx].size(); ++time) 
+			    {
+                                for (int outIdx=0;outIdx<(int)outputs[psIdx][time].size();++outIdx)
+				{
                                     float v;
-                                    if (timestep < outputs[psIdx].size() - output_lag)
-                                        v = (float)outputs[psIdx][timestep + output_lag][outputIdx];
-                                    else
-                                        v = (float)outputs[psIdx][outputs[psIdx].size() - 1][outputIdx];
+				    v = (time < outputs[psIdx].size() - output_lag) ? 
+					((float)outputs[psIdx][time+output_lag][outIdx]) :
+					((float)outputs[psIdx][outputs[psIdx].size()-1][outIdx]);
+
                                     if (unstandardize) {
-                                        v *= outputStdevs[outputIdx];
-                                        v += outputMeans[outputIdx];
+                                        v *= outputStdevs[outIdx];
+                                        v += outputMeans[outIdx];
                                     }
-                                    swapFloat(&v); 
+				    
+				    if (htkoutput)
+					swapFloat(&v); 
+				    
                                     file.write((const char*)&v, sizeof(float));
                                 }
                             }
                             file.close();
                         }
                     }
-
                     printf(" done.\n");
                 }
             }
             if (feedForwardSet != boost::shared_ptr<data_sets::DataSet>()) 
-                std::cout << "Removing cache file: " << feedForwardSet->cacheFileName() << std::endl;
+                std::cout << "Removing cache file: "<<feedForwardSet->cacheFileName()<<std::endl;
             boost::filesystem::remove(feedForwardSet->cacheFileName());
         } // evaluation mode
     }
@@ -611,65 +875,90 @@ boost::shared_ptr<data_sets::DataSet> loadDataSet(data_set_type dsType)
 {
     std::string type;
     std::vector<std::string> filenames;
-    real_t fraction = 1;
-    bool fracShuf   = false;
-    bool seqShuf    = false;
-    real_t noiseDev = 0;
+    real_t fraction       = 1;
+    bool fracShuf         = false;
+    bool seqShuf          = false;
+    real_t noiseDev       = 0;
     std::string cachePath = "";
-    int truncSeqLength = -1;
+    int truncSeqLength    = -1;
+    
+    std::string auxDataDir   = "";
+    std::string auxDataExt   = "";
+    int         auxDataDim   = -1;
+    int         auxDataTyp   = -1;
+    
+    Configuration config = Configuration::instance();
 
     cachePath = Configuration::instance().cachePath();
     switch (dsType) {
     case DATA_SET_TRAINING:
-        type     = "training set";
-        filenames = Configuration::instance().trainingFiles();
-        fraction = Configuration::instance().trainingFraction();
-        fracShuf = Configuration::instance().shuffleFractions();
-        seqShuf  = Configuration::instance().shuffleSequences();
-        noiseDev = Configuration::instance().inputNoiseSigma();
+        type           = "training set";
+        filenames      = Configuration::instance().trainingFiles();
+        fraction       = Configuration::instance().trainingFraction();
+        fracShuf       = Configuration::instance().shuffleFractions();
+        seqShuf        = Configuration::instance().shuffleSequences();
+        noiseDev       = Configuration::instance().inputNoiseSigma();
         truncSeqLength = Configuration::instance().truncateSeqLength();
         break;
 
     case DATA_SET_VALIDATION:
-        type     = "validation set";
-        filenames = Configuration::instance().validationFiles();
-        fraction = Configuration::instance().validationFraction();
-        cachePath = Configuration::instance().cachePath();
+        type           = "validation set";
+        filenames      = Configuration::instance().validationFiles();
+        fraction       = Configuration::instance().validationFraction();
+        truncSeqLength = Configuration::instance().truncateSeqLength();
         break;
 
     case DATA_SET_TEST:
-        type     = "test set";
-        filenames = Configuration::instance().testFiles();
-        fraction = Configuration::instance().testFraction();
+        type           = "test set";
+        filenames      = Configuration::instance().testFiles();
+        fraction       = Configuration::instance().testFraction();
         break;
 
     default:
-        type     = "feed forward input set";
-        filenames = Configuration::instance().feedForwardInputFiles();
-        noiseDev = Configuration::instance().inputNoiseSigma();
+        type           = "feed forward input set";
+        filenames      = Configuration::instance().feedForwardInputFiles();
+        noiseDev       = Configuration::instance().inputNoiseSigma();
         break;
     }
 
+    // Auxillary data information
+    auxDataDir         = Configuration::instance().auxillaryDataDir();
+    auxDataExt         = Configuration::instance().auxillaryDataExt();
+    auxDataDim         = Configuration::instance().auxillaryDataDim();
+    auxDataTyp         = Configuration::instance().auxillaryDataTyp();
+    
+    // Load the data
     printf("Loading %s ", type.c_str());
     for (std::vector<std::string>::const_iterator fn_itr = filenames.begin();
-         fn_itr != filenames.end(); ++fn_itr)
-    {
+         fn_itr != filenames.end(); ++fn_itr){
         printf("'%s' ", fn_itr->c_str());
     }
     printf("...");
     fflush(stdout);
-
     //std::cout << "truncating to " << truncSeqLength << std::endl;
-    boost::shared_ptr<data_sets::DataSet> ds = boost::make_shared<data_sets::DataSet>(
-        filenames,
-        Configuration::instance().parallelSequences(), fraction, truncSeqLength, 
-        fracShuf, seqShuf, noiseDev, cachePath);
-
+    boost::shared_ptr<data_sets::DataSet> ds 
+	= boost::make_shared<data_sets::DataSet>(
+		filenames,
+		Configuration::instance().parallelSequences(), 
+		fraction,   truncSeqLength, 
+		fracShuf,   seqShuf,
+		noiseDev,   cachePath);
+    
     printf("done.\n");
     printf("Loaded fraction:  %d%%\n",   (int)(fraction*100));
     printf("Sequences:        %d\n",     ds->totalSequences());
-    printf("Sequence lengths: %d..%d\n", ds->minSeqLength(), ds->maxSeqLength());
+    printf("Sequence lengths: %d..%d\n", ds->minSeqLength(),
+	                                 ds->maxSeqLength());
     printf("Total timesteps:  %d\n",     ds->totalTimesteps());
+
+    // Note: Auxillary configuration will be used in DataSet.cpp.
+    //       They are just shown here
+    if (auxDataDir.size()>0){
+	printf("Auxillary path:   %s\n", auxDataDir.c_str());
+	printf("Auxillary ext :   %s\n", auxDataExt.c_str());
+	printf("Auxillary type:   %d\n", auxDataTyp);
+	printf("Auxillary dim:    %d\n", auxDataDim);
+    }
     printf("\n");
 
     return ds;
@@ -680,17 +969,26 @@ template <typename TDevice>
 void printLayers(const NeuralNetwork<TDevice> &nn)
 {
     int weights = 0;
-
+    printf("     Name\t\tType\n");
     for (int i = 0; i < (int)nn.layers().size(); ++i) {
-        printf("(%d) %s ", i, nn.layers()[i]->type().c_str());
+        printf("(%d) %s\t\t%s ",  i, nn.layers()[i]->name().c_str(),
+	       nn.layers()[i]->type().c_str());
         printf("[size: %d", nn.layers()[i]->size());
 
-        const layers::TrainableLayer<TDevice>* tl = dynamic_cast<const layers::TrainableLayer<TDevice>*>(nn.layers()[i].get());
+        const layers::TrainableLayer<TDevice>* tl = 
+	    dynamic_cast<const layers::TrainableLayer<TDevice>*>(nn.layers()[i].get());
         if (tl) {
-            printf(", bias: %.1lf, weights: %d", (double)tl->bias(), (int)tl->weights().size());
+            printf(", bias: %.1lf, weights: %d",
+		   (double)tl->bias(), (int)tl->weights().size());
             weights += (int)tl->weights().size();
-        }
-
+        }else{
+	    const layers::MDNLayer<TDevice>* mdnlayer = 
+		dynamic_cast<const layers::MDNLayer<TDevice>*>(nn.layers()[i].get());
+	    if (mdnlayer && mdnlayer -> flagTrainable()){
+		printf(", weights: %d", (int)mdnlayer->weights().size());
+		weights += (int)mdnlayer->weights().size();
+	    }
+	}
         printf("]\n");
     }
 
@@ -702,7 +1000,7 @@ template <typename TDevice>
 void printOptimizer(const Configuration &config, const optimizers::Optimizer<TDevice> &optimizer)
 {
     if (dynamic_cast<const optimizers::SteepestDescentOptimizer<TDevice>*>(&optimizer)) {
-        printf("Optimizer type: Steepest descent with momentum\n");
+        //printf("Optimizer type: Steepest descent with momentum\n");
         printf("Max training epochs:       %d\n", config.maxEpochs());
         printf("Max epochs until new best: %d\n", config.maxEpochsNoBest());
         printf("Validation error every:    %d\n", config.validateEvery());
@@ -710,7 +1008,7 @@ void printOptimizer(const Configuration &config, const optimizers::Optimizer<TDe
         printf("Learning rate:             %g\n", (double)config.learningRate());
         printf("Momentum:                  %g\n", (double)config.momentum());
 	
-	if (!config.trainedParameterPath().empty()){
+	if (config.continueFile().empty() && !config.trainedParameterPath().empty()){
 	    printf("Model Parameter:           %s\n", config.trainedParameterPath().c_str());
 	}
 	if (config.weUpdate()){
@@ -720,7 +1018,6 @@ void printOptimizer(const Configuration &config, const optimizers::Optimizer<TDe
 	    printf("WE Dim:                    %d\n", config.weDim());
 	    printf("WE Start index:            %d\n", config.weIDDim());
 	}
-	
         printf("\n");
     }
 }
@@ -762,7 +1059,9 @@ void saveNetwork(const NeuralNetwork<TDevice> &nn, const std::string &filename,
 
 
 template <typename TDevice> 
-void saveState(const NeuralNetwork<TDevice> &nn, const optimizers::Optimizer<TDevice> &optimizer, const std::string &infoRows,
+void saveState(const NeuralNetwork<TDevice> &nn, 
+	       const optimizers::Optimizer<TDevice> &optimizer, 
+	       const std::string &infoRows,
 	       const real_t nnlr, const real_t welr)
 {
 
@@ -772,7 +1071,9 @@ void saveState(const NeuralNetwork<TDevice> &nn, const optimizers::Optimizer<TDe
 	jsonDoc.SetObject();
 
 	// add the configuration options
-	jsonDoc.AddMember("configuration", Configuration::instance().serializedOptions().c_str(), jsonDoc.GetAllocator());
+	jsonDoc.AddMember("configuration", 
+			  Configuration::instance().serializedOptions().c_str(), 
+			  jsonDoc.GetAllocator());
 
 	// add the info rows
 	std::string tmp = boost::replace_all_copy(infoRows, "\n", ";;;");
@@ -829,7 +1130,10 @@ void saveState(const NeuralNetwork<TDevice> &nn, const optimizers::Optimizer<TDe
 
 
 template <typename TDevice> 
-void restoreState(NeuralNetwork<TDevice> *nn, optimizers::Optimizer<TDevice> *optimizer, std::string *infoRows)
+void restoreState(
+ NeuralNetwork<TDevice> *nn,
+ optimizers::Optimizer<TDevice> *optimizer, 
+ std::string *infoRows)
 {
     rapidjson::Document jsonDoc;
     readJsonFile(&jsonDoc, Configuration::instance().continueFile());
@@ -862,3 +1166,4 @@ std::string printfRow(const char *format, ...)
     // return the same string
     return std::string(buffer);
 }
+

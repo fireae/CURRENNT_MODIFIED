@@ -357,8 +357,12 @@ namespace layers{
 	    thrust::fill(this->weights().begin() + this->size(), this->weights().end(), 0.0);
 	}
 
-	const Configuration &config = Configuration::instance();
-	m_trainFlag = config.trainingMode();
+	//const Configuration &config = Configuration::instance();
+	//m_trainFlag = config.trainingMode();
+	
+	if (this->precedingLayer().getSaveMemoryFlag())
+	    throw std::runtime_error("layer before batchnorm is reduced in mem");  
+
     }
 
     template <typename TDevice>
@@ -377,7 +381,8 @@ namespace layers{
     template <typename TDevice>
     void BatchNormLayer<TDevice>::computeForwardPass(const int nnState)
     {
-	if (m_trainFlag && m_preEpoch > 0 && m_preEpoch != this->getCurrTrainingEpoch()){
+	if (this->flagTrainingMode() && m_preEpoch > 0 &&
+	    m_preEpoch != this->getCurrTrainingEpoch()){
 	    // always update the mean, std for each epoch
 	    m_batchCnt = 0;
 	    thrust::fill(this->weights().begin() + 2 * this->size(), this->weights().end(), 0.0);
@@ -465,7 +470,7 @@ namespace layers{
 		fn3);
 
 	   // Step4. accumulate the mean and std, for generation stage
-	   if (m_trainFlag){
+	   if (this->flagTrainingMode()){
 	       internal::AveMeanStd fn5;
 	       fn5.meanStd    = helpers::getRawPointer(m_stats);
 	       fn5.meanStdBuf = helpers::getRawPointer(this->weights()) + this->size() * 2;
@@ -515,7 +520,7 @@ namespace layers{
 	   fn2.scale     = helpers::getRawPointer(this->weights());
 	   fn2.meanStd   = helpers::getRawPointer(m_stats);
 	   fn2.meanStdBuf= helpers::getRawPointer(this->weights()) + this->size() * 2;
-	   fn2.trainFlag = m_trainFlag;
+	   fn2.trainFlag = this->flagTrainingMode();
 	   
 	   tmp       = this->size() * this->curMaxSeqLength() * this->parallelSequences();
 	   thrust::for_each(

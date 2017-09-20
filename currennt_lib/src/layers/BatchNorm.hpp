@@ -45,7 +45,7 @@ namespace layers{
 	
 	real_t      m_stdConst;  // const floor for the var
 	real_t      m_batchCnt;
-	bool        m_trainFlag;
+	// bool        m_trainFlag;  // replaced by this->flagTrainingMode()
 	int         m_preEpoch;
 	real_t      m_batchSize; //
 
@@ -58,8 +58,7 @@ namespace layers{
 	BatchNormLayer(
 		const helpers::JsonValue &layerChild, 
 		const helpers::JsonValue &weightsSection,
-		Layer<TDevice>           &precedingLayer
-		);
+		Layer<TDevice>           &precedingLayer);
 
 	virtual ~BatchNormLayer();
 

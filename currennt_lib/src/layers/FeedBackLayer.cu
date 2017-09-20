@@ -62,14 +62,18 @@ namespace {
 	// Copy the output of preceding layer to the output of this layer
 	// Copy the output of target layer to the output of this layer
 
-	int dimInput1;      // dimension of output of preceding layer
-	int dimInput2;      // dimension of output of target layer (to be fed back, in total dim)
-	int dimInput2Start; // from which dimension of the target to load (may not be 0)
+	int dimInput1End;    // dimension of the output from previous layer
+	int dimInput1Start;  // from which dimension of the previous layer to read
+	int dimInput1Total;  // dimension of output of preceding layer
+	int dimInput1Valid;
 	
-	int dimOutput;      // dimension of output of this layer
+	int dimInput2End;    // dimension of output of target layer (to be fed back, in total dim)
+	int dimInput2Start;  // from which dimension of the target to load (may not be 0)
+	int dimInput2Total;  // dimension of output of this layer
+	int dimInput2Valid;
+	
+	int dimOutput;
 	int parallel;       // number of parallel sentences
-
-	int dim1Step;
 	
 	real_t *input1;     // preceding layer
 	real_t *input2;     // target layer
@@ -89,40 +93,35 @@ namespace {
 	    int outputIdx    = timeStep * dimOutput + dimIdx;
 	    int lookBackTime = 0;
 
-	    if (dimIdx < (dimInput1 + lookBackStepNM * dim1Step)){
-		if (dimIdx >= dimInput1){
+	    if (dimIdx < (dimInput1Valid + lookBackStepNM * dimInput2Valid)){
+		
+		if (dimIdx >= dimInput1Valid){
 		    // copy from the target layer (feedback part)
 		    
 		    // get the dimension index (across multiple time steps)
-		    dimIdx       = dimIdx - dimInput1;
+		    dimIdx       = dimIdx - dimInput1Valid;
 		    
 		    // get the time shift to be looked backwards
 		    if (lookBack != NULL)
-			lookBackTime = lookBack[dimIdx / dim1Step] * parallel;
+			lookBackTime = lookBack[dimIdx / dimInput2Valid] * parallel;
 		    else
 			lookBackTime = 1;
 		    
 		    // get the dimension index in each time step
-		    dimIdx       = dimIdx % dim1Step;
+		    dimIdx       = dimIdx % dimInput2Valid;
 		    
-		    if (timeStep < lookBackTime)      // loopback one step
-			output[outputIdx] = 0.0;
+		    if (timeStep < lookBackTime)      
+			output[outputIdx] = 0.0; // if the previous step is unavailable
 		    else{
-			output[outputIdx] = input2[(timeStep - lookBackTime) * dimInput2 +
+			output[outputIdx] = input2[(timeStep - lookBackTime) * dimInput2Total +
 						   dimIdx + dimInput2Start];
-			
-			// crossBoundary should be deleted
-			if (crossBoundary == 3 &&
-			    input2[(timeStep - lookBackTime) * dimInput2 + dimInput2Start] > 0.98){
-			    output[outputIdx] = 0.0;
-			    // Set the feedback to zero if previous frame is silence
-			}
-			//
+
+			// Block20170702x06			
 		    }
 		    
 		}else{
 		    //output[outputIdx] = 0;
-		    output[outputIdx] = input1[timeStep * dimInput1 + dimIdx];
+		    output[outputIdx] = input1[timeStep * dimInput1Total + dimIdx];
 		}
 	    }else{
 		// this is section for aggregating information
@@ -136,18 +135,19 @@ namespace {
 	// Copy the output of preceding layer to the output of this layer
 	// Copy the output of target layer to the output of this layer
 
-	int dimInput2;      // dimension of output of target layer (to be fed back, in total dim)
+	int dimInput2Total;  // dimension of output of target layer (to be fed back, in total dim)
 	int dimInput2Start; // from which dimension of the target to load (may not be 0)
+	int dim1Band;
 	
 	int dimOutput;      // dimension of output of this layer
 	int dimOutputStart;
-	int dim1Band;
+	
 	int bandNum;
 	
 	real_t *input2;     // target layer
 	real_t *output;     // this layer
 
-	char   *boundaryInfo;
+	int    *boundaryInfo;
 	int     startTime;
 	int     endTime;
 
@@ -186,40 +186,41 @@ namespace {
 		    output[outputIdx]= aggreInfo;
 		}
 
-		if (crossBoundary == 3 && (inputIdx - dimInput2)>0 &&
-		    input2[inputIdx - dimInput2 - dimIdxRel % dim1Band] > 0.98){
-		    output[outputIdx] = 0;
-		    // set the previous frame to zero if it is silence
-		}
+		// Block20170702x07
 		
-		if (crossBoundary == 3 && input2[inputIdx - dimIdxRel % dim1Band] > 0.98){
+		/*if (crossBoundary == 3 && input2[inputIdx - dimIdxRel % dim1Band] > 0.98){
 		    // don't aggregate this frame
 		}else{
 		    // aggregating information using tanh and moving average
 		    aggreInfo  = (((time - boundTime) / ((time - boundTime)+1.0)) * aggreInfo +
 				  cell_act_fn_t::fn(input2[inputIdx]) / ((time-boundTime)+1.0));
-		}
+				  }*/
+		aggreInfo  = (((time - boundTime) / ((time - boundTime)+1.0)) * aggreInfo +
+			      cell_act_fn_t::fn(input2[inputIdx]) / ((time-boundTime)+1.0));
+
 		outputIdx += dimOutput;
-		inputIdx  += dimInput2;
+		inputIdx  += dimInput2Total;
 	    }
 	}
     };
 
 
+    // vectorAggregateForwardInfer is different from vectorAggregateForward
+    // because previous frames' results must be saved as external data
     struct vectorAggregateForwardInfer
     {
-	int dimInput2;      // dimension of output of target layer (to be fed back, in total dim)
+	int dimInput2Total; // dimension of output of target layer (to be fed back, in total dim)
 	int dimInput2Start; // from which dimension of the target to load (may not be 0)
+	int dim1Band;
 	
 	int dimOutput;      // dimension of output of this layer
 	int dimOutputStart;
-	int dim1Band;
 	int bandNum;
 	
 	real_t *input2;     // target layer
 	real_t *output;     // this layer
 
-	char   *boundaryInfo;
+	int    *boundaryInfo;
 	int     startTime;
 	int     endTime;
 
@@ -244,7 +245,7 @@ namespace {
 	    //int     inputIdx   = dimInput2Start + dimIdxRel % dim1Band;
 	    // Modified
 	    int     outputIdx = startTime * dimOutput + dimOutputStart + dimIdxRel;
-	    int     inputIdx  = startTime * dimInput2 + dimInput2Start + dimIdxRel % dim1Band; 
+	    int     inputIdx  = startTime * dimInput2Total + dimInput2Start + dimIdxRel % dim1Band; 
 	    
 	    int     bandIdx   = dimIdxRel / dim1Band;      // which band this dimension is in?	    
 	    int     preTime   = 0;
@@ -265,7 +266,8 @@ namespace {
 		    aggBuffer[bandNum * dim1Band + dimIdxRel] = time;
 		    
 		}else{
-		    
+
+		    /*
 		    // aggregating the previous frame
 		    if (crossBoundary == 3 &&
 			input2[inputIdx - dimInput2 - dimIdxRel % dim1Band] > 0.98){
@@ -297,13 +299,37 @@ namespace {
 			    boundTime    = time; 
 			}
 			output[outputIdx]= aggreInfo;
+			}*/
+
+
+		    // aggregating the previous frame
+		    aggreInfo  = ((preTime-boundTime) / (preTime - boundTime + 1.0)) *
+			aggreInfo + cell_act_fn_t::fn(input2[inputIdx - dimInput2Total]) /
+			(preTime - boundTime+1.0);
+		    
+		    // propagate the info to the current frame
+		    if (crossBoundary == 1){
+			// deliver the aggregation across boundary
+			output[outputIdx]= aggreInfo;
+			if (boundaryInfo[time * bandNum + bandIdx] < 1){
+			    aggreInfo    = 0.0;  
+			    boundTime    = time; 
+			}
+		    }else{
+			// not deliver across boundary
+			if (boundaryInfo[time * bandNum + bandIdx] < 1){
+			    aggreInfo    = 0.0;  
+			    boundTime    = time; 
+			}
+			output[outputIdx]= aggreInfo;
 		    }
+
 		    // save the aggregation information for next time (during generation)
 		    aggBuffer[dimIdxRel] = aggreInfo;
 		    aggBuffer[bandNum * dim1Band + dimIdxRel] = boundTime; 
 		}
 		outputIdx += dimOutput;
-		inputIdx  += dimInput2;
+		inputIdx  += dimInput2Total;
 	    }
 	}
     };
@@ -311,7 +337,9 @@ namespace {
     
     struct vectorFillBackward
     {
-	int dimInput1;      // dimension of the preceding layer
+	int dimInput1Start; // dimension of the preceding layer
+	int dimInput1End;   //
+	int dimInput1Total;  //
 	int dimOutput;      // dimension of this layer
 	
 	real_t *outputError;
@@ -320,9 +348,14 @@ namespace {
 	// Dim here is the dimension of the previous layer
 	__host__ __device__ real_t operator() (const int &outputIdx) const
 	{
-	    int timeStep  = outputIdx / dimInput1;
-	    int dimIdx    = outputIdx % dimInput1;
-	    return outputError[timeStep * dimOutput + dimIdx];
+	    int timeStep  = outputIdx / dimInput1Total;
+	    int dimIdx    = outputIdx % dimInput1Total;
+	    
+	    if (dimIdx >= dimInput1Start && dimIdx < dimInput1End){
+		return outputError[timeStep * dimOutput + dimIdx - dimInput1Start];
+	    }else{
+		return 0;
+	    }
 	}
     };
     
@@ -346,7 +379,7 @@ namespace layers{
 	    optVec[i] = boost::lexical_cast<int>(tempArgs[i]);
     }
 
-    void ConvertBoundaryInfo(Cpu::pattype_vector &boundary, Cpu::pattype_vector &distance,
+    void ConvertBoundaryInfo(Cpu::pattype_vector &boundary, Cpu::int_vector &distance,
 			     Cpu::int_vector & aggOpt, const int curMaxLength)
     {
 	// The boundary information logs the distance of this frame to the previous boundary
@@ -380,8 +413,13 @@ namespace layers{
 	m_lookBackStr = ((layerChild->HasMember("lookback")) ? 
 			 ((*layerChild)["lookback"].GetString()) : (""));
 	if (m_lookBackStr.size()){
-	    if (m_lookBackStr.size()==1 && m_lookBackStr[0] == '0'){
+	    if (m_lookBackStr == "loop"){
+		// specical case where the training data is directly feedback
+		// Note that this data feedack loop should not be used in testing
+		m_lookBack.resize(1, 0);
+	    }else if (m_lookBackStr.size()==1 && m_lookBackStr[0] == '0'){
 		// special case where lookback is not used
+		// however, aggregation may be used
 		m_lookBack.clear();
 	    }else{
 		// when lookback is explicitly specified
@@ -411,6 +449,19 @@ namespace layers{
 	    // default, don't use aggregate
 	    m_aggOpt.clear(); 
 	}
+
+	// configuration for the previous state
+	m_prevDimEnd    = ((layerChild->HasMember("previousDimEnd")) ? 
+			  ((*layerChild)["previousDimEnd"].GetInt()) : precedingLayer.size());
+	m_prevDimStart  = ((layerChild->HasMember("previousDimStart")) ? 
+			  ((*layerChild)["previousDimStart"].GetInt()) : 0);
+	if (m_prevDimStart < 0 || m_prevDimEnd > precedingLayer.size() ||
+	    m_prevDimStart > m_prevDimEnd)
+	    throw std::runtime_error("Error in previousDim and previousDimStart configuration");
+
+	if (this->precedingLayer().getSaveMemoryFlag())
+	    throw std::runtime_error("layer before feedback is reduced in mem");  
+
     }
 
     template <typename TDevice>
@@ -430,6 +481,13 @@ namespace layers{
         (*layersArray)[layersArray->Size() - 1].AddMember("aggregate_cross_boundary", 
 							  m_crossBoundary,
 							  allocator);
+	if (m_prevDimStart != 0 || m_prevDimEnd != this->precedingLayer().size()){
+	    (*layersArray)[layersArray->Size() - 1].AddMember("previousDimStart", 
+							      m_prevDimStart, allocator);
+	    (*layersArray)[layersArray->Size() - 1].AddMember("previousDimEnd", 
+							      m_prevDimEnd, allocator);
+	}
+	
     }
 
     template <typename TDevice>
@@ -439,19 +497,20 @@ namespace layers{
 	m_targetLayer    = &targetLayer;
 
 	// Now, use all target features for feedback
-	// To be completed
+	// [To be completed]
 	m_targetDimStart = 0;
 	m_targetDimEnd   = m_targetDim;
 
 	// dim * look_back + dim * aggregate + preceding_layer
 	int dimExpected = ((m_targetDimEnd - m_targetDimStart) * m_lookBack.size() +
 			   (m_targetDimEnd - m_targetDimStart) * m_aggOpt.size()   +
-			   this->precedingLayer().size());
+			   (m_prevDimEnd - m_prevDimStart));
 	
 	if (dimExpected !=this->size()){
 	    printf("Feedback dim + Feedforward dim = %d\n", dimExpected);
 	    throw std::runtime_error("Error in network.jsn feedback layer size");
 	}
+	
 	if (m_targetDimEnd > m_targetDim || m_targetDimStart > m_targetDim ||
 	    m_targetDimEnd < m_targetDimStart){
 	    throw std::runtime_error("Error in configuration of targetDimStart, targetDimEnd");
@@ -465,6 +524,7 @@ namespace layers{
 	
 	// print information
 	printf("\nCreating the feedback link:\n");
+	printf("\tReading previous layer [%d-%d] dim\n", m_prevDimStart, m_prevDimEnd);
 	printf("\tFrom %s [%d-%d]", targetLayer.type().c_str(), m_targetDimStart, m_targetDimEnd);
 	printf("\tLook Back [%s]", m_lookBackStr.c_str());
 	if (m_aggOpt.size()){
@@ -499,7 +559,7 @@ namespace layers{
 		    throw std::runtime_error("Error unequal length of clockTime size");
 	    
 		// Convert the boundary information into distance information
-		Cpu::pattype_vector tempDistance(m_boundaryInfo.size(), 0);
+		Cpu::int_vector tempDistance(m_boundaryInfo.size(), 0);
 		cpu_int_vector      tmpAggOpt = m_aggOpt;
 		ConvertBoundaryInfo(auxInfo, tempDistance, tmpAggOpt, this->curMaxSeqLength());
 		m_boundaryInfo = tempDistance;
@@ -545,11 +605,15 @@ namespace layers{
 	    int previousSize  = this->precedingLayer().size();
 	    
 	    internal::vectorFillForward fn;
-	    fn.dimInput1      = previousSize;     // the dimension from preceding layer
+	    fn.dimInput1Start = m_prevDimStart;
+	    fn.dimInput1End   = m_prevDimEnd;
+	    fn.dimInput1Valid = m_prevDimEnd - m_prevDimStart;
+	    fn.dimInput1Total = previousSize;     // the dimension from preceding layer
 	    
-	    fn.dimInput2      = m_targetDim;      // the dimension of the output of target layer
 	    fn.dimInput2Start = m_targetDimStart; // from which dimension to load from target layer
-	    fn.dim1Step       = m_targetDimEnd - m_targetDimStart; // dimension for 1 step
+	    fn.dimInput2End   = m_targetDimEnd;   // the dimension of the output of target layer
+	    fn.dimInput2Valid = m_targetDimEnd - m_targetDimStart;
+	    fn.dimInput2Total = m_targetDim;      // dimension for 1 step
 		
 	    fn.dimOutput      = this->size();     
 	    fn.parallel       = this->parallelSequences();
@@ -575,14 +639,13 @@ namespace layers{
 	    // aggregating
 	    if (m_aggOpt.size()){
 		internal::vectorAggregateForward fn;
-
 	    
-		fn.dimInput2      = m_targetDim;      // 
+		fn.dimInput2Total = m_targetDim;      // 
 		fn.dimInput2Start = m_targetDimStart; //
-
 		fn.dim1Band       = m_targetDimEnd - m_targetDimStart; // dimension for 1 band
+		
 		fn.dimOutput      = this->size();
-		fn.dimOutputStart = (this->precedingLayer().size() +
+		fn.dimOutputStart = ((m_prevDimEnd - m_prevDimStart) +
 				     this->m_lookBack.size() * (m_targetDimEnd - m_targetDimStart));
 		
 		fn.input2         = helpers::getRawPointer(m_targetLayer->feedbackOutputs(true));
@@ -646,20 +709,23 @@ namespace layers{
 	    // Concatenate the feature vector 
 	    // (by treating the 1 dimensional softmax Index as a normal feature)
 	    internal::vectorFillForward fn;
+	    fn.dimInput1Start = m_prevDimStart;
+	    fn.dimInput1End   = m_prevDimEnd;
+	    fn.dimInput1Valid = m_prevDimEnd - m_prevDimStart;
+	    fn.dimInput1Total = previousSize;     // the dimension from preceding layer
 	    
-	    fn.dimInput1      = previousSize;
-	    fn.dimInput2      = m_targetDim;
-	    
-	    fn.dimOutput      = this->size();
+	    fn.dimInput2Start = m_targetDimStart; // from which dimension to load from target layer
+	    fn.dimInput2End   = m_targetDimEnd;   // the dimension of the output of target layer
+	    fn.dimInput2Valid = m_targetDimEnd - m_targetDimStart;
+	    fn.dimInput2Total = m_targetDim;      // dimension for 1 step
+		
+	    fn.dimOutput      = this->size();     
 	    fn.parallel       = this->parallelSequences();
-	    fn.dimInput2Start = m_targetDimStart;
-
-
+	    
 	    fn.input1         = helpers::getRawPointer(this->precedingLayer().outputs());
 	    fn.input2         = helpers::getRawPointer(m_targetLayer->feedbackOutputs(false));
 	    fn.output         = helpers::getRawPointer(this->outputs());
-
-	    fn.dim1Step       = m_targetDimEnd - m_targetDimStart; // dimension for 1 step
+	    
 	    fn.lookBack       = helpers::getRawPointer(this->m_lookBack);
 
 	    fn.lookBackStepNM = this->m_lookBack.size();
@@ -687,10 +753,10 @@ namespace layers{
 		    thrust::fill(this->m_aggBuffer.begin(), this->m_aggBuffer.end(), 0.0);
 		
 		internal::vectorAggregateForwardInfer fn;
-		fn.dimInput2      = m_targetDim;      // 
+		fn.dimInput2Total = m_targetDim;      // 
 		fn.dimInput2Start = m_targetDimStart; //
-
 		fn.dim1Band       = m_targetDimEnd - m_targetDimStart; // dimension for 1 band
+		
 		fn.dimOutput      = this->size();
 		fn.dimOutputStart = (this->precedingLayer().size() +
 				     this->m_lookBack.size() * (m_targetDimEnd - m_targetDimStart));
@@ -721,25 +787,27 @@ namespace layers{
 		int previousSize  = this->precedingLayer().size();
 		
 		internal::vectorFillForward fn;
+		fn.dimInput1Start = m_prevDimStart;
+		fn.dimInput1End   = m_prevDimEnd;
+		fn.dimInput1Valid = m_prevDimEnd - m_prevDimStart;
+		fn.dimInput1Total = previousSize;     
 		
-		fn.dimInput1      = previousSize;
-		fn.dimInput2      = m_targetDim;
-	    
+		fn.dimInput2Start = m_targetDimStart; 
+		fn.dimInput2End   = m_targetDimEnd;   
+		fn.dimInput2Valid = m_targetDimEnd - m_targetDimStart;
+		fn.dimInput2Total = m_targetDim;      
+
 		fn.dimOutput      = this->size();
-		fn.parallel       = this->parallelSequences();
-		fn.dimInput2Start = m_targetDimStart;
-		
+		fn.parallel       = this->parallelSequences();		
 
 		fn.input1         = helpers::getRawPointer(this->precedingLayer().outputs());
 		fn.input2         = helpers::getRawPointer(m_targetLayer->feedbackOutputs(false));
 		fn.output         = helpers::getRawPointer(this->outputs());
-
-		fn.dim1Step       = m_targetDimEnd - m_targetDimStart; // dimension for 1 step
 		fn.crossBoundary  = m_crossBoundary;
+		
 		Cpu::int_vector  tmp(2,1);
 		int_vector       tmpGPU = tmp;
 		fn.lookBack       = helpers::getRawPointer(tmpGPU);
-
 		fn.lookBackStepNM = m_aggOpt.size();
 		
 		thrust::for_each(
@@ -762,10 +830,16 @@ namespace layers{
     template <typename TDevice>
     void FeedBackLayer<TDevice>::computeBackwardPass(const int nnState)
     {
-	{{
+	if (m_prevDimEnd == m_prevDimStart){
+	    // previous layer is not used at all
+	    
+	}else{
+	    
 	   // Copy the gradient for the preceding layer
 	   internal::vectorFillBackward fn;
-	   fn.dimInput1      = this->precedingLayer().size();
+	   fn.dimInput1Start = m_prevDimStart;
+	   fn.dimInput1End   = m_prevDimEnd;
+	   fn.dimInput1Total = this->precedingLayer().size();
 	   fn.dimOutput      = this->size();
 	   fn.outputError    = helpers::getRawPointer(this->outputErrors());
 
@@ -776,7 +850,8 @@ namespace layers{
 			     thrust::counting_iterator<int>(0)+n,
 			     this->precedingLayer().outputErrors().begin(),
 			     fn);	   
-	}}
+	
+	}
     }
     
     template class FeedBackLayer<Cpu>;

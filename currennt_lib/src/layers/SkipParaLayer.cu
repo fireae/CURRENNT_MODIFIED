@@ -251,11 +251,11 @@ namespace layers{
 	// initialization for backward pass 
 	// (put it here just for convience, it is complicated to initialize the errors
 	//  in backward pass since this layer links to multiple layers)
-	thrust::fill(this->outputErrors().begin(), 
-		     (this->outputErrors().begin() + 
-		      this->curMaxSeqLength() * this->parallelSequences() * this->size()),
-		     0.0
-		     );
+	if (this->flagTrainingMode())
+	    thrust::fill(this->outputErrors().begin(), 
+			 (this->outputErrors().begin() + 
+			  this->curMaxSeqLength() * this->parallelSequences() * this->size()),
+			 0.0);
 	
 	// Do the Forward Pass
 	// calculate the gate output (in the same way as feed-forward layer, but on the gate unit)
@@ -325,10 +325,13 @@ namespace layers{
     template <typename TDevice, typename TActFn>
     void SkipParaLayer<TDevice, TActFn>::computeForwardPass(const int timeStep, const int nnState)
     {
+
+	if (this->precedingLayer().getSaveMemoryFlag() || this->preSkipLayer()->getSaveMemoryFlag())
+	    throw std::runtime_error("SkipPara layer is not ready for reduced memory input");
+	
 	int effTimeS = timeStep     * this->parallelSequences();
 	int effTimeE = (timeStep+1) * this->parallelSequences();
 
-	
 	// Do the Forward Pass
 	// calculate the gate output (in the same way as feed-forward layer, but on the gate unit)
 	// step1: linear transform

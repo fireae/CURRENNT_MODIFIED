@@ -43,10 +43,11 @@ namespace layers {
 	/* The vector to store the readWeBank */
 	Cpu::real_vector  m_weBank;
 	Cpu::real_vector  m_weIdx;
-	Cpu::real_vector  m_weBufferInput;
 	unsigned int      m_weDim;
 	unsigned int      m_weIDDim;
 	bool              m_flagWeUpdate;
+	//Cpu::real_vector  m_weBufferInput;
+	
 	/* Add 17/01/29 */
 	Cpu::real_vector  m_weMask;
 	bool              m_weMaskFlag;
@@ -57,13 +58,7 @@ namespace layers {
 	int               m_weNoiseStartDim;
 	int               m_weNoiseEndDim;
 	real_t            m_weNoiseDev;
-
-	/* Add 170326 Add external input*/
-	Cpu::int_vector   m_extInputDim;
-	std::vector<std::string>       m_extInputDir;
-	std::vector<std::string>       m_extInputExt;
-	
-	
+		
     public:
         /**
          * Constructs the Layer

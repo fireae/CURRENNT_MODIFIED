@@ -55,7 +55,9 @@ namespace layers {
 	// Add 170411 for feedback
 	real_vector     m_feedBackOutput;    // Buffer for the feedback data
 
-	int             m_ganState;
+	int             m_ganState;          // State for one-sided smoothing for Gan
+	
+	int             m_postoutputFlag;    // Type of postoutput layer
 	
     protected:
         real_vector&    _targets();
@@ -65,8 +67,11 @@ namespace layers {
 	/* Add 0401 for weighted MSE */
 	real_vector&     _mseWeight();
 	cpu_real_vector& _mseWeightCPU();
+
 	/* Add 1012 for */
 	real_vector&     _mvVector();
+	
+	const int&       _postLayerType();
 	
     public:
         /**
@@ -132,6 +137,10 @@ namespace layers {
 
 	virtual void retrieveFeedBackData(const int timeStep, const int method=0);
 
+	virtual void setFeedBackData(const int timeStep, const int state);
+
+	virtual real_t retrieveProb(const int timeStep, const int state);
+	
 	// Used by feedbackLayer
 	virtual real_vector& feedbackOutputs(const bool flagTrain);
 
@@ -143,9 +152,13 @@ namespace layers {
 	// export
 	virtual void exportLayer(const helpers::JsonValue &layersArray, 
 				 const helpers::JsonAllocator &allocator) const;
+	// read the ganState
+	virtual int  ganState();
 
-	virtual int ganState();
+	// set the postlayer type
+	virtual void setPostLayerType(const int flag);
 
+	virtual const int& postLayerType();
     };
 
 } // namespace layers

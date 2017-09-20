@@ -397,24 +397,28 @@ namespace layers {
 
     // Parse m_crStep
     // input:  m_crStep (from the function above) and time step
-    // change: tmpSkipFlagCR (which dimension should be skipped in forward propagation)
+    //         tmpSkipFlagCR (which dimension should be skipped in forward propagation)
     // return: which Hidden2Hidden matrix should be used ?
     int DimSkipFlagCR(Cpu::bool_vector &tmpSkipFlagCR, Cpu::int_vector &m_crStep, 
 		      int timestep, int parallelSent)
     {
 	int timeResolution;
 	int featDim = tmpSkipFlagCR.size() / parallelSent;
+
+	// Get the Skip vector for each dimension of the hidden feature
 	for (int idx = 0; idx < tmpSkipFlagCR.size(); idx++){
 	    int dim = idx % featDim;
 	    for (int block = 0; block < m_crStep.size()/2; block++){
-		if (dim < m_crStep[block*2+1]){
-		    timeResolution = m_crStep[block*2];
+		if (dim < m_crStep[block*2+1]){         // Find the block for this dimension
+		    timeResolution = m_crStep[block*2]; // check the timeresolution of this block
 		    if ((timestep % timeResolution)!=0)
 			tmpSkipFlagCR[dim] = true;	
 		    break;
 		}
 	    }
 	}
+
+	// Get the index of H2H matrix for this time step
 	int tmpNumber = 0b1;
 	int matrixIdx = 0;
 	for (int block = 0; block < m_crStep.size()/2; block++){
@@ -500,6 +504,7 @@ namespace layers {
 	}
 
 	// get the number of epochs for iterative updating
+	// this is an optional method for ClockRNN
 	m_iterUpdate = ((layerChild->HasMember("iterative_updating_epoch")) ? 
 			((*layerChild)["iterative_updating_epoch"].GetInt()) : (-1));
 	
@@ -508,7 +513,7 @@ namespace layers {
 	// pointers to the bias weight [PL+0, PL+L-1]
 	_rawBiasWeights = helpers::getRawPointer(this->weights()) + numInputWeights;
 
-	// prepare a one vector for updating bias (parallel * timeLength)
+	// Prepare a all-one vector for updating bias (parallel * timeLength)
 	m_onesVec.resize(this->outputs().size()/this->size(),1.0);
 	
 	// the forward and backward operator
@@ -518,13 +523,15 @@ namespace layers {
 	    // temporary buffer tmp [els, timeLength * parallel]
 	    Cpu::real_vector tmp(this->outputs().size()/2, 0);
 	    m_fw.tmpOutputs        = tmp;    // initialize the Device vector using host vector
-	    m_bw.tmpOutputs        = tmp;    
-	    m_fw.tmpOutputErrors   = tmp;
-	    m_bw.tmpOutputErrors   = tmp;
+	    m_bw.tmpOutputs        = tmp;
+	    if (this->flagTrainingMode()){
+		m_fw.tmpOutputErrors   = tmp;
+		m_bw.tmpOutputErrors   = tmp;
+		m_fw.unitDeltas        = tmp;
+		m_bw.unitDeltas        = tmp;
+	    }
 	    m_fw.unitActs          = tmp;
 	    m_bw.unitActs          = tmp;
-	    m_fw.unitDeltas        = tmp;
-	    m_bw.unitDeltas        = tmp;
 	    m_fw.unitActsBuf       = tmp;
 	    m_bw.unitActsBuf       = tmp;
 	    
@@ -581,35 +588,39 @@ namespace layers {
 
                 fm.tmpOutputsWrapT = 
 		    helpers::Matrix<TDevice>(&m_fw.tmpOutputs,      rows, cols, offset);
-		fm.tmpOutputErrorsWrapT = 
-		    helpers::Matrix<TDevice>(&m_fw.tmpOutputErrors, rows, cols, offset);
 		fm.unitActsWrapT = 
 		    helpers::Matrix<TDevice>(&m_fw.unitActs,        rows, cols, offset);
-		fm.unitDeltasWrapT = 
-		    helpers::Matrix<TDevice>(&m_fw.unitDeltas,      rows, cols, offset);
 		fm.unitActsBufWrapT = 
 		    helpers::Matrix<TDevice>(&m_fw.unitActsBuf,     rows, cols, offset);
-		
-		fm.unitDeltaP    = helpers::getRawPointer(m_fw.unitDeltas) + offset;
+		if (this->flagTrainingMode()){
+		    fm.tmpOutputErrorsWrapT = 
+			helpers::Matrix<TDevice>(&m_fw.tmpOutputErrors, rows, cols, offset);
+		    fm.unitDeltasWrapT = 
+			helpers::Matrix<TDevice>(&m_fw.unitDeltas,      rows, cols, offset);
+		    fm.unitDeltaP    = helpers::getRawPointer(m_fw.unitDeltas) + offset;
+		}
 
 		bm.tmpOutputsWrapT = 
 		    helpers::Matrix<TDevice>(&m_bw.tmpOutputs,      rows, cols, offset);
-		bm.tmpOutputErrorsWrapT = 
-		    helpers::Matrix<TDevice>(&m_bw.tmpOutputErrors, rows, cols, offset);
 		bm.unitActsWrapT = 
 		    helpers::Matrix<TDevice>(&m_bw.unitActs,        rows, cols, offset);
-		bm.unitDeltasWrapT = 
-		    helpers::Matrix<TDevice>(&m_bw.unitDeltas,      rows, cols, offset);
 		bm.unitActsBufWrapT = 
 		    helpers::Matrix<TDevice>(&m_bw.unitActsBuf,     rows, cols, offset);
-		
-		bm.unitDeltaP    = helpers::getRawPointer(m_bw.unitDeltas) + offset;
+		if (this->flagTrainingMode()){
+		    bm.tmpOutputErrorsWrapT = 
+			helpers::Matrix<TDevice>(&m_bw.tmpOutputErrors, rows, cols, offset);
+		    bm.unitDeltasWrapT = 
+			helpers::Matrix<TDevice>(&m_bw.unitDeltas,      rows, cols, offset);
+		    bm.unitDeltaP    = helpers::getRawPointer(m_bw.unitDeltas) + offset;
+		}
 
 		// for ClockRNN
 		if (m_clockRNN){
 		    // 
 		    // tmpFlagCR:    a skip flag for each dimenison in a parallel block
 		    Cpu::bool_vector tmpFlagCR(rows * paralNum, false);
+
+		    //
 		    // h2hMatrixIdx: in each time step, which hidden2hidden matrix should be used
 		    //               [0  2^band_number-1]
 		    int h2hMatrixIdx = DimSkipFlagCR(tmpFlagCR, m_crStep, timestep, paralNum)-1;
@@ -623,7 +634,7 @@ namespace layers {
 		    bm.skipCRPos = timestep * rows * paralNum;
 
 		    if (DEBUG_CLOCKRNN){
-			printf("%d:\n", timestep);
+			printf("%d %d:\t", timestep, h2hMatrixIdx);
 			for(int i = 0; i < tmpFlagCR.size(); i++){
 			    printf("%d ", tmpFlagCR[i]);
 			}
@@ -660,7 +671,8 @@ namespace layers {
 		m_fw.skipCR        = tmp2;
 	    }
 	    m_fw.tmpOutputs        .swap(this->_outputs());     // just swap (directly use it)
-	    m_fw.tmpOutputErrors   .swap(this->outputErrors()); // 
+	    if (this->flagTrainingMode())
+		m_fw.tmpOutputErrors   .swap(this->outputErrors()); // 
 	    m_fw.unitActs          = tmp;
 	    m_fw.unitDeltas        = tmp;
 	    m_fw.unitActsBuf       = tmp;
@@ -697,16 +709,18 @@ namespace layers {
 
                 fm.tmpOutputsWrapT = 
 		    helpers::Matrix<TDevice>(&m_fw.tmpOutputs,      rows, cols, offset);
-		fm.tmpOutputErrorsWrapT = 
-		    helpers::Matrix<TDevice>(&m_fw.tmpOutputErrors, rows, cols, offset);
 		fm.unitActsWrapT = 
 		    helpers::Matrix<TDevice>(&m_fw.unitActs,        rows, cols, offset);
-		fm.unitDeltasWrapT = 
-		    helpers::Matrix<TDevice>(&m_fw.unitDeltas,      rows, cols, offset);
 		fm.unitActsBufWrapT = 
 		    helpers::Matrix<TDevice>(&m_fw.unitActsBuf,     rows, cols, offset);
-		
-		fm.unitDeltaP    = helpers::getRawPointer(m_fw.unitDeltas) + offset;
+
+		if (this->flagTrainingMode()){
+		    fm.tmpOutputErrorsWrapT = 
+			helpers::Matrix<TDevice>(&m_fw.tmpOutputErrors, rows, cols, offset);
+		    fm.unitDeltasWrapT = 
+			helpers::Matrix<TDevice>(&m_fw.unitDeltas,      rows, cols, offset);
+		    fm.unitDeltaP    = helpers::getRawPointer(m_fw.unitDeltas) + offset;
+		}
 
 		// for ClockRNN
 		if (m_clockRNN){		    
@@ -737,7 +751,8 @@ namespace layers {
 	// swap it back
 	if (!m_isBidirectional) {
             m_fw.tmpOutputs     .swap(this->_outputs());
-            m_fw.tmpOutputErrors.swap(this->outputErrors());
+	    if (this->flagTrainingMode())
+		m_fw.tmpOutputErrors.swap(this->outputErrors());
         }
     }
 
@@ -772,21 +787,29 @@ namespace layers {
 	// the wrappers must be created for each training epoch
 	int rows = this->size() / (m_isBidirectional ? 2 : 1);
 	int cols = this->curMaxSeqLength() * this->parallelSequences();
-	
-        m_precLayerOutputsWrapA = 
-	    helpers::Matrix<TDevice>(&this->precedingLayer().outputs(), 
-				     this->precedingLayer().size(), 
-				     cols);
+
+	if (this->precedingLayer().getSaveMemoryFlag()){
+	    m_precLayerOutputsWrapA = 
+		helpers::Matrix<TDevice>(&this->precedingLayer().outputs(), 
+					 this->precedingLayer().size(), this->parallelSequences());
+	}else{
+	    m_precLayerOutputsWrapA = 
+		helpers::Matrix<TDevice>(&this->precedingLayer().outputs(), 
+					 this->precedingLayer().size(), cols);
+	}
 
 	m_onesVecWrap            = helpers::Matrix<TDevice>(&m_onesVec, 1, cols);
 	if (m_isBidirectional){
 	    m_fw.unitActsWrapA   = helpers::Matrix<TDevice>(&m_fw.unitActs,   rows, cols);
-	    m_fw.unitDeltasWrapA = helpers::Matrix<TDevice>(&m_fw.unitDeltas, rows, cols);
 	    m_bw.unitActsWrapA   = helpers::Matrix<TDevice>(&m_bw.unitActs,   rows, cols);
-	    m_bw.unitDeltasWrapA = helpers::Matrix<TDevice>(&m_bw.unitDeltas, rows, cols);
+	    if (this->flagTrainingMode()){
+		m_fw.unitDeltasWrapA = helpers::Matrix<TDevice>(&m_fw.unitDeltas, rows, cols);
+		m_bw.unitDeltasWrapA = helpers::Matrix<TDevice>(&m_bw.unitDeltas, rows, cols);
+	    }
 	}else{
 	    m_fw.unitActsWrapA   = helpers::Matrix<TDevice>(&m_fw.unitActs,   rows, cols);
-	    m_fw.unitDeltasWrapA = helpers::Matrix<TDevice>(&m_fw.unitDeltas, rows, cols);
+	    if (this->flagTrainingMode())
+		m_fw.unitDeltasWrapA = helpers::Matrix<TDevice>(&m_fw.unitDeltas, rows, cols);
 	}
 	
 	// Copy the Hidden2Hidden Matrix to each possible Hidden2Hidden Matrix format
@@ -798,6 +821,10 @@ namespace layers {
 	    // Read in the context-dependent time clock
 	    if (fraction.auxDataDim()>0){
 		Cpu::pattype_vector clockTime = fraction.auxPattypeData();
+		if (this->parallelSequences()>1){
+		    printf("Please use parallel_sequences = 1\n");
+		    throw std::runtime_error("Not implemented: clockRNN for parallel training");
+		}
 		if (clockTime.size() != this->curMaxSeqLength()){
 		    throw std::runtime_error("Error unequal length of clockTime size");
 		}
@@ -948,14 +975,10 @@ namespace layers {
 		}
 		// Show matrix index
 		printf("Time-MatrixIdx\n");
-		for (int t = 0; t < this->curMaxSeqLength(); t++){
-		    printf("%5d-%3d ", t, m_fw.timestepMatrices[t].h2hIdx);
-		    if (t % 10 == 9) printf("\n");
-		}
 		if (fraction.auxDataDim()>0){
 		    Cpu::bool_vector tempskipCR    = m_fw.skipCR;
 		    for (int t = 0; t < this->curMaxSeqLength(); t++){
-			printf("%d:\n", t);
+			printf("%d %d:\t", t, m_fw.timestepMatrices[t].h2hIdx);
 			for (int d = 0; d < rows; d++){
 			    printf("%d ", tempskipCR[t*rows + d]);
 			}
@@ -972,7 +995,8 @@ namespace layers {
 	m_precLayerOutputsWrapA = helpers::Matrix<TDevice>(
 		&this->precedingLayer().outputs(), 
 		this->precedingLayer().size(), this->parallelSequences(),
-		timeStep * this->parallelSequences() * this->precedingLayer().size());
+		(timeStep * this->parallelSequences() * this->precedingLayer().size() - 
+		 this->precedingLayer().outputBufPtrBias(timeStep * this->parallelSequences(), 0)));
 	
 	int rows = this->size() / (m_isBidirectional ? 2 : 1);
 	m_fw.unitActsWrapA   = helpers::Matrix<TDevice>(
@@ -1117,7 +1141,7 @@ namespace layers {
             this->_outputs().swap(m_fw.tmpOutputs);
         }
 	
-	// Finally, for Clock RNN, use iterative updating
+	// Finally, for Clock RNN, use iterative updating if necessary
 	if (m_clockRNN && m_iterUpdate > 0 && this->getCurrTrainingEpoch()>=0){
 	    {{
 		internal::killTimeResolution fn;

@@ -57,6 +57,7 @@ private:
     int m_firstFeedBackLayer;                                  // ID of the first feedback Layer
     int m_middlePostOutputLayer;
     int m_featMatchLayer;
+    int m_vaeLayer;
     int m_trainingEpoch;
     int m_trainingFrac;
     int m_trainingState;
@@ -70,8 +71,7 @@ public:
      * @param maxSeqLength      The maximum length of a sequence
      */
     NeuralNetwork(const helpers::JsonDocument &jsonDoc, int parallelSequences, 
-		  int maxSeqLength, int chaDim, int maxTxtLength,
-                  int inputSizeOverride=-1, int outputSizeOverride=-1);
+		  int maxSeqLength, int inputSizeOverride=-1, int outputSizeOverride=-1);
 
     /**
      * Destructs the neural network
@@ -203,7 +203,8 @@ public:
     void reInitWeight();
 
     /* Add 0514 Wang: initialize the output layer for MDN */
-    void initOutputForMDN(const data_sets::DataSetMV &datamv);
+    void initOutputForMDN(const helpers::JsonDocument &jsonDoc,
+			  const data_sets::DataSetMV &datamv);
 
     /* Add 1012 Read the mean and variance to the output layer*/
     void readMVForOutput(const data_sets::DataSetMV &datamv);
@@ -232,7 +233,8 @@ public:
     /* Add 17-05-02: support for the GAN training */
     void cleanGradientsForDiscriminator();
     
-    
+    //
+    bool flagNetworkForGAN() const;
 };
 
 

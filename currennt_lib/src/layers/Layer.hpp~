@@ -57,9 +57,18 @@ namespace layers {
         pattype_vector    m_patTypes;
 	
 	/* Add 16-02-22 Wang: for WE updating */
-	bool              m_InputWeUpdate;    // the whether layer is the input with we to be updated?
-	cpu_real_vector   m_outputErrorsCopy; // make a CPU copy
+	bool              m_InputWeUpdate;     // the whether layer is the input layer with WE 
+	                                       // to be updated ?
+	                                       // We can not define it in Trainablelayer 
+	                                       // because input layer only inherits from layer
+	cpu_real_vector   m_outputErrorsCopy;  // make a CPU copy
 
+	/* Add 16-09-28 Wang: the current training epoch */
+	int               m_currTrainingEpoch; // epoch number 
+	int               m_currTrainingFrac;  // frac number in each epoch
+
+	bool              m_flagTrainingMode;
+	
     protected:
         real_vector& _outputs();
 	
@@ -75,12 +84,13 @@ namespace layers {
          * Constructs the Layer
          *
          * @param layerChild        The layer child of the JSON configuration for this layer
-         * @param parallelSequences The maximum number of sequences that shall be computed in parallel
+         * @param parallelSequences The maximum number of sequences  computed in parallel
          * @param maxSeqLength      The maximum length of a sequence
          * @param createOutputs     If false, then the outputs vector will be left empty
          */
-        Layer(const helpers::JsonValue &layerChild, int parallelSequences, int maxSeqLength, bool createOutputs = true);
-
+        Layer(const helpers::JsonValue &layerChild, int parallelSequences, int maxSeqLength,
+	      bool createOutputErrors, bool createOutputs = true);
+	
         /**
          * Destructs the Layer
          */
@@ -98,7 +108,8 @@ namespace layers {
          * 
          * @return The number of blocks in the layer
          */
-        int size() const;
+	// modify 0612: to virtual size so that LstmLayerChaW can be supported
+        virtual int size() const;
 
         /**
          * Returns the maximum number of sequences that can be computed in parallel
@@ -140,7 +151,7 @@ namespace layers {
          *
          * @return The output error
          */
-        real_vector& outputErrors();
+        virtual real_vector& outputErrors();
 
 	
 	cpu_real_vector& outputErrorsCpu();   
@@ -171,25 +182,86 @@ namespace layers {
          *
          * @param fraction The fraction of the data set to load
          */
-        virtual void loadSequences(const data_sets::DataSetFraction &fraction);
+        virtual void loadSequences(const data_sets::DataSetFraction &fraction, const int nnState);
 
         /**
          * Computes the forward pass
          */
-        virtual void computeForwardPass() =0;
+        virtual void computeForwardPass(const int nnState) =0;
 
         /**
          * Computes the backward pass, including the weight updates
          */
-        virtual void computeBackwardPass() =0;
-
+        virtual void computeBackwardPass(const int nnState) =0;
+	
         /**
          * Stores the description of the layer in a JSON object
          *
          * @param layersArray The array of layers in the document
          * @param allocator   The allocator to use
          */
-        virtual void exportLayer(const helpers::JsonValue &layersArray, const helpers::JsonAllocator &allocator) const;
+        virtual void exportLayer(const helpers::JsonValue &layersArray, 
+				 const helpers::JsonAllocator &allocator) const;
+
+	/**
+	 * Re-initialize the network
+	   only defines for Trainable Layers
+	 */
+	virtual void reInitWeight() = 0;
+	
+	
+	/*
+	  
+	 */
+	virtual void linkTargetLayer(Layer<TDevice> &targetLayer);
+	    
+	/**
+	 * Set and read the m_currTrainingEpoch
+	 */
+	virtual void setCurrTrainingEpoch(const int curTrainingEpoch);
+	
+	virtual int& getCurrTrainingEpoch();
+	
+	virtual void setCurrTrainingFrac(const int curTrainingFrac);
+	
+	virtual int& getCurrTrainingFrac();
+
+	/*
+	 *  Provide additional information
+	 */
+	virtual const std::string& layerAddInfor(const int opt) const;
+	
+	/*
+	 * Add 1221, prepareStepGeneration: 
+	 *  prepare the layer for generating the timeStep-th frame
+	 *  
+	 */
+	virtual void prepareStepGeneration(const int timeStep);
+	
+	virtual void computeForwardPass(const int timeStep, const int nnState)=0;
+
+	virtual real_vector& feedbackOutputs(const bool flagTrain);
+
+	virtual void cleanGradidents();
+
+
+	/*
+	 * Layer state
+	 */
+	// return the number of elements in internal state
+	virtual int hiddenStateSize();
+	
+	// retreve the hidden state
+	virtual void retrieveHiddenState(const int timeStep, real_vector& readBuffer);
+
+	// set the hidden state
+	virtual void setHiddenState(const int timeStep, real_vector& writeBuffer);
+
+
+	/*
+	 * 
+	 */
+	const bool flagTrainingMode() const;
     };
 
 } // namespace layers

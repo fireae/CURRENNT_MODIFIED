@@ -54,8 +54,9 @@ namespace layers {
     
 
     template <typename TDevice>
-    Layer<TDevice>::Layer(const helpers::JsonValue &layerChild, int parallelSequences, 
-			  int maxSeqLength, bool createOutputs)
+    Layer<TDevice>::Layer(const helpers::JsonValue &layerChild,
+			  int parallelSequences,   int maxSeqLength,
+			  bool flagTrainingMode, bool createOutputs)
         : m_name             (layerChild->HasMember("name") ? 
 			      (*layerChild)["name"].GetString()  : "")
         , m_size             (layerChild->HasMember("size") ? 
@@ -66,6 +67,8 @@ namespace layers {
         , m_curMinSeqLength  (0)
         , m_curNumSeqs       (0)
 	, m_InputWeUpdate    (false)
+	, m_flagTrainingMode (true)
+	, m_flagSaveOutputMemory (false)
     {
         // check if the name and size values exist
         if (!layerChild->HasMember("name"))
@@ -75,55 +78,25 @@ namespace layers {
         if (!layerChild->HasMember("size"))
             throw std::runtime_error(std::string("Missing value 'size' in layer '") + m_name + "'");
 
-        // allocate space for the vectors
+        // allocate memory for output
         if (createOutputs)
             m_outputs = Cpu::real_vector(m_parallelSequences * m_maxSeqLength * m_size);
-
+	
+	// allocate memory for time mark
         m_patTypes = Cpu::pattype_vector(m_parallelSequences * m_maxSeqLength);
 	
+        // allocate memory for gradients buffer
+	if (flagTrainingMode)
+	    m_outputErrors  = Cpu::real_vector(this->_outputs().size(), (real_t)0);    
+	else
+	    m_outputErrors.clear();
+	m_outputErrorsCopy.clear();
 	
-        // resize the output errors vector
-        m_outputErrors = Cpu::real_vector(this->_outputs().size(), (real_t)0);
-	m_outputErrorsCopy = Cpu::real_vector(this->_outputs().size(), (real_t)0);
-
-	//
+	// initialize the training epoch counter
 	m_currTrainingEpoch = -1;
-    }
 
-    /* Not fully implemented */
-    // overload for CNN
-    template <typename TDevice>
-    Layer<TDevice>::Layer(const helpers::JsonValue &layerChild, 
-			  int parallelSequences, int maxSeqLength, 
-			  int outputSize,        bool createOutputs)
-        : m_name             (layerChild->HasMember("name") ? 
-			      (*layerChild)["name"].GetString()  : "")
-        , m_size             (outputSize)
-        , m_parallelSequences(parallelSequences)
-        , m_maxSeqLength     (maxSeqLength)
-        , m_curMaxSeqLength  (0)
-        , m_curMinSeqLength  (0)
-        , m_curNumSeqs       (0)
-	, m_InputWeUpdate    (false)
-    {
-        // check if the name and size values exist
-        if (!layerChild->HasMember("name"))
-            throw std::runtime_error("Missing value 'name' in layer description");
-        if (m_name.empty())
-            throw std::runtime_error("Empty layer name in layer description");
-        if (!layerChild->HasMember("size"))
-            throw std::runtime_error(std::string("Missing value 'size' in layer '") + m_name + "'");
-
-        // allocate space for the vectors
-        if (createOutputs)
-            m_outputs = Cpu::real_vector(m_parallelSequences * m_maxSeqLength * m_size);
-
-        m_patTypes = Cpu::pattype_vector(m_parallelSequences * m_maxSeqLength);
-	
-	
-        // resize the output errors vector
-        m_outputErrors = Cpu::real_vector(this->_outputs().size(), (real_t)0);
-	m_outputErrorsCopy = Cpu::real_vector(this->_outputs().size(), (real_t)0);
+	// set the flag
+	m_flagTrainingMode  = (flagTrainingMode ? true : false);
     }
 
     template <typename TDevice>
@@ -194,12 +167,15 @@ namespace layers {
     template <typename TDevice>
     Cpu::real_vector& Layer<TDevice>::outputErrorsCpu()
     {
+	if (m_outputErrorsCopy.size() != m_outputErrors.size())
+	    m_outputErrorsCopy = m_outputErrors;
 	thrust::copy(m_outputErrors.begin(), m_outputErrors.end(), m_outputErrorsCopy.begin());
         return m_outputErrorsCopy;
     }
     
     template <typename TDevice>
-    void Layer<TDevice>::loadSequences(const data_sets::DataSetFraction &fraction, const int nnState)
+    void Layer<TDevice>::loadSequences(const data_sets::DataSetFraction &fraction,
+				       const int nnState)
     {
         m_curMaxSeqLength = fraction.maxSeqLength();
         m_curMinSeqLength = fraction.minSeqLength();
@@ -288,6 +264,74 @@ namespace layers {
 	//thrust::fill(m_outputErrors.begin(), m_outputErrors.end(), 0.0);
     }
 
+    template <typename TDevice>
+    int Layer<TDevice>::hiddenStateSize()
+    {
+	return 0;
+    }
+
+    template <typename TDevice>
+    void Layer<TDevice>::retrieveHiddenState(const int timeStep, real_vector& readBuffer)
+    {	
+    }
+    
+    template <typename TDevice>
+    void Layer<TDevice>::setHiddenState(const int timeStep, real_vector& writeBuffer)
+    {	
+    }
+    
+    template <typename TDevice>
+    bool Layer<TDevice>::flagTrainingMode() const
+    {
+	return m_flagTrainingMode;
+    }
+
+    template <typename TDevice>
+    void Layer<TDevice>::clearOutputBuffer()
+    {
+	m_outputs.clear();
+	m_outputs.shrink_to_fit();
+    }
+    
+    template <typename TDevice>
+    void Layer<TDevice>::resizeOutputBuffer(const int bufferSize)
+    {
+	this->clearOutputBuffer();
+	m_outputs = Cpu::real_vector(bufferSize);
+	// Can't use m_outputs.resize() because:
+	// Not really. The extent of Thrust's CUDA support for pure C++ code is
+	// the bare minimum to allow device_vector to be constructed and
+	// destroyed for POD types. That's why thrust::fill has a pure C++ 
+	// implementation even for the CUDA backend -- so it can be called by 
+	// device_vector's constructor.
+	// https://groups.google.com/forum/#!topic/thrust-users/abVI3htMrkw
+    }
+
+    template <typename TDevice>
+    void Layer<TDevice>::reduceOutputBuffer()
+    {
+	// default: do nothing
+    }
+
+    
+    template <typename TDevice>
+    int Layer<TDevice>::outputBufPtrBias(const int timeStepTimesParallel, const int nnState)
+    {
+	// don't shift
+	return 0;
+    }
+    
+    template <typename TDevice>
+    void Layer<TDevice>::setSaveMemoryFlag(const bool newFlag)
+    {
+	m_flagSaveOutputMemory = newFlag;
+    }
+
+    template <typename TDevice>
+    bool Layer<TDevice>::getSaveMemoryFlag() const
+    {
+	return m_flagSaveOutputMemory;
+    }
     
     // explicit template instantiations
     template class Layer<Cpu>;

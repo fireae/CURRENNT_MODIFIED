@@ -138,6 +138,11 @@ namespace layers{
 	if (this->size() != precedingLayer.size()){
 	    throw std::runtime_error("Error featMatch must be same size as previous layer");
 	}
+	
+	if (this->precedingLayer().getSaveMemoryFlag())
+	    throw std::runtime_error("layer before featmatch is reduced in mem");  
+
+	
     }
 
     template <typename TDevice>

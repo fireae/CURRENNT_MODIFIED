@@ -105,6 +105,8 @@ namespace {
 		// cell state copy from previous step
 		cellStates[outputIdx] = cellStates[outputIdx + prevOutputDistance];
 
+		
+		/*
 		niActs[outputIdx] = 0.0;
 		igActs[outputIdx] = 0.0;
 		ogActs[outputIdx] = 0.0;
@@ -112,6 +114,15 @@ namespace {
 		                         // In ComputeBlockErrorFn, fgActs[outputIdx-prev] is used
 		                         // If that LSTM unit is skipped, cellStateErr should
 		                         // be directly propagated
+					 */
+
+		niActs[outputIdx] = 0.0; // zero 
+		igActs[outputIdx] = 0.0; // zero
+		// use previous ogActs (after the activation function)
+		ogActs[outputIdx] = ogActs[outputIdx + prevOutputDistance];
+		// the same reason above
+		fgActs[outputIdx] = 1.0;
+
 		
 		// hidden output 'copies' from previous state (computed again)
 		return (cell_output_act_fn_t::fn(cellStates[outputIdx + prevOutputDistance]) *
@@ -272,6 +283,8 @@ namespace {
             int blockIdx = outputIdx % effLayerSize;
 
 	    if (skipCRNN != NULL && skipCRNN[blockIdx]){
+
+		/*
 		// store the niag deltas and the cell state error
 		// ig, fg, set to zero, so that a normal LSTM unit precedings a skipped unit can
 		//  calculate the cellStateError correctly (see cellStateErr below)
@@ -281,12 +294,46 @@ namespace {
 		igDeltas       [outputIdx] = 0.0;
 		fgDeltas       [outputIdx] = 0.0;
 		ogDeltas       [outputIdx] = 0.0;
+		*/
+
+		fgDeltas       [outputIdx] = 0.0;
+		igDeltas       [outputIdx] = 0.0;
+		niDeltas       [outputIdx] = 0.0; 
+		ogDeltas       [outputIdx] = 0.0; 
+
+		real_t ogAct     = ogActs      [outputIdx]; // output after activation function
+		real_t cellState = cellStates  [outputIdx]; // cellState 
 		
+		real_t ogDelta   = (gate_act_fn_t::deriv(ogAct) *
+				    cell_output_act_fn_t::fn(cellState) * outputErr) + ogDeltas[outputIdx];
+		
+		real_t cellStateErr = ogAct *
+		    cell_output_act_fn_t::deriv(cell_output_act_fn_t::fn(cellState)) * outputErr;
+
 		if (!firstCall){
-		    cellStateErrors[outputIdx] = cellStateErrors[outputIdx - prevOutputDistance];
-		}else{
-		    cellStateErrors[outputIdx] = 0.0;
+		    //  add to the cellErrors from previous (next) step
+		    real_t nextFgAct        = fgActs         [outputIdx - prevOutputDistance];
+		    real_t nextCellStateErr = cellStateErrors[outputIdx - prevOutputDistance];
+		    real_t nextIgDelta      = igDeltas       [outputIdx - prevOutputDistance];
+		    real_t nextFgDelta      = fgDeltas       [outputIdx - prevOutputDistance];
+		    
+		    real_t igPeepWeight = igPeepWeights[blockIdx];
+		    real_t fgPeepWeight = fgPeepWeights[blockIdx];
+		
+		    cellStateErr += (nextFgAct    * nextCellStateErr +
+				     igPeepWeight * nextIgDelta      +
+				     fgPeepWeight * nextFgDelta);
+		    
 		}
+		if (!lastCall){
+		    // accumulate the graidients of outgate to the previous time step
+		    ogDeltas[outputIdx + prevOutputDistance] = ogDelta;
+		}
+		cellStateErrors[outputIdx] = cellStateErr;
+		// //cellStateErrors[outputIdx] = cellStateErrors[outputIdx - prevOutputDistance];
+		//else{
+		//cellStateErrors[outputIdx] = 0.0;
+		//}
 		
 	    }else{
 
@@ -300,8 +347,9 @@ namespace {
 		// NOTE: interestly, possibly due to the compiler and CUDA,
 		//       the order of the variables below slightly influences the result
 		//       I use this order so that it is consistent with the original code
-		real_t ogDelta   = (gate_act_fn_t::deriv(ogAct) *
-				    cell_output_act_fn_t::fn(cellState) * outputErr);
+		real_t ogDelta   = ((gate_act_fn_t::deriv(ogAct) *
+				    cell_output_act_fn_t::fn(cellState) * outputErr)
+				    + ogDeltas[outputIdx]);
 
 		// calculate the cell state error
 		real_t ogPeepWeight = ogPeepWeights[blockIdx];
@@ -753,8 +801,7 @@ namespace layers {
                                   Layer<TDevice> &precedingLayer,
                                   bool bidirectional)
         : TrainableLayer<TDevice>(
-		layerChild, weightsSection,
-		4,
+		layerChild, weightsSection, 4,
 		(bidirectional ? 2 : 4) * helpers::safeJsonGetInt(layerChild, "size") + 3,
 		precedingLayer)
         , m_isBidirectional      (bidirectional)
@@ -856,24 +903,27 @@ namespace layers {
 	    
             if (m_isBidirectional) {
                 fwbw->tmpOutputs      = tmp;
-                fwbw->tmpOutputErrors = tmp;
-            }
-            else {
+                if (this->flagTrainingMode())
+		    fwbw->tmpOutputErrors = tmp;
+            }else {
                 fwbw->tmpOutputs     .swap(this->_outputs());
-                fwbw->tmpOutputErrors.swap(this->outputErrors());
+		if (this->flagTrainingMode())
+		    fwbw->tmpOutputErrors.swap(this->outputErrors());
             }
 	    
             fwbw->cellStates      = tmp;
-            fwbw->cellStateErrors = tmp;
             fwbw->niActs          = tmp;
             fwbw->igActs          = tmp;
             fwbw->fgActs          = tmp;
             fwbw->ogActs          = tmp;
-            fwbw->niDeltas        = tmp;
-            fwbw->igDeltas        = tmp;
-            fwbw->fgDeltas        = tmp;
-            fwbw->ogDeltas        = tmp;
-
+	    if (this->flagTrainingMode()){
+		fwbw->cellStateErrors = tmp;
+		fwbw->niDeltas        = tmp;
+		fwbw->igDeltas        = tmp;
+		fwbw->fgDeltas        = tmp;
+		fwbw->ogDeltas        = tmp;
+	    }
+            
             // weight matrices
             weight_matrices_t* wmArr [] = { &fwbw->weightMatrices, &fwbw->weightUpdateMatrices };
             real_vector*       wtsArr[] = { &this->weights(),      &this->_weightUpdates() };
@@ -920,8 +970,6 @@ namespace layers {
                 timestep_matrices_t tm;
                 tm.tmpOutputs      = helpers::Matrix<TDevice>(&fwbw->tmpOutputs,
 							      rows, cols, offset);
-                tm.tmpOutputErrors = helpers::Matrix<TDevice>(&fwbw->tmpOutputErrors,
-							      rows, cols, offset);
                 tm.niActs          = helpers::Matrix<TDevice>(&fwbw->niActs,
 							      rows, cols, offset);
                 tm.igActs          = helpers::Matrix<TDevice>(&fwbw->igActs,
@@ -930,15 +978,19 @@ namespace layers {
 							      rows, cols, offset);
                 tm.ogActs          = helpers::Matrix<TDevice>(&fwbw->ogActs,
 							      rows, cols, offset);
-                tm.niDeltas        = helpers::Matrix<TDevice>(&fwbw->niDeltas,
-							      rows, cols, offset);
-                tm.igDeltas        = helpers::Matrix<TDevice>(&fwbw->igDeltas,
-							      rows, cols, offset);
-                tm.fgDeltas        = helpers::Matrix<TDevice>(&fwbw->fgDeltas,
-							      rows, cols, offset);
-                tm.ogDeltas        = helpers::Matrix<TDevice>(&fwbw->ogDeltas,
-							      rows, cols, offset);
-
+		if (this->flagTrainingMode()){
+		    tm.tmpOutputErrors = helpers::Matrix<TDevice>(&fwbw->tmpOutputErrors,
+								  rows, cols, offset);
+		    tm.niDeltas        = helpers::Matrix<TDevice>(&fwbw->niDeltas,
+								  rows, cols, offset);
+		    tm.igDeltas        = helpers::Matrix<TDevice>(&fwbw->igDeltas,
+								  rows, cols, offset);
+		    tm.fgDeltas        = helpers::Matrix<TDevice>(&fwbw->fgDeltas,
+								  rows, cols, offset);
+		    tm.ogDeltas        = helpers::Matrix<TDevice>(&fwbw->ogDeltas,
+								  rows, cols, offset);
+		}
+		
 		// clock configuration
 		if (m_clockRNN){
 		    // 
@@ -992,7 +1044,8 @@ namespace layers {
 
         if (!m_isBidirectional) {
             m_fw.tmpOutputs     .swap(this->_outputs());
-            m_fw.tmpOutputErrors.swap(this->outputErrors());
+	    if (this->flagTrainingMode())
+		m_fw.tmpOutputErrors.swap(this->outputErrors());
         }
     }
 
@@ -1111,9 +1164,16 @@ namespace layers {
     {
         TrainableLayer<TDevice>::loadSequences(fraction, nnState);
 
-        m_precLayerOutputsMatrix = helpers::Matrix<TDevice>(
+	if (this->precedingLayer().getSaveMemoryFlag()){
+	    // This step is fact useless. The matrix will be defined in prepareStepGeneration
+	    m_precLayerOutputsMatrix = helpers::Matrix<TDevice>(
+		&this->precedingLayer().outputs(), this->precedingLayer().size(), 
+		this->parallelSequences());
+	}else{
+	    m_precLayerOutputsMatrix = helpers::Matrix<TDevice>(
 		&this->precedingLayer().outputs(), this->precedingLayer().size(), 
 		this->curMaxSeqLength() * this->parallelSequences());
+	}
 
         // ---- prepare the matrix for LSTM
 	// update the niag matrices
@@ -1129,12 +1189,18 @@ namespace layers {
             fwbw->fgActsMatrix = helpers::Matrix<TDevice>(&fwbw->fgActs, rows, cols);
             fwbw->ogActsMatrix = helpers::Matrix<TDevice>(&fwbw->ogActs, rows, cols);
 
-            fwbw->niDeltasMatrix = helpers::Matrix<TDevice>(&fwbw->niDeltas, rows, cols);
-            fwbw->igDeltasMatrix = helpers::Matrix<TDevice>(&fwbw->igDeltas, rows, cols);
-            fwbw->fgDeltasMatrix = helpers::Matrix<TDevice>(&fwbw->fgDeltas, rows, cols);
-            fwbw->ogDeltasMatrix = helpers::Matrix<TDevice>(&fwbw->ogDeltas, rows, cols);
+	    if (this->flagTrainingMode()){
+		fwbw->niDeltasMatrix = helpers::Matrix<TDevice>(&fwbw->niDeltas, rows, cols);
+		fwbw->igDeltasMatrix = helpers::Matrix<TDevice>(&fwbw->igDeltas, rows, cols);
+		fwbw->fgDeltasMatrix = helpers::Matrix<TDevice>(&fwbw->fgDeltas, rows, cols);
+		fwbw->ogDeltasMatrix = helpers::Matrix<TDevice>(&fwbw->ogDeltas, rows, cols);
+		
+		// set ogDeltas to zero
+		thrust::fill(fwbw->ogDeltas.begin(), fwbw->ogDeltas.end(), 0.0);
+	    }
         }
 
+	
 	// ---- prepare the matrix for CLLSTM
 	if (m_clockRNN){
 	    
@@ -1149,7 +1215,10 @@ namespace layers {
 		Cpu::pattype_vector clockTime = fraction.auxPattypeData();
 		if (clockTime.size() != this->curMaxSeqLength())
 		    throw std::runtime_error("Error unequal length of clockTime size");
-		
+		if (this->parallelSequences()>1){
+		    printf("Please use parallel_sequences = 1\n");
+		    throw std::runtime_error("Not implemented: clockRNN for parallel training");
+		}
 		int h2hMatrixIdx = 0;
 		for (int t = 0; t < this->curMaxSeqLength(); t++){		    
 		    // assign h2hIdx
@@ -1328,9 +1397,10 @@ namespace layers {
     void LstmLayer<TDevice>::prepareStepGeneration(const int timeStep)
     {
 	m_precLayerOutputsMatrix = helpers::Matrix<TDevice>(
-		&this->precedingLayer().outputs(), this->precedingLayer().size(), 
-		this->parallelSequences(), 
-		timeStep * this->parallelSequences() * this->precedingLayer().size());
+		&this->precedingLayer().outputs(),
+		this->precedingLayer().size(), this->parallelSequences(),
+		(timeStep * this->parallelSequences() * this->precedingLayer().size() - 
+		 this->precedingLayer().outputBufPtrBias(timeStep*this->parallelSequences(), 0)));
     }
 
 
@@ -1543,13 +1613,14 @@ namespace layers {
         // sum up the activations from the preceding layer for one time step
         {{
 	    // forward states
-		m_fw.timestepMatrices[timeStep].niActs.assignProduct(
+	    // m_preLayerOutputsMatrix is assigned to one frame by prePareStepGeneration(timeStep)
+	    m_fw.timestepMatrices[timeStep].niActs.assignProduct(
 			m_fw.weightMatrices.niInput, true, m_precLayerOutputsMatrix, false);
-		m_fw.timestepMatrices[timeStep].igActs.assignProduct(
+	    m_fw.timestepMatrices[timeStep].igActs.assignProduct(
 			m_fw.weightMatrices.igInput, true, m_precLayerOutputsMatrix, false);
-		m_fw.timestepMatrices[timeStep].fgActs.assignProduct(
+	    m_fw.timestepMatrices[timeStep].fgActs.assignProduct(
 			m_fw.weightMatrices.fgInput, true, m_precLayerOutputsMatrix, false);
-		m_fw.timestepMatrices[timeStep].ogActs.assignProduct(
+	    m_fw.timestepMatrices[timeStep].ogActs.assignProduct(
 			m_fw.weightMatrices.ogInput, true, m_precLayerOutputsMatrix, false);
         }}
 
@@ -1954,6 +2025,55 @@ namespace layers {
         (*layersArray)[layersArray->Size() - 1].AddMember("clock", m_crStepStr.c_str(), allocator);
     }
 
+
+    template <typename TDevice>
+    int LstmLayer<TDevice>::hiddenStateSize()
+    {
+	// return the size of hidden state and cell state for one frame
+	return this->size() * 2;
+    }
+
+    template <typename TDevice>
+    void LstmLayer<TDevice>::retrieveHiddenState(const int timeStep, real_vector& readBuffer)
+    {
+	// cannot be used for bi-directional layer
+	if (m_isBidirectional)
+	    throw std::runtime_error("retrieveHiddenState not implemented for BLSTM");
+	if (timeStep >= this->curMaxSeqLength())
+	    throw std::runtime_error("retrieveHiddenState time larger than expected");
+	// assume readbuffer has been allocated
+	int rows   = this->size();
+	int cols   = this->parallelSequences();
+	int offset = timeStep * rows * cols;
+	thrust::copy(this->_outputs().begin() + offset, this->_outputs().begin() + offset + rows,
+		     readBuffer.begin());
+	thrust::copy(m_fw.cellStates.begin() + offset, m_fw.cellStates.begin() + offset + rows,
+		     readBuffer.begin() + rows);
+       
+    }
+    
+    template <typename TDevice>
+    void LstmLayer<TDevice>::setHiddenState(const int timeStep, real_vector& writeBuffer)
+    {
+	// cannot be used for bi-directional layer
+	if (m_isBidirectional)
+	    throw std::runtime_error("setHiddenState not implemented for BLSTM");
+	if (timeStep >= this->curMaxSeqLength())
+	    throw std::runtime_error("setHiddenState time larger than expected");
+	if (writeBuffer.size() < this->size()*2)
+	    throw std::runtime_error("setHiddenState vector dimension is smaller");
+	int rows   = this->size();
+	int cols   = this->parallelSequences();
+	int offset = timeStep * rows * cols;
+	thrust::copy(writeBuffer.begin(), writeBuffer.begin()+rows, 
+		     this->_outputs().begin() + offset);
+	thrust::copy(writeBuffer.begin()+rows, writeBuffer.begin()+rows*2,
+		     m_fw.cellStates.begin() + offset);
+
+    }
+    
+
+    
     // explicit template instantiations
     template class LstmLayer<Cpu>;
     template class LstmLayer<Gpu>;

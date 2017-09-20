@@ -38,8 +38,8 @@ namespace layers{
     template <typename TDevice>
     class OperationLayer : public TrainableLayer<TDevice>
     {
-	typedef typename TDevice::real_vector    real_vector;
-	typedef typename Cpu::real_vector    cpu_real_vector;
+	typedef typename TDevice::real_vector     real_vector;
+	typedef typename Cpu::real_vector         cpu_real_vector;
 	typedef typename TDevice::int_vector      int_vector;
 	typedef typename TDevice::pattype_vector  pattype_vector;
 	typedef typename Cpu::int_vector          cpu_int_vector;
@@ -49,10 +49,22 @@ namespace layers{
 	cpu_real_vector m_setZeroVec_H;
 	std::string     m_setZeroStr;
 
-	int            m_noiseSize;
-	real_t         m_noiseMag;
-	real_vector    m_noiseInput;
-	int            m_noiseRepeat;
+	int             m_noiseSize;
+	real_t          m_noiseMag;
+	real_vector     m_noiseInput;
+	int             m_noiseRepeat;
+
+	int             m_downSampRes;
+
+	real_vector     m_oneVec;
+	int             m_lastShot;
+	
+	cpu_int_vector  m_seqLengthBuffH;  // the length of each sequence
+	int_vector      m_seqLengthBuffD;  // the length of each sequence
+	
+	cpu_int_vector  m_segBoundaryH;    // position of the end of segment (for each frame)
+	int_vector      m_segBoundaryD;
+	int             m_segLevel;        // which level to be used ?
 	
 	OperationLayer(
 	    const helpers::JsonValue &layerChild,
@@ -77,7 +89,8 @@ namespace layers{
 	// export
 	virtual void exportLayer(const helpers::JsonValue &layersArray, 
 				 const helpers::JsonAllocator &allocator) const;
-
+	//
+	virtual void loadSequences(const data_sets::DataSetFraction &fraction, const int nnState);
     };
     
 }

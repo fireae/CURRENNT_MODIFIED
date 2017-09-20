@@ -41,10 +41,12 @@ namespace data_sets {
 
     public:
         struct seq_info_t {
-            int         originalSeqIdx;
-            int         length;
-            std::string seqTag;
-	    int         txtLength;
+            int         originalSeqIdx;  //
+            int         length;          //
+	    int         exInputLength;   //
+            std::string seqTag;          //
+	    
+	    //int         txtLength;
         };
 
     private:
@@ -52,7 +54,7 @@ namespace data_sets {
         int m_outputPatternSize;
         int m_maxSeqLength;
         int m_minSeqLength;
-
+	
         std::vector<seq_info_t> m_seqInfo;
 
         Cpu::real_vector    m_inputs;
@@ -61,18 +63,25 @@ namespace data_sets {
         Cpu::int_vector     m_targetClasses;
 	
 	// Add 0620 Wang: 
-	int m_txtPatternSize;
-	int m_maxTxtLength;                 // the maximum length of txt of this faction
-	Cpu::int_vector   m_txtData;       // the txt input data of this fraction
+	//int m_txtPatternSize;
+	//int m_maxTxtLength;                 // the maximum length of txt of this faction
+	//Cpu::int_vector   m_txtData;       // the txt input data of this fraction
 	
 	// Add 1024 
 	int m_fracTotalLength;
 
 	// Add 1111
-	int m_auxDataDim;
+	int                 m_auxDataDim;
 	Cpu::pattype_vector m_auxPattypeData;
 	Cpu::real_vector    m_auxRealData;
 	Cpu::int_vector     m_auxIntData;
+
+	// Add 0815
+	int                 m_exInputDim;
+	int                 m_maxExInputLength;
+	int                 m_minExInputLength;
+	Cpu::real_vector    m_exInputData;
+
 	
     private:
         /**
@@ -101,6 +110,11 @@ namespace data_sets {
         int outputPatternSize() const;
 
         /**
+         * Returns the size of external input data
+         */
+        int externalInputSize() const;
+       	
+        /**
          * Returns the length of the longest sequence
          *
          * @return The length of the longest sequence
@@ -114,6 +128,13 @@ namespace data_sets {
          */
         int minSeqLength() const;
 
+	/**
+	 * Return the length of the external input data
+	 */
+	int maxExInputLength() const;
+	
+	int minExInputLength() const;
+	
         /**
          * Returns the number of sequences in the fraction
          *
@@ -149,12 +170,18 @@ namespace data_sets {
          */
         const Cpu::real_vector& outputs() const;
 
-	
-	const Cpu::real_vector&    auxRealData() const;
-	const Cpu::pattype_vector& auxPattypeData() const;
-	const Cpu::int_vector&     auxIntData() const;
+	/**
+	 * Returns the auxilary data
+	 */
 	const int& auxDataDim() const;
+	const Cpu::real_vector&    auxRealData()    const;
+	const Cpu::pattype_vector& auxPattypeData() const;
+	const Cpu::int_vector&     auxIntData()     const;
 
+	/**
+	 * Return the external Input data
+	 */
+	const Cpu::real_vector&    exInputData()    const;
         /**
          * Returns the target classes vector
          *
@@ -168,9 +195,8 @@ namespace data_sets {
          *
          * @return the txt data
          */
-	const Cpu::int_vector& txtData() const;
-
-	int maxTxtLength() const;
+	//const Cpu::int_vector& txtData() const;
+	//int maxTxtLength() const;
 
 	/*
 	 * Return the number of valid frames for this current fraction

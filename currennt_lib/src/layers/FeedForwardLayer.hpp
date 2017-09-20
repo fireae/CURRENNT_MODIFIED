@@ -48,7 +48,7 @@ namespace layers {
 	
 	real_t      m_stdConst;      // const floor for the var
 	real_t      m_batchCnt;
-	bool        m_trainFlag;
+	// bool        m_trainFlag;  // replaced by m_flagTraining
 	int         m_preEpoch;
 	real_t      m_batchSize;     //
 
@@ -100,6 +100,13 @@ namespace layers {
 	virtual void exportLayer(const helpers::JsonValue &layersArray, 
 				 const helpers::JsonAllocator &allocator) const;
 
+	/*
+	 * to optimize the memory usage
+	 */
+	virtual void reduceOutputBuffer();
+
+	virtual int outputBufPtrBias(const int timeStepTimesParallel, const int nnState);
+	
     };
 
 } // namespace layers

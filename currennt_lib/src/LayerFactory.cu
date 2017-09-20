@@ -38,6 +38,7 @@
 #include "layers/BatchNorm.hpp"
 #include "layers/OperationLayer.hpp"
 #include "layers/FeatMatch.hpp"
+#include "layers/vaeMiddleLayer.hpp"
 #include "activation_functions/Tanh.cuh"
 #include "activation_functions/Logistic.cuh"
 #include "activation_functions/Identity.cuh"
@@ -53,7 +54,7 @@
 #include "layers/RnnLayer.hpp"
 #include "layers/ParaLayer.hpp"
 #include "layers/FeedBackLayer.hpp"
-
+#include "layers/wavNetCore.hpp"
 #include <stdexcept>
 
 
@@ -63,7 +64,6 @@ layers::Layer<TDevice>* LayerFactory<TDevice>::createLayer(
 		const helpers::JsonValue &layerChild,
 		const helpers::JsonValue &weightsSection, 
 		int parallelSequences, int maxSeqLength, 
-		int chaDim, int maxTxtLength,
 		layers::Layer<TDevice> *precedingLayer
 		)
 {
@@ -106,7 +106,10 @@ layers::Layer<TDevice>* LayerFactory<TDevice>::createLayer(
         return new OperationLayer<TDevice>(layerChild, weightsSection, *precedingLayer);    
     else if (layerType == "featmatch")
         return new FeatMatchLayer<TDevice>(layerChild, *precedingLayer);    
-
+    else if (layerType == "vae")
+        return new VaeMiddleLayer<TDevice>(layerChild, *precedingLayer);    
+    else if (layerType == "wavnetc")
+    	return new WavNetCore<TDevice>(layerChild, weightsSection, *precedingLayer);
     /*
     // not implemented yet
     else if (layerType == "lstmw")
@@ -116,7 +119,6 @@ layers::Layer<TDevice>* LayerFactory<TDevice>::createLayer(
     	return new LstmLayerCharW<TDevice>(layerChild, weightsSection, *precedingLayer, 
 					   chaDim, maxTxtLength, true);
     */
-    // 
     else if (layerType == "sse"                       || layerType == "weightedsse"  || 
 	     layerType == "rmse"                      || layerType == "ce"  || 
 	     layerType == "wf"                        || layerType == "binary_classification" ||
@@ -126,7 +128,6 @@ layers::Layer<TDevice>* LayerFactory<TDevice>::createLayer(
 	// dynamic_cast<layers::TrainableLayer<TDevice>*>(precedingLayer);
         //if (!precedingTrainableLayer)
     	//    throw std::runtime_error("Cannot add post output layer after a non trainable layer");
-
         if (layerType == "sse")
     	    return new SsePostOutputLayer<TDevice>(layerChild, *precedingLayer);
         else if (layerType == "kld")
@@ -163,9 +164,6 @@ layers::Layer<TDevice>* LayerFactory<TDevice>::createSkipAddLayer(
 					   )
 {
     using namespace layers;
-    
-    /* Add 0405 Add skip ini */
-    //if (layerType != "skipadd"){
     if (layerType != "skipadd" && layerType != "skipini" && layerType != "skipcat"){
 	printf("Impossible bug\n");
 	throw std::runtime_error(std::string("The layer is not skipadd"));

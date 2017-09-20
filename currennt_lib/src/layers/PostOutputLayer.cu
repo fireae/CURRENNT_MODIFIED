@@ -24,6 +24,8 @@
 #include "../helpers/getRawPointer.cuh"
 #include "../helpers/misFuncs.hpp"
 #include "../MacroDefine.hpp"
+#include "../Configuration.hpp"
+
 #include <boost/lexical_cast.hpp>
 
 
@@ -102,9 +104,12 @@ namespace layers {
         int requiredSize,
         bool createOutputs)
         : Layer<TDevice>  (layerChild, precedingLayer.parallelSequences(), 
-			   precedingLayer.maxSeqLength(), createOutputs)
+			   precedingLayer.maxSeqLength(),
+			   Configuration::instance().trainingMode(),			   
+			   createOutputs)
         , m_precedingLayer(precedingLayer)
 	, m_precedingMiddleOutLayer (NULL)
+	, m_postoutputFlag(NN_POSTOUTPUTLAYER_LAST)
     {
 	// Modify 0506. For MDN, requireSize = -1, no need to check here
 	// if (this->size() != requiredSize)
@@ -175,6 +180,7 @@ namespace layers {
     template <typename TDevice>
     int PostOutputLayer<TDevice>::ganState()
     {
+	// m_ganState is only used for one-sided label smoothing
 	return m_ganState;
     }
 
@@ -336,6 +342,14 @@ namespace layers {
 	      fn);
 	}
     }
+
+    template <typename TDevice>
+    void PostOutputLayer<TDevice>::setFeedBackData(const int timeStep, const int state)
+    {
+	// This is not used at all;
+	throw std::runtime_error("setFeedBackData should be not used for non-MDN layer");
+	//return m_feedBackOutput;
+    }
     
     template <typename TDevice>
     typename PostOutputLayer<TDevice>::real_vector& PostOutputLayer<TDevice>::feedbackOutputs(
@@ -349,6 +363,12 @@ namespace layers {
 	}*/
     }
 
+    template <typename TDevice>
+    real_t PostOutputLayer<TDevice>::retrieveProb(const int timeStep, const int state)
+    {
+	return 0.0;
+    }
+    
     template <typename TDevice>
     typename PostOutputLayer<TDevice>::real_vector& PostOutputLayer<TDevice>::secondOutputs()
     {
@@ -369,6 +389,24 @@ namespace layers {
 					      const helpers::JsonAllocator &allocator) const
     {
         Layer<TDevice>::exportLayer(layersArray, allocator);
+    }
+    
+    template <typename TDevice>
+    void PostOutputLayer<TDevice>::setPostLayerType(const int flag)
+    {
+	m_postoutputFlag = flag;
+    }
+
+    template <typename TDevice>
+    const int& PostOutputLayer<TDevice>::_postLayerType()
+    {
+	return m_postoutputFlag;
+    }
+
+    template <typename TDevice>
+    const int& PostOutputLayer<TDevice>::postLayerType()
+    {
+	return m_postoutputFlag;
     }
 
     // explicit template instantiations

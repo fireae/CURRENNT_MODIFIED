@@ -66,13 +66,19 @@ namespace optimizers {
 	    // get the number of frames for SGD
 	    if (Configuration::instance().hybridOnlineBatch()) 
 		frameNum   = frac->fracTimeLength();
-            // compute forward pass and calculate the error
-	    m_neuralNetwork.notifyCurrentFrac(fracCnt);
-	    m_neuralNetwork.updateNNState(m_curEpoch, fracCnt);
-            m_neuralNetwork.loadSequences(*frac);
-            m_neuralNetwork.computeForwardPass(frac->maxSeqLength(), (m_curEpoch-1));
-	    m_neuralNetwork.restoreTarget(*frac);
 	    
+            // Notify the fraction number
+	    m_neuralNetwork.notifyCurrentFrac(fracCnt);
+	    // Update the state of NN
+	    m_neuralNetwork.updateNNState(m_curEpoch, fracCnt);
+	    // Load data
+            m_neuralNetwork.loadSequences(*frac);
+	    // Compute forward pass
+            m_neuralNetwork.computeForwardPass(frac->maxSeqLength(), (m_curEpoch-1));
+	    // Reload data (if case the targets output data buffer is used for schedule sampling)
+	    m_neuralNetwork.restoreTarget(*frac);
+
+	    // calculate the errors
             errorTemp1 = (m_neuralNetwork.calculateError(true)/ds.totalSequences());
 	    errorTemp2 = (m_neuralNetwork.calculateError(false)/ds.totalSequences());
 	    

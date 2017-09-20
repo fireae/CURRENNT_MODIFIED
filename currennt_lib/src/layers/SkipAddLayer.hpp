@@ -53,7 +53,8 @@ namespace layers {
 	// to receive the errors directly from next skip add layer
 	// real_vector       m_outputErrorsFromSkipLayer;
 
-	bool                         m_flagSkipInit; // this layer SkipInit or SkipAdd 
+	bool                         m_flagSkipInit; // this layer SkipInit or SkipAdd
+	bool                         m_virtualLayer;
 	real_t                       m_noiseRatio;
 	std::string                  m_previousSkipStr;
     public:
@@ -93,6 +94,12 @@ namespace layers {
 	virtual void exportLayer(const helpers::JsonValue &layersArray,
 				 const helpers::JsonAllocator &allocator) const;
 
+	virtual real_vector& outputs();
+
+	virtual void reduceOutputBuffer();
+
+	virtual int outputBufPtrBias(const int timeStepTimesParallel, const int nnState);
+	
     };
 
 }

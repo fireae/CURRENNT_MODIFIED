@@ -185,6 +185,12 @@ namespace layers{
 				      const int dimStart,      real_vector &targets,
 				      const int timeStep,      const int method);
 
+	virtual void setFeedBackData(real_vector &fillBuffer, const int bufferDim,
+				     const int dimStart,      const int state,
+				     const int timeStep);
+	
+	virtual real_t retrieveProb(const int timeStep, const int state);
+	
 	virtual int feedBackDim();
 
 
@@ -207,13 +213,18 @@ namespace layers{
 	typedef typename Cpu::real_vector cpu_real_vector;
 	typedef typename TDevice::pattype_vector pattype_vector;
 	
+    protected:
+	bool   m_conValSig;     // false: -(x>0)log(y)-(x<0)log(1-y)
+	                        //  true: -xlog(y)-(1-x)log(1-y)
+	
     public:
 
 	// methods
 	MDNUnit_sigmoid(int startDim, int endDim,    int startDimOut, int endDimOut, 
 			int type,     Layer<TDevice> &precedingLayer, int outputSize,
 			const int trainable   = MDNUNIT_TYPE_0,
-			const int feedBackOpt = MDNUNIT_FEEDBACK_OPT_0);
+			const int feedBackOpt = MDNUNIT_FEEDBACK_OPT_0,
+			const bool conSig     = false);
 
 	virtual ~MDNUnit_sigmoid();
 
@@ -262,10 +273,10 @@ namespace layers{
 	typedef typename TDevice::int_vector  int_vector;
 	typedef typename Cpu::real_vector cpu_real_vector;
 	typedef typename TDevice::pattype_vector pattype_vector;
+	
     protected:
 	real_vector     m_offset;
 	cpu_real_vector m_tmpProb;
-	int_vector      m_quanMerge;   // NOT USED ANYMORE
 	int             m_genMethod;   // Generation method
 	bool            m_uvSigmoid;   // Is this a softmax with hierarchical softmax ?
 	real_t          m_threshold;   // Threshold for hierarchical softmax on U/V
@@ -279,7 +290,6 @@ namespace layers{
 			Layer<TDevice> &precedingLayer,
 			int  outputSize,
 			bool uvSigmoid,
-			int_vector &quanMerge,
 			const real_t &threshold,
 			const int trainable   = MDNUNIT_TYPE_0,
 			const int feedBackOpt = MDNUNIT_FEEDBACK_OPT_0);
@@ -316,6 +326,12 @@ namespace layers{
 	virtual void fillFeedBackData(real_vector &fillBuffer, const int bufferDim,
 				      const int dimStart, real_vector &targets, const int timeStep,
 				      const int method=0);
+
+	virtual real_t retrieveProb(const int timeStep, const int state);
+	
+	virtual void setFeedBackData(real_vector &fillBuffer, const int bufferDim,
+				     const int dimStart,      const int state,
+				     const int timeStep);
 
 	virtual int  feedBackDim();
 

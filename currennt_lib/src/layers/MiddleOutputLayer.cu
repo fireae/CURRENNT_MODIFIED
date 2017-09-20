@@ -213,43 +213,45 @@ namespace layers{
     {
 	m_dataOutputDim     = (layerChild->HasMember("dataOutputDim")) ? 
 			       (*layerChild)["dataOutputDim"].GetInt() : (-1);
-	m_generatorEpoch    = (layerChild->HasMember("generator_only")) ? 
-			       (*layerChild)["generator_only"].GetInt() : (-1);
-	m_discriminatorEpoch= (layerChild->HasMember("discriminator_only")) ? 
-			       (*layerChild)["discriminator_only"].GetInt() : (-1);
 	m_ganRatio          = (layerChild->HasMember("ganRatio") ? 
 			       static_cast<real_t>((*layerChild)["ganRatio"].GetDouble()) :0.8);
 	m_ganGradEnhance    = (layerChild->HasMember("ganGradMag") ? 
 			       static_cast<real_t>((*layerChild)["ganGradMag"].GetDouble()) :10.0);
 
+	/*m_generatorEpoch    = (layerChild->HasMember("generator_only")) ? 
+			       (*layerChild)["generator_only"].GetInt() : (-1);
+	m_discriminatorEpoch= (layerChild->HasMember("discriminator_only")) ? 
+	(*layerChild)["discriminator_only"].GetInt() : (-1);*/
+
 	if (m_ganRatio > 1.0005 || m_ganRatio < 0.0000){
-	    throw std::runtime_error("ganRatio must be within (0, 1)");
+	    throw std::runtime_error("ganRatio must be within (0, 1]");
 	}
 	
 	if (m_dataOutputDim > 0 && m_dataOutputDim != this->size()){
 	    throw std::runtime_error("Error dataOutputDim in middleoutput layer");
 	}	
-
 	
-	// This part is here secondary output. It is not used now
 	m_natPriDim     = this->size();
-	
 	if (m_dataOutputDim > 0) {
 	    m_natSecDim     = m_dataOutputDim - m_natPriDim;
 	    if (m_natSecDim){
+		// This part is here secondary output. It is not used now
 		m_natSecTarget.reserve(this->outputs().size() / m_natPriDim * m_natSecDim);
 		thrust::fill(m_natSecTarget.begin(), m_natSecTarget.end(), 0.0);
 	    }else
 		m_natSecTarget.clear();
 	}
-	
 	m_natPriTarget  = this->outputs();
 	
 	m_stateRandom.resize(this->outputs().size() / m_natPriDim, 0.0);
 
-
 	// print the information
-	printf("\n\tGAN configure: ganRatio %1.2f, ganMag %1.2f\n", m_ganRatio, m_ganGradEnhance);
+	printf("\n\tGAN configure: ganRatio %f, ganGradMag %f\n", m_ganRatio, m_ganGradEnhance);
+	printf("\n\tGAN criterion: (1 - ganRatio) * 0.5 * (synthetic - natural) ^ 2 + ");
+	printf("ganRatio * ganGradMag * Loss_of_discriminator\n");
+	
+	if (this->precedingLayer().getSaveMemoryFlag())
+	    throw std::runtime_error("layer before MiddleOutput is reduced in mem");
     }
 
     template <typename TDevice>
@@ -295,7 +297,7 @@ namespace layers{
 	    // use all generated output
 	    thrust::fill(tmp.begin(), tmp.end(), 0.0);
 	    
-	}else if (nnState == NN_STATE_GAN_GENERATION_STAGE){
+	}else if (nnState == NN_STATE_GENERATION_STAGE){
 	    printf(" for generation");
 	    m_state = GENERATOR_ONLY;                  // any value is OK
 	    thrust::fill(tmp.begin(), tmp.end(), 0.0); // any value is OK
@@ -454,7 +456,8 @@ namespace layers{
 	/*
 	int st = timeStep * this->parallelSequences() * this->size();
 	int et = st + this->parallelSequences() * this->size();
-	*/	
+	*/
+	throw std::runtime_error("GAN is not implemented for feedback structure");
     }
 
     template <typename TDevice>
@@ -550,6 +553,11 @@ namespace layers{
     template <typename TDevice>
     typename MiddleOutputLayer<TDevice>::real_vector& MiddleOutputLayer<TDevice>::secondOutputs()
     {
+	// m_stateRandom should be named as 1/0 tags
+	// m_stateRandom logs down the true/false of each frame in the current utterance
+	// previously, m_stateRandom can be a mixture of 1/0
+	// now, m_stateRandom only contains 1 or 0 for one utterance,
+	//  without mixing natural and fake data
 	return m_stateRandom;
     }
 

@@ -25,6 +25,7 @@
 
 #include "../Types.hpp"
 
+#define ACTIVIATION_FUNCTION_RELU_LeakyFactor 0.01
 
 namespace activation_functions {
 
@@ -32,12 +33,13 @@ namespace activation_functions {
     {
         static __host__ __device__ real_t fn(real_t x)
         {
-            return (x)*0.5;
+            //return (x+fabsf(x))*0.5;
+	    return (x>0)?(x):(exp(x)-1);
         }
 
         static __host__ __device__ real_t deriv(real_t y)
         {
-            return y>0;
+            return (y>0)?(1.0):(y+1.0);
         }
     };
 

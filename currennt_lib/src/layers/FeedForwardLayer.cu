@@ -278,7 +278,7 @@ namespace {
 namespace layers {
 
     // Additional weight due to batch normalization
-    int wNum(const helpers::JsonValue &layerChild){
+    int weightForBatchNorm(const helpers::JsonValue &layerChild){
 	if (layerChild->HasMember("batchnorm") && ((*layerChild)["batchnorm"].GetInt()))
 	    return 3; // alpha, mean, std
 	else
@@ -289,15 +289,16 @@ namespace layers {
     FeedForwardLayer<TDevice, TActFn>::FeedForwardLayer(const helpers::JsonValue &layerChild, 
 							const helpers::JsonValue &weightsSection, 
 							Layer<TDevice> &precedingLayer)
-        : TrainableLayer<TDevice>(layerChild, weightsSection, 1, wNum(layerChild), precedingLayer)
+        : TrainableLayer<TDevice>(layerChild, weightsSection, 1, weightForBatchNorm(layerChild),
+				  precedingLayer)
     {
-	m_batchNorm = (wNum(layerChild)>0)? true : false;
+	
+	// Initialization for batch normalization
+	m_batchNorm = (weightForBatchNorm(layerChild)>0)? true : false;
 	
 	if (m_batchNorm){
 	    // initialization
-	    m_stdConst  = 0.001;
-	    m_batchCnt  = 0.0;
-	    m_preEpoch  = 1;
+	    m_stdConst  = 0.001; m_batchCnt  = 0.0; m_preEpoch  = 1;
 	    
 	    // mean, std
 	    Cpu::real_vector tmp;
@@ -314,7 +315,6 @@ namespace layers {
 		    
 	    if (weightsSection.isValid() && weightsSection->HasMember(this->name().c_str())) {
 		// read 
-	    
 	    }else{
 		// initialize 
 		int transMatrixWeightNum = this->size() * this->precedingLayer().size();
@@ -323,15 +323,16 @@ namespace layers {
 		thrust::fill(this->weights().begin() + transMatrixWeightNum,
 			     this->weights().begin() + transMatrixWeightNum + this->size(),
 			     BATCHNORM_GAMMA_INITIAL);
+		
 		// beta, mean, std
 		thrust::fill(this->weights().begin() + transMatrixWeightNum + this->size(),
 			     this->weights().end(),
 			     0.0);
 	    }
-
-	    const Configuration &config = Configuration::instance();
-	    m_trainFlag = config.trainingMode();
+	    //const Configuration &config = Configuration::instance();
+	    //m_trainFlag = config.trainingMode();
 	}
+	
     }
 
     template <typename TDevice, typename TActFn>
@@ -408,7 +409,8 @@ namespace layers {
 	    int transMatrixWeightNum = this->size() * this->precedingLayer().size();
 	    
 	    // Re-initialize the batch mean and variance
-	    if (m_trainFlag && m_preEpoch > 0 && m_preEpoch != this->getCurrTrainingEpoch()){
+	    if (this->flagTrainingMode() && m_preEpoch > 0 &&
+		m_preEpoch != this->getCurrTrainingEpoch()){
 		// always update the mean, std for each epoch
 		m_batchCnt = 0;
 		thrust::fill(this->weights().begin() + transMatrixWeightNum + 2 * this->size(),
@@ -505,7 +507,7 @@ namespace layers {
 		fn3);
 
 	       // Step4. accumulate the mean and std, for generation stage
-	       if (m_trainFlag){
+	       if (this->flagTrainingMode()){
 		   internal::AveMeanStd fn5;
 		   fn5.meanStdBuf = (helpers::getRawPointer(this->weights()) +
 				     transMatrixWeightNum + this->size() * 2);
@@ -530,7 +532,7 @@ namespace layers {
 	       fn2.meanStd   = helpers::getRawPointer(this->m_stats);
 	       fn2.meanStdBuf= (helpers::getRawPointer(this->weights()) +
 				transMatrixWeightNum + this->size() * 2);
-	       fn2.trainFlag = m_trainFlag;
+	       fn2.trainFlag = this->flagTrainingMode();
 	   
 	       thrust::for_each(
 		thrust::make_zip_iterator(
@@ -555,8 +557,16 @@ namespace layers {
 	if (m_batchNorm){
 	    throw std::runtime_error("Error: batchnorm not available for online processing");
 	}
+
+	int effTimeStart = timeStep * this->parallelSequences();
+	int effTimeEnd   = (timeStep+1) * this->parallelSequences();
 	
-	int effTimeStep = timeStep * this->parallelSequences();
+	// Pointer to the output of previous layer (input buffer)
+	int shiftIn  = this->precedingLayer().outputBufPtrBias(timeStep * this->parallelSequences(),
+							       nnState);
+	// Pointer to the output of this layer
+	int shiftOut = this->outputBufPtrBias(timeStep * this->parallelSequences(), nnState);
+	
 	// collect outputs from preceding layer
         {{
             helpers::Matrix<TDevice> weightsMatrix  (&this->weights(),                  
@@ -566,12 +576,14 @@ namespace layers {
             helpers::Matrix<TDevice> plOutputsMatrix(&this->precedingLayer().outputs(), 
 						     this->precedingLayer().size(), 
 						     this->parallelSequences(),
-						     effTimeStep * this->precedingLayer().size());
+						     (effTimeStart * this->precedingLayer().size()
+						      - shiftIn));
 
             helpers::Matrix<TDevice> outputsMatrix  (&this->_outputs(),                 
 						     this->size(), 
 						     this->parallelSequences(),
-						     effTimeStep * this->size());
+						     (effTimeStart * this->size()
+						      - shiftOut));
 
             outputsMatrix.assignProduct(weightsMatrix, true, plOutputsMatrix, false);
         }}
@@ -585,10 +597,10 @@ namespace layers {
 				   this->size() * this->precedingLayer().size());
 
             thrust::transform(
-		this->_outputs().begin() + effTimeStep * this->size(),
-		this->_outputs().begin() + (effTimeStep+this->parallelSequences()) * this->size(),
+		this->_outputs().begin() + effTimeStart * this->size() - shiftOut,
+		this->_outputs().begin() + effTimeEnd   * this->size() - shiftOut,
 		thrust::counting_iterator<int>(0),
-		this->_outputs().begin() + effTimeStep * this->size(),
+		this->_outputs().begin() + effTimeStart * this->size() - shiftOut,
 		fn);
         }}
     }
@@ -790,6 +802,30 @@ namespace layers {
         (*layersArray)[layersArray->Size() - 1].AddMember("batchnorm", (int)m_batchNorm, allocator);
     }
 
+
+    template <typename TDevice, typename TActFn>
+    void FeedForwardLayer<TDevice, TActFn>::reduceOutputBuffer()
+    {
+	// only for no-batch-normalized module
+	if (m_batchNorm){
+	    // do thing
+	}else{
+	    this->resizeOutputBuffer(this->parallelSequences() * this->size());
+	    this->setSaveMemoryFlag(true);
+	    printf("\t[mem saved]");
+	}
+    }
+    
+    template <typename TDevice, typename TActFn>
+    int FeedForwardLayer<TDevice, TActFn>::outputBufPtrBias(const int timeStepTimesParallel,
+							    const int nnState)
+    {
+	if (this->getSaveMemoryFlag()){
+	    return timeStepTimesParallel * this->size();
+	}else{
+	    return 0;
+	}
+    }	
 
     // explicit template instantiations
     template class FeedForwardLayer<Cpu, activation_functions::Tanh>;

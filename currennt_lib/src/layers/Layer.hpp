@@ -42,7 +42,8 @@ namespace layers {
     {
         typedef typename TDevice::real_vector    real_vector;
         typedef typename TDevice::pattype_vector pattype_vector;
-	typedef typename Cpu::real_vector cpu_real_vector;
+	typedef typename Cpu::real_vector        cpu_real_vector;
+	
     private:
         const std::string m_name;
         const int         m_size;
@@ -66,7 +67,12 @@ namespace layers {
 	/* Add 16-09-28 Wang: the current training epoch */
 	int               m_currTrainingEpoch; // epoch number 
 	int               m_currTrainingFrac;  // frac number in each epoch
- 	
+
+	
+	bool              m_flagTrainingMode;
+	/* Add 17-09-06 Wang: for optimizing the memory usage during generation */
+	bool              m_flagSaveOutputMemory;
+	
     protected:
         real_vector& _outputs();
 	
@@ -86,13 +92,9 @@ namespace layers {
          * @param maxSeqLength      The maximum length of a sequence
          * @param createOutputs     If false, then the outputs vector will be left empty
          */
-        Layer(const helpers::JsonValue &layerChild, 
-	      int parallelSequences, int maxSeqLength, bool createOutputs = true);
+        Layer(const helpers::JsonValue &layerChild, int parallelSequences, int maxSeqLength,
+	      bool flagTrainingMode, bool createOutputs = true);
 	
-	// overload for CNN
-	Layer(const helpers::JsonValue &layerChild, int parallelSequences, int maxSeqLength, 
-	      int outputSize, bool createOutputs = true);
-
         /**
          * Destructs the Layer
          */
@@ -234,9 +236,9 @@ namespace layers {
 	virtual const std::string& layerAddInfor(const int opt) const;
 	
 	/*
-	 * Add 1221, 
-	 * prepareStepGeneration: prepare the layer for generating the timeStep-th frame
-	 * computeForwardPass: compute the output for the timeStep-th frame
+	 * Add 1221, prepareStepGeneration: 
+	 *  prepare the layer for generating the timeStep-th frame
+	 *  
 	 */
 	virtual void prepareStepGeneration(const int timeStep);
 	
@@ -245,6 +247,38 @@ namespace layers {
 	virtual real_vector& feedbackOutputs(const bool flagTrain);
 
 	virtual void cleanGradidents();
+
+
+	/*
+	 * Layer state
+	 */
+	// return the number of elements in internal state
+	virtual int hiddenStateSize();
+	
+	// retreve the hidden state
+	virtual void retrieveHiddenState(const int timeStep, real_vector& readBuffer);
+
+	// set the hidden state
+	virtual void setHiddenState(const int timeStep, real_vector& writeBuffer);
+
+	
+	/*
+	 * To optimize the memory usage in compuuteForwardPass(const int timeStep)
+	 */
+	bool flagTrainingMode() const;
+	
+	void clearOutputBuffer();
+
+	virtual void reduceOutputBuffer();
+
+	void resizeOutputBuffer(const int bufferSize);
+
+	virtual int  outputBufPtrBias(const int timeStepTimesParallel, const int nnState);
+
+	void setSaveMemoryFlag(const bool newFlag);
+
+	bool getSaveMemoryFlag() const;
+	
     };
 
 } // namespace layers

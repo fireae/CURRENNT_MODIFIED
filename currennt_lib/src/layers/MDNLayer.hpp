@@ -81,6 +81,9 @@ namespace layers {
 	Cpu::int_vector  m_secondOutputOpt; // string to control the secondOutput
 	int              m_secondOutputDim; 
 	
+	// parameter for generation
+	real_t         m_genPara;
+
 	// Trainable part
 	// In case the MDNUnits are trainable
 	// note: the weight space can be accessed by all the MDNUnits
@@ -100,8 +103,14 @@ namespace layers {
 	std::string    m_quanMergeStr;
 	int_vector     m_quanMergeVal;
 
+	// for sigmoid function
+	std::string    m_conValSigStr;
+	
 	// one-sided smoothing
 	int            m_oneSidedSmoothing;
+
+	// mdn config path
+	std::string    m_mdnConfigPath;      //
 	
     public:
 	MDNLayer(
@@ -173,6 +182,10 @@ namespace layers {
 	virtual void retrieveFeedBackData(real_vector& randNum, const int method);
 
 	virtual void retrieveFeedBackData(const int timeStep, const int method=0);
+
+	virtual real_t retrieveProb(const int timeStep, const int state);
+	
+	virtual void setFeedBackData(const int timeStep, const int state);
 	
 	virtual real_vector& feedbackOutputs(const bool flagTrain);
 

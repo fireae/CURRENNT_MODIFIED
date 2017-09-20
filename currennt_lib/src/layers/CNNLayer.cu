@@ -95,9 +95,11 @@ namespace{
 	int     winTotalLength;
 	
 	const char *patTypes;
-	int   paral;                
-	int   maxSeqLength;         // max length of one utterance
-	
+	int     paral;                
+	int     maxSeqLength;         // max length of one utterance
+
+	int     causal;
+	int     outputTanh;
         __host__ __device__ void operator() (const thrust::tuple<real_t&, int> &t) const
         {
 	    
@@ -124,7 +126,7 @@ namespace{
 	    // int maxValue = 0; ???
 	    real_t maxValue = 0;
 	    
-	    for (int shift = -1 * winHS; shift <= winHS; shift += 1){
+	    for (int shift = -1 * winHS; shift <= ((causal>0)?0:winHS); shift += 1){
 		dTmp = (dimS + winHS) + shift;
 		tTmp = timeIdx + shift * inter * paral;
 		
@@ -138,7 +140,10 @@ namespace{
 	    }
 
 	    // add bias and pass through the activation function
-	    t.get<0>() = cell_act_fn_t::fn(maxValue + biasWeight[dimIdx]);
+	    if (outputTanh)
+		t.get<0>() = cell_act_fn_t::fn(maxValue + biasWeight[dimIdx]);
+	    else
+		t.get<0>() = maxValue + biasWeight[dimIdx];
         }
     };
 
@@ -157,9 +162,12 @@ namespace{
 	int     winTotalLength;
 	
 	const char *patTypes;
-	int   paral;                
-	int   maxSeqLength;         // max length of one utterance
 	
+	int     paral;                
+	int     maxSeqLength;         // max length of one utterance
+
+	int     causal;
+
         __host__ __device__ void operator() (const thrust::tuple<const real_t&, int> &t) const
         {
 	    
@@ -182,7 +190,7 @@ namespace{
 	    int dTmp  = dimS + winHS;
 	    int tTmp  = timeIdx;
 	    
-	    for (int shift = -1 * winHS; shift <= winHS; shift += 1){
+	    for (int shift = -1 * winHS; shift <= ((causal>0)?0:winHS); shift += 1){
 		dTmp = (dimS + winHS) + shift;
 		tTmp = timeIdx + shift * inter * paral;
 		
@@ -370,6 +378,49 @@ namespace{
 	}
     };
 
+
+
+    struct ConvolutionCoreMemSaveMode
+    {
+
+	real_t *dataBuffer;
+	real_t *biasWeight;
+       
+	int     recFieldSize;     // recep field size
+	int     curLayerSize;     // output feature dimension
+	int     winTotalLength;   // dimension of the con buffer (3 * curLayerSize)
+
+	int     timeStep;         // absolute time index
+	int     parallel;
+	int     outputTanh;
+	const char *patTypes;
+
+	// for parallel * curLayerSize
+        __host__ __device__ void operator() (const thrust::tuple<real_t&, int> &t) const
+        {
+            // calculate the index
+            int uttIdx  = t.get<1>() / curLayerSize;   // position in one parallel block
+	    int dimIdx  = t.get<1>() % curLayerSize;   // dimension idx
+
+	    if (patTypes[timeStep * parallel + uttIdx] == PATTYPE_NONE)
+		return;
+
+	    int timeIdxBuf1 = (timeStep % (recFieldSize+1)) * parallel + uttIdx;
+	    int timeIdxBuf2 = ((timeStep+1) % (recFieldSize+1)) * parallel + uttIdx;
+	    // (time+1) % (recFieldSize+1) = (time - recFieldSize) % (recFieldSize+1)
+	    int dimIdxBuf1  = dimIdx * 3 + 1;
+	    int dimIdxBuf2  = dimIdx * 3;	    
+	    real_t summedOutput = (dataBuffer[timeIdxBuf1 * winTotalLength + dimIdxBuf1] +
+				   dataBuffer[timeIdxBuf2 * winTotalLength + dimIdxBuf2]);
+	    // add bias and pass through the activation function
+	    if (outputTanh)
+		t.get<0>() = cell_act_fn_t::fn(summedOutput + biasWeight[dimIdx]);
+	    else
+		t.get<0>() = summedOutput + biasWeight[dimIdx];
+        }
+    };
+
+    
 } // namespace 
 } // namespace internal
 
@@ -415,6 +466,16 @@ namespace CNNTools{
 	return cnt;
     }
 
+    // return the total width of windows
+    // input:
+    //    opt: vector of half-width of each window
+    int getWinCausalLength(Cpu::int_vector &opt){
+	int cnt =0;
+	for (int i=0; i < opt.size(); i++){
+	    cnt += (opt[i] + 1);
+	}
+	return cnt;
+    }
     // parse the option for CNN configuration
     // input:
     //    cnnOpt: text string of configuration for original filter set
@@ -574,7 +635,7 @@ namespace CNNTools{
     //       thus, returned value is (ceil(#/layerSize)) 
     int getCNNWeight(const std::string winWidthOpt,  const std::string winHeightOpt,
 		     const std::string winStrideOpt, int thisLayerSize, int preLayerSize,
-		     bool accurate){
+		     bool accurate, bool causal){
 	
 	Cpu::int_vector width;
 	Cpu::int_vector height;
@@ -601,7 +662,7 @@ namespace CNNTools{
 
 	    int cnt = 0;
 	    for (int i = 0; i < width.size(); i++)
-		cnt += height[i] * getWinWidth(width[i]);
+		cnt += height[i] * (causal?width[i]:getWinWidth(width[i]));
 	    cnt += width.size();
 	    if (accurate)
 		return cnt;
@@ -643,7 +704,8 @@ namespace CNNTools{
 		// count the total number of filter widths
 		// parameter = width * pre_layer_size + #filter
 		if (accurate)
-		    return getWinTotalLength(width) * preLayerSize + thisLayerSize;
+		    return ((causal?getWinCausalLength(width):getWinTotalLength(width)) *
+			    preLayerSize + thisLayerSize);
 		else	
 		    return ((int)std::ceil(getWinTotalLength(width) *
 					   (float)preLayerSize /
@@ -820,10 +882,17 @@ namespace layers {
 					((*layerChild)["window_stride"].GetString()) : (""),
 					(layerChild->HasMember("size")) ? 
 					((*layerChild)["size"].GetInt()) : (0),
-					precedingLayer.size(), false),
+					precedingLayer.size(), false, false),
 				    precedingLayer)
+	, m_outputTanh(1)
     {
-
+	
+	// Check casual filter
+	m_causalFlag = (layerChild->HasMember("causal") ? 
+			static_cast<real_t>((*layerChild)["causal"].GetInt()) : 0);
+	m_outputTanh = (layerChild->HasMember("tanhoutput") ? 
+			static_cast<real_t>((*layerChild)["tanhoutput"].GetInt()) : 1);
+	
 	if (m_winWidth_Opt.size() < 1)
 	    throw std::runtime_error("Fail to find window_width in network.jsn");
 
@@ -850,9 +919,11 @@ namespace layers {
 	m_winTotalL  = CNNTools::getWinTotalLength(m_winWidth_H);
 
 	// number of weights (accurate)
-	m_weightNum = CNNTools::getCNNWeight(m_winWidth_Opt, m_winHeight_Opt, m_winStride_Opt,
-					      this->size(), precedingLayer.size(), true);
-	m_biasPos   = m_weightNum - filterNum;
+	m_weightNum  = CNNTools::getCNNWeight(m_winWidth_Opt, m_winHeight_Opt, m_winStride_Opt,
+					      this->size(), precedingLayer.size(), true,
+					      m_causalFlag);
+	
+	m_biasPos    = m_weightNum - filterNum;
 	
 	// number of weights (in buffer)
 	m_weightBufferNum  = m_winTotalL * precedingLayer.size() + this->size();
@@ -878,7 +949,7 @@ namespace layers {
 	    Cpu::int_vector tmp;
 	    CNNTools::fillInFilterWeightMap(m_winWidth_Opt, m_winHeight_Opt, m_weightNum, tmp);
 	    m_weightFilter_map = tmp;
-	    
+	    m_1DCNNOnly = 0;
 	}else{
 	    // 1-D convolution
 	    m_winColIndex_H.clear();
@@ -892,9 +963,8 @@ namespace layers {
 	    m_winWidthCol_D  = m_winWidthCol_H;
 	    m_winShiftNum_D  = m_winShiftNum_H;
 	    m_weightFilter_map.clear();
+	    m_1DCNNOnly = 1;
 	}
-	
-
 	
 	// parse the tap interval
 	m_winInterval_H.clear();
@@ -938,14 +1008,20 @@ namespace layers {
 	    printf("\tCNN 1-D convolution\n");
 	printf("\tCNN trainable weights: %d (weights in Network summary may be inaccurate)\n",
 	       m_weightNum);
+	if (m_causalFlag > 0)
+	    printf("\tCNN uses causal filter\n");
+	if (m_outputTanh == 0)
+	    printf("\nCNN without tanh output function\n");
+	    
 	if (Configuration::instance().verboseLevel() == OP_VERBOSE_LEVEL_3){
 	    CNNTools::printCNNConfiguration(filterNum, this->size(), precedingLayer.size(),
 					    m_winIndex_H,  m_winWidth_H,
 					    m_winHeight_H, m_winStride_H);
 	}else{
-	    printf("\tCNN winwidth: %s\n", m_winWidth_Opt.c_str());
-	    printf("\tCNN winHeight: %s\n", m_winHeight_Opt.c_str());
-	    printf("\tCNN winStride: %s\n", m_winStride_Opt.c_str());
+	    printf("\tCNN winwidth:    %s\n", m_winWidth_Opt.c_str());
+	    printf("\tCNN winDilution: %s\n", m_winInterval_Opt.c_str());
+	    printf("\tCNN winHeight:   %s\n", m_winHeight_Opt.c_str());
+	    printf("\tCNN winStride:   %s\n", m_winStride_Opt.c_str());
 	}
     }
     
@@ -1053,7 +1129,9 @@ namespace layers {
 	    fn.patTypes         = helpers::getRawPointer(this->patTypes());
 	    fn.paral            = this->precedingLayer().parallelSequences();
 	    fn.maxSeqLength     = this->curMaxSeqLength();
-	    
+
+	    fn.causal           = this->m_causalFlag;
+	    fn.outputTanh       = this->m_outputTanh;
 	    int n =this->precedingLayer().curMaxSeqLength();
 	    n = n*this->precedingLayer().parallelSequences();
 	    n = n*this->size();
@@ -1075,15 +1153,185 @@ namespace layers {
     template <typename TDevice>
     void CNNLayer<TDevice>::computeForwardPass(const int timeStep, const int nnState)
     {
-	// Not implemented
-	throw std::runtime_error("Not implemented yet");
+	
+	// Step0: prepare at the begining of the sentence
+	if (timeStep == 0){{
+	    if (m_winHeight_Opt.size()>0){
+
+		// 2-D convolution		
+		// Copy weight from this->weights() to m_weightBuffer
+		internal::CNNFilterWeightCopy fn1;
+		fn1.weightBuffer   = helpers::getRawPointer(m_weightBuffer);
+		fn1.weightCopyInfo = helpers::getRawPointer(m_wCopyInfo_D);
+		fn1.filterIndexMap = helpers::getRawPointer(m_weightFilter_map);
+		fn1.filterNum      = m_winNumOrignal;
+		fn1.preLayerSize   = this->precedingLayer().size();
+		fn1.biasPosition   = m_biasPos;
+		fn1.biasPositionBuf= m_biasPosInBuffer;
+		fn1.reverse        = false;
+		
+		int n = m_weightNum;
+		thrust::for_each(
+		  thrust::make_zip_iterator(
+			thrust::make_tuple(this->weights().begin(),
+					   thrust::counting_iterator<int>(0))),
+		  thrust::make_zip_iterator(
+			thrust::make_tuple(this->weights().begin() + n, 
+					   thrust::counting_iterator<int>(0) + n)),
+		  fn1);
+		
+		// duplicate weights inside m_weightBuffer
+		internal::CNNFilterDuplicate fn;
+		fn.weight       = helpers::getRawPointer(m_weightBuffer);
+		fn.wColIndex    = helpers::getRawPointer(m_winColIndex_D);
+		fn.wRowIndex    = helpers::getRawPointer(m_winRowIndex_D);
+		fn.wFilterHeight= helpers::getRawPointer(m_winColHeight_D);
+		fn.wFilterShift = helpers::getRawPointer(m_winShiftIndex_D);
+		fn.layerSize    = this->precedingLayer().size();
+		fn.matrixWNum   = m_biasPosInBuffer;
+		
+		n = this->m_winTotalL * this->precedingLayer().size() + this->size();
+		thrust::for_each(
+		  thrust::make_zip_iterator(
+			thrust::make_tuple(this->m_weightBuffer.begin(),
+					   thrust::counting_iterator<int>(0))),
+		  thrust::make_zip_iterator(
+			thrust::make_tuple(this->m_weightBuffer.begin() + n, 
+					   thrust::counting_iterator<int>(0) + n)),
+		  fn);
+		
+	    }else{
+
+		// 1-D convolution
+		// copy the weights from this->weights() to m_weightBuffer
+		thrust::copy(this->weights().begin(),
+			     this->weights().begin() + m_weightBufferNum,
+			     m_weightBuffer.begin());
+	    }
+
+	    // initialize the data buffer
+	    thrust::fill(m_conBuffer.begin(), m_conBuffer.end(), 0.0);
+	}}
+
+
+	int st = timeStep * this->parallelSequences();
+	int et = (timeStep + 1) * this->parallelSequences();
+	int shiftIn = this->precedingLayer().outputBufPtrBias(st, nnState);
+
+	// Step1-2: matrix transformation and data summation
+	if (this->getSaveMemoryFlag()){
+	    // memory save mode for wavenet
+	    
+	    // Step1. matrix transformation
+	    // receptive filed size
+	    int recField = m_winInterval_H[0];
+	    // absolute address in the conv buffer
+	    int bufAddr  = (timeStep % (recField+1)) * this->parallelSequences() * m_winTotalL;
+	    
+	    helpers::Matrix<TDevice> weightMatrix   (&this->m_weightBuffer,
+						     this->precedingLayer().size(),
+						     this->m_winTotalL);
+	    helpers::Matrix<TDevice> plOutputsMatrix(&this->precedingLayer().outputs(), 
+						     this->precedingLayer().size(), 
+						     this->parallelSequences(),
+						     st * this->precedingLayer().size() - shiftIn);
+            helpers::Matrix<TDevice> outputsMatrix  (&this->m_conBuffer,                 
+						     this->m_winTotalL,                   
+						     this->parallelSequences(),
+						     bufAddr);
+            outputsMatrix.assignProduct(weightMatrix, true, plOutputsMatrix, false);
+	    
+	    // Step2. data summation
+	    internal::ConvolutionCoreMemSaveMode fn;
+	    	    
+	    fn.dataBuffer       = helpers::getRawPointer(this->m_conBuffer);
+	    fn.biasWeight       = helpers::getRawPointer(this->m_weightBuffer) + m_biasPosInBuffer;
+
+	    fn.recFieldSize     = recField;
+	    fn.curLayerSize     = this->size();
+	    fn.winTotalLength   = this->m_winTotalL;
+
+	    fn.timeStep         = timeStep;
+	    fn.outputTanh       = this->m_outputTanh;
+	    fn.parallel         = this->precedingLayer().parallelSequences();
+	    fn.patTypes         = helpers::getRawPointer(this->patTypes());
+
+	    int numEle = this->parallelSequences() * this->size();
+	    thrust::for_each(
+	     thrust::make_zip_iterator(
+		thrust::make_tuple(this->outputs().begin(),
+				   thrust::counting_iterator<int>(0))),
+	     thrust::make_zip_iterator(
+		thrust::make_tuple(this->outputs().begin() + numEle,
+				   thrust::counting_iterator<int>(0) + numEle)),
+	     fn);
+	    
+	    
+	}else{
+	    
+	    // normal mode
+	    // Step1: prepare the data buffer by matrix transformation
+	    {{
+	    helpers::Matrix<TDevice> weightMatrix   (&this->m_weightBuffer,
+						     this->precedingLayer().size(),
+						     this->m_winTotalL);
+	    
+	    helpers::Matrix<TDevice> plOutputsMatrix(&this->precedingLayer().outputs(), 
+						     this->precedingLayer().size(), 
+						     this->parallelSequences(),
+						     st * this->precedingLayer().size() - shiftIn);
+
+            helpers::Matrix<TDevice> outputsMatrix  (&this->m_conBuffer,                 
+						     this->m_winTotalL,                   
+						     this->parallelSequences(),
+						     st * this->m_winTotalL);
+
+            outputsMatrix.assignProduct(weightMatrix, true, plOutputsMatrix, false);
+	    }}
+
+	    // Step2: sum the result
+	    {{
+	    internal::ConvolutionCore fn;
+	    	    
+	    fn.dataBuffer       = helpers::getRawPointer(this->m_conBuffer);
+	    //fn.targetBuff       = helpers::getRawPointer(this->outputs());
+	    fn.biasWeight       = helpers::getRawPointer(this->m_weightBuffer) + m_biasPosInBuffer;
+	    
+	    fn.winSizeCum       = helpers::getRawPointer(m_winWidth_Cum_D);
+	    fn.winHalfSize      = helpers::getRawPointer(m_winWidth_D);
+	    fn.winTapInter      = helpers::getRawPointer(m_winInterval_D);
+		
+	    fn.curLayerSize     = this->size();
+	    fn.winTotalLength   = this->m_winTotalL;
+
+	    fn.patTypes         = helpers::getRawPointer(this->patTypes());
+	    fn.paral            = this->precedingLayer().parallelSequences();
+	    fn.maxSeqLength     = this->curMaxSeqLength();
+
+	    fn.causal           = this->m_causalFlag;
+	    fn.outputTanh       = this->m_outputTanh;
+	    int n =this->precedingLayer().curMaxSeqLength();
+	    n = n*this->precedingLayer().parallelSequences();
+	    n = n*this->size();
+
+	    thrust::for_each(
+	     thrust::make_zip_iterator(
+		thrust::make_tuple(this->outputs().begin() + st * this->size(),
+				   thrust::counting_iterator<int>(0)+ st * this->size())),
+	     thrust::make_zip_iterator(
+		thrust::make_tuple(this->outputs().begin() + et * this->size(), 
+				   thrust::counting_iterator<int>(0)+ et * this->size())),
+	     fn);
+
+	    }}
+	}
     }
     
     template <typename TDevice>
     void CNNLayer<TDevice>::computeBackwardPass(const int nnState)
     {
 	// Step1: Pass throught the nonlinear function
-	{{
+	if (m_outputTanh){{
             internal::ComputeDeltaFn fn;
             int n = this->curMaxSeqLength() * this->parallelSequences() * this->size();
             thrust::for_each(
@@ -1097,6 +1345,10 @@ namespace layers {
 	thrust::fill(this->precedingLayer().outputErrors().begin(),
 		     this->precedingLayer().outputErrors().end(), 0.0);	
 
+	thrust::fill(m_conBuffer.begin(),
+		     m_conBuffer.begin() + this->m_winTotalL * this->curMaxSeqLength() * 
+		     this->parallelSequences(), 0.0);
+	
 	// Step2: propagate the gradient
 	{{
 	    internal::ConvolutionCoreGra fn;
@@ -1114,6 +1366,8 @@ namespace layers {
 	    fn.patTypes         = helpers::getRawPointer(this->patTypes());
 	    fn.paral            = this->precedingLayer().parallelSequences();
 	    fn.maxSeqLength     = this->curMaxSeqLength();
+
+	    fn.causal           = this->m_causalFlag;
 	    
 	    int n =this->precedingLayer().curMaxSeqLength();
 	    n = n*this->precedingLayer().parallelSequences();
@@ -1293,8 +1547,49 @@ namespace layers {
         (*layersArray)[layersArray->Size() - 1].AddMember("window_stride",
 							  m_winStride_Opt.c_str(),
 							  allocator);
+	(*layersArray)[layersArray->Size() - 1].AddMember("causal", m_causalFlag,
+							  allocator);
+	(*layersArray)[layersArray->Size() - 1].AddMember("tanhoutput", m_outputTanh,
+							  allocator);	
     }
 
+
+    template <typename TDevice>
+    void CNNLayer<TDevice>::reduceOutputBuffer()
+    {
+	// check whether this is the CNN in wavenet
+	// 1. causal filter
+	// 2. 1-D CNN
+	// 3. filter width is 3 (although 2 columns of weights are used by causal CNN)
+	// 4. filter interval is the same
+	if (m_causalFlag && m_1DCNNOnly && (m_winTotalL == (this->size() * 3))){
+	    // check the filter interval
+	    int recepField = m_winInterval_H[0];
+	    for (int i = 0; i < m_winInterval_H.size(); i++)
+		if (recepField != m_winInterval_H[i])
+		    return;
+	    
+	    // save the intermediate buffer
+	    m_conBuffer.resize(this->parallelSequences() * m_winTotalL * (recepField + 1), 0);
+	    m_conBuffer.shrink_to_fit();
+	    
+	    // save the output buffer size
+	    this->resizeOutputBuffer(this->parallelSequences() * this->size());
+	    printf("\t[mem saved]");
+	    this->setSaveMemoryFlag(true);
+	}
+    }
+
+    template <typename TDevice>
+    int CNNLayer<TDevice>::outputBufPtrBias(const int timeStepTimesParallel, const int nnState)
+    {
+	if (this->getSaveMemoryFlag()){
+	    return timeStepTimesParallel * this->size();
+	}else{
+	    return 0;
+	}
+    }
+    
     template class CNNLayer<Gpu>;
     template class CNNLayer<Cpu>;
 }

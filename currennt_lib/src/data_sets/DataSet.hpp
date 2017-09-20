@@ -56,8 +56,8 @@ namespace data_sets {
             std::streampos targetsBegin;
 	    
 	    // Add 0620, Wang: support to the txt int data
-	    int            txtLength;        // length of the txt data for this sequence
-	    std::streampos txtDataBegin;     //  
+	    //int            txtLength;        // length of the txt data for this sequence
+	    //std::streampos txtDataBegin;     //  
 
 	    // Add 1111, support to the auxillary data
 	    int            auxDataDim;
@@ -67,8 +67,11 @@ namespace data_sets {
 	    int            beginInUtt;       // the relative position of the start of the seq
 	                                     // in the utterance
 	    // Add 170327, support to the external input data
-	    int            exInputDim;
-	    std::streampos exInputBegin;
+	    int            exInputDim;       // 
+	    int            exInputLength;    //
+	    int            exInputStartPos;  //
+	    int            exInputEndPos;    // 
+	    std::streampos exInputBegin;     //
         };
 
     private:
@@ -78,6 +81,7 @@ namespace data_sets {
         void _addNoise(Cpu::real_vector *v);
         Cpu::real_vector    _loadInputsFromCache(const sequence_t &seq);
         Cpu::real_vector    _loadOutputsFromCache(const sequence_t &seq);
+	Cpu::real_vector    _loadExInputsFromCache(const sequence_t &seq);
         Cpu::int_vector     _loadTargetClassesFromCache(const sequence_t &seq);
         boost::shared_ptr<DataSetFraction> _makeFractionTask(int firstSeqIdx);
         boost::shared_ptr<DataSetFraction> _makeFirstFractionTask();
@@ -116,10 +120,10 @@ namespace data_sets {
 	
 	// Add 0620: Wang support to the txt input data
 	// (Support for the txt data should be merged with the auxillary data)
-	int    m_maxTxtLength;                 // the maximum length of txt over corpus
-	int    m_txtDataPatternSize;           // dimension of the txt data 
-	int    m_totalTxtLength;               // the total length of txt data for this fraction
-	bool   m_hasTxtData;                   // whether contains the txt data?
+	//int    m_maxTxtLength;                 // the maximum length of txt over corpus
+	//int    m_txtDataPatternSize;           // dimension of the txt data 
+	//int    m_totalTxtLength;               // the total length of txt data for this fraction
+	//bool   m_hasTxtData;                   // whether contains the txt data?
 	
 	// Add 1111: Support to the auxillary data (external data not in .nc format)
 	std::string m_auxDirPath;              // path to the directory where auxillary data exist
@@ -128,11 +132,17 @@ namespace data_sets {
 	int         m_auxDataDim;              // dimension of the auxillary data
 
 	// Add 170327: external input file
-	std::vector<std::string> m_exInputDir;
-	std::vector<std::string> m_exInputExt;
-	Cpu::int_vector          m_exInputDim;
-	bool                     m_exInputFlag;
+	std::string m_exInputDir;
+	std::string m_exInputExt;
+	int         m_exInputDim;
+	int         m_exInputType;             // reserved
+	bool        m_exInputFlag;
 
+	std::vector<std::string> m_exInputDirs;
+	std::vector<std::string> m_exInputExts;
+	Cpu::int_vector          m_exInputDims;
+
+	
     public:
         /**
          * Creates an empty data set

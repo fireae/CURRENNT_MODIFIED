@@ -53,13 +53,14 @@
 #define NN_FEEDBACK_SCHEDULE_MIN 0.000 // Minimal value for the schedule sampling prob parameter
 #define NN_FEEDBACK_SCHEDULE_SIG 20    // K in 1/(1+exp((x-K))/Para)
 
-// Schedule sampling method code
+// Schedule sampling and sequence model code
 #define NN_FEEDBACK_GROUND_TRUTH 0     // use ground truth directly
 #define NN_FEEDBACK_DROPOUT_1N   1     // dropout, set to 1/N
 #define NN_FEEDBACK_DROPOUT_ZERO 2     // dropout, set to zero
 #define NN_FEEDBACK_SC_SOFT      3     // schedule sampling, use soft vector
 #define NN_FEEDBACK_SC_MAXONEHOT 4     // schedule sampling, use one hot vector of the max prob
 #define NN_FEEDBACK_SC_RADONEHOT 5     // schedule sampling, use one random output
+#define NN_FEEDBACK_BEAMSEARCH   6     // beam search (for generation)
 
 // Softmax generation method
 #define NN_SOFTMAX_GEN_BEST      0
@@ -77,14 +78,20 @@
 #define NN_STATE_GAN_DIS_GENDATA       2
 #define NN_STATE_GAN_GEN               0
 #define NN_STATE_GAN_GEN_FEATMAT       3
-#define NN_STATE_GAN_GENERATION_STAGE  4
+#define NN_STATE_GENERATION_STAGE      4
+#define NN_STATE_GAN_NOGAN             5
 
 /*** For Normal layers ***/
 #define NN_OPERATOR_LAYER_NOISE_TIMEREPEAT 1
 #define NN_OPERATOR_LAYER_NOISE_DIMREPEAT  2
 #define NN_OPERATOR_LAYER_NOISE_NOREPEAT   0
 
-
+/*** For postoutput layers ***/
+#define NN_POSTOUTPUTLAYER_LAST         1  // the true postoutput layer
+#define NN_POSTOUTPUTLAYER_MIDDLEOUTPUT 2  // the middle postoutput for GAN
+#define NN_POSTOUTPUTLAYER_FEATMATCH    3  // the middle postoutput (featmatch) for GAN
+#define NN_POSTOUTPUTLAYER_NOTLASTMDN   4  // the postoutput (MDN) for acosutic model in GAN
+#define NN_POSTOUTPUTLAYER_VAEKL        5  // the KL divergence layer
 
 
 #endif

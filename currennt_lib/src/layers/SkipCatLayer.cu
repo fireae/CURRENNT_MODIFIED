@@ -271,6 +271,10 @@ namespace layers{
 
 	    int cnt = 0;
 	    BOOST_FOREACH (Layer<TDevice> *layer, m_preLayers) {
+		
+		if (layer->getSaveMemoryFlag())
+		    throw std::runtime_error("SkipCat is not ready for reduced memory input");
+
 		fn.tarS    = m_preSkipDimAccu[cnt/2];
 		fn.source  = helpers::getRawPointer(layer->outputs());
 		fn.srcDim  = layer->size();

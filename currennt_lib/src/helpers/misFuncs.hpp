@@ -43,6 +43,9 @@ void   ParseFloatOpt(const std::string stringOpt, Cpu::real_vector &optVec);
 /* ***** Functions for vector process ***** */
 int    SumCpuIntVec(Cpu::int_vector &temp);
 int    MaxCpuIntVec(Cpu::int_vector &temp);
+void   PrintVecBinH(Cpu::real_vector &temp);
+void   PrintVecBinH(Cpu::int_vector &temp);
+
 
 /* ***** Functions for training process ***** */
 int    flagUpdateDiscriminator(const int epoch, const int frac);

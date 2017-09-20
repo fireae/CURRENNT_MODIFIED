@@ -48,8 +48,7 @@
 namespace internal{
 namespace{
 
-
-
+    // Generating noise
     struct tempPrg
     {
 	float a, b;
@@ -86,13 +85,16 @@ namespace layers{
 	, m_noiseRatio      (-1.0)
 	, m_flagSkipInit    (true)
     {
-	if (precedingLayers.size() < 1){
+	// Initial check
+	if (precedingLayers.size() < 1)
 	    throw std::runtime_error("Error no precedinglayers in skipadd/skipini");
-	}
 	
+	// Link previous layers
 	m_previousSkipStr = (layerChild->HasMember("preSkipLayer") ? 
 			     ((*layerChild)["preSkipLayer"].GetString()) : "");
 	if (m_previousSkipStr.size()){
+
+	    // previous layers are specified by preSkipLayer
 	    std::vector<std::string> tmpOpt;
 	    ParseStrOpt(m_previousSkipStr, tmpOpt, ",");
 	    for (int cnt = 0 ; cnt < tmpOpt.size(); cnt++) {
@@ -103,7 +105,6 @@ namespace layers{
 		    }
 		}
 	    }
-
 	    /*
 	    boost::iterator_range<std::string::iterator> r;
 	    BOOST_FOREACH (Layer<TDevice> *layer, precedingLayers) {
@@ -115,7 +116,7 @@ namespace layers{
 		m_preLayers.back()->name() != precedingLayers.back()->name()){
 		// if the string doesn't specify the defaul previous layer
 		m_preLayers.push_back(precedingLayers.back());
-		}*/
+	    }*/
 
 	}else{
 	    // default cause, use only the previous 1 skip and previous normal output layer
@@ -142,12 +143,20 @@ namespace layers{
 	if (m_noiseRatio > 0)
 	    printf("\n\tInject noise %f\n", m_noiseRatio);
 
-	
+	// Post-processing check
+	// Note: here precedingLayers is checked.
+	// In NeuralNetwork(), only skipadd will receive more than one layer in precedingLayer
 	if (precedingLayers.size()<2)
 	    m_flagSkipInit = true;  // this is the skipinit
 	else
-	    m_flagSkipInit = false; // not
+	    m_flagSkipInit = false; // this is the skipadd
 
+	if (m_flagSkipInit == true && m_noiseRatio < 0){
+	    m_virtualLayer = true;     // this layer is just a virtual layer
+	    this->clearOutputBuffer(); // clear the output memory (optional)
+	}else{
+	    m_virtualLayer = false;
+	}
     }	
 
     // Destructor
@@ -155,80 +164,114 @@ namespace layers{
     SkipAddLayer<TDevice>::~SkipAddLayer()
     {
     }
-	
+
+    template <typename TDevice>
+    typename SkipAddLayer<TDevice>::real_vector& SkipAddLayer<TDevice>::outputs()
+    {
+	if (m_virtualLayer)
+	    return this->precedingLayer().outputs();
+	else
+	    return this->_outputs();
+    }
+    
     // NN forward
     template <typename TDevice>
     void SkipAddLayer<TDevice>::computeForwardPass(const int nnState)
     {
-	// initialization
-	if (m_noiseRatio > 0){
-	    thrust::counting_iterator<unsigned int> index_sequence_begin(0);
-	    thrust::transform(index_sequence_begin,
-			      (index_sequence_begin +
-			       this->curMaxSeqLength() * this->parallelSequences() * this->size()),
-			      this->outputs().begin(),
-			      internal::tempPrg(-1.0 * m_noiseRatio, m_noiseRatio,
-						(int)(GetRandomNumber() * 10000.0)));
-	}else{
-	    thrust::fill(this->outputs().begin(), 
-			 (this->outputs().begin() + 
+
+	// initialization for backward pass
+	// (because gradients will be accumulated from multiple layers)
+	if (this->flagTrainingMode()){
+	    thrust::fill(this->outputErrors().begin(), 
+			 (this->outputErrors().begin() + 
+			  this->curMaxSeqLength() * this->parallelSequences() * this->size()),
+			 0.0);
+
+	    thrust::fill(this->outputErrorsFromSkipLayer().begin(),
+			 (this->outputErrorsFromSkipLayer().begin() + 
 			  this->curMaxSeqLength() * this->parallelSequences() * this->size()),
 			 0.0);
 	}
+
+	// processing
+	if (m_virtualLayer){
+	    // if virtual Layer, no need to do anything
+	    return;
+	}else{
+	    // initialization
+	    if (m_noiseRatio > 0){
+		thrust::counting_iterator<unsigned int> index_sequence_begin(0);
+		thrust::transform(
+		    index_sequence_begin,
+		    (index_sequence_begin +
+		     this->curMaxSeqLength() * this->parallelSequences() * this->size()),
+		    this->outputs().begin(),
+		    internal::tempPrg(-1.0 * m_noiseRatio, m_noiseRatio,
+				      (int)(GetRandomNumber() * 10000.0)));
+	    }else{
+		thrust::fill(this->outputs().begin(), 
+			     (this->outputs().begin() + 
+			      this->curMaxSeqLength() * this->parallelSequences() * this->size()),
+			     0.0);
+	    }
 	
-	// initialization for backward pass
-	thrust::fill(this->outputErrors().begin(), 
-		     (this->outputErrors().begin() + 
-		      this->curMaxSeqLength() * this->parallelSequences() * this->size()),
-		     0.0
-		     );
-
-	thrust::fill(this->outputErrorsFromSkipLayer().begin(),
-		     (this->outputErrorsFromSkipLayer().begin() + 
-		      this->curMaxSeqLength() * this->parallelSequences() * this->size()),
-		     0.0);
-
-	// accumulating the outputs of previous layers
-	BOOST_FOREACH (Layer<TDevice> *layer, m_preLayers) {
-	    thrust::transform(layer->outputs().begin(),
-			      (layer->outputs().begin() + 
-			       this->curMaxSeqLength() * this->parallelSequences() * this->size()),
-			      this->outputs().begin(),
-			      this->outputs().begin(),
-			      thrust::plus<real_t>()
-			      );	    
-	}	
+	    // accumulating the outputs of previous layers
+	    BOOST_FOREACH (Layer<TDevice> *layer, m_preLayers) {
+		thrust::transform(
+		    layer->outputs().begin(),
+		    (layer->outputs().begin() + 
+		     this->curMaxSeqLength() * this->parallelSequences() * this->size()),
+		    this->outputs().begin(),
+		    this->outputs().begin(),
+		    thrust::plus<real_t>());	    
+	    }
+	}
     }
 
     // NN forward
     template <typename TDevice>
     void SkipAddLayer<TDevice>::computeForwardPass(const int timeStep, const int nnState)
     {
+	// absolute time
 	int effTimeS = timeStep     * this->parallelSequences();
 	int effTimeE = (timeStep+1) * this->parallelSequences();
-
-	if (m_noiseRatio > 0){
-	    thrust::counting_iterator<unsigned int> index_sequence_begin(0);
-	    thrust::transform(index_sequence_begin  + effTimeS * this->size(),
-			      index_sequence_begin  + effTimeE * this->size(),
-			      this->outputs().begin() + effTimeS * this->size(),
-			      internal::tempPrg(-1.0 * m_noiseRatio, m_noiseRatio));
-	}else{
-	    // initialization without noise
-	    thrust::fill(this->outputs().begin() + effTimeS * this->size(), 
-			 this->outputs().begin() + effTimeE * this->size(), 
-			 0.0);
-	}
 	
-	// accumulating the outputs of previous layers
-	BOOST_FOREACH (Layer<TDevice> *layer, m_preLayers) {
-	    thrust::transform(layer->outputs().begin() + effTimeS * this->size(),
-			      layer->outputs().begin() + effTimeE * this->size(),
-			      this->outputs().begin()  + effTimeS * this->size(),
-			      this->outputs().begin()  + effTimeS * this->size(),
-			      thrust::plus<real_t>()
-			      );	    
-	}	
+	// shift of the pointer to the data 
+	int shiftIn  = 0; // value to assigned layer
+	int shiftOut = this->outputBufPtrBias(timeStep * this->parallelSequences(), nnState);
+	
+	if (m_virtualLayer){
+	    // virtual layer, no need to do anything
+	    return;
+	}else{
+	    // physical layer, compute the output
+	    if (m_noiseRatio > 0){
+		// initialize the output buffer with noise
+		thrust::counting_iterator<unsigned int> index_sequence_begin(0);
+		thrust::transform(index_sequence_begin    + effTimeS * this->size(),
+				  index_sequence_begin    + effTimeE * this->size(),
+				  this->outputs().begin() + effTimeS * this->size() - shiftOut,
+				  internal::tempPrg(-1.0 * m_noiseRatio, m_noiseRatio));
+	    }else{
+		// initialization without noise
+		thrust::fill(this->outputs().begin() + effTimeS * this->size() - shiftOut, 
+			     this->outputs().begin() + effTimeE * this->size() - shiftOut, 
+			     0.0);
+	    }
+
+	    //int cnt = 0;
+	    //accumulating the outputs of previous layers
+	    BOOST_FOREACH (Layer<TDevice> *layer, m_preLayers) {
+		//if (m_preLayers.size() && cnt == 22)
+		shiftIn = layer->outputBufPtrBias(timeStep * this->parallelSequences(), nnState);
+		thrust::transform(layer->outputs().begin() + effTimeS * this->size() - shiftIn,
+				  layer->outputs().begin() + effTimeE * this->size() - shiftIn,
+				  this->outputs().begin()  + effTimeS * this->size() - shiftOut,
+				  this->outputs().begin()  + effTimeS * this->size() - shiftOut,
+				  thrust::plus<real_t>());
+		//cnt++;
+	    }
+	}
     }
 
 
@@ -236,7 +279,8 @@ namespace layers{
     template <typename TDevice>
     void SkipAddLayer<TDevice>::computeBackwardPass(const int nnState)
     {
-	// 
+	// Both physical and virtual layers need to handle the gradients
+	
 	// at first, add the errors in both this->outputErrorsFromSkipLayer() and m_outputErrors
 	thrust::transform(this->outputErrorsFromSkipLayer().begin(),
 			  (this->outputErrorsFromSkipLayer().begin() + 
@@ -281,8 +325,7 @@ namespace layers{
 
     template <typename TDevice>
     typename SkipAddLayer<TDevice>::real_vector& SkipAddLayer<TDevice>::outputFromGate()
-    {
-	
+    {	
 	return this->outputFromGate();
     }
     
@@ -318,6 +361,31 @@ namespace layers{
     }
     */
 
+    template <typename TDevice>
+    void SkipAddLayer<TDevice>::reduceOutputBuffer()
+    {
+	if (m_virtualLayer){
+	    // this->clearOutputBuffer() // this has been done
+	}else{
+	    this->resizeOutputBuffer(this->parallelSequences() * this->size());
+	    this->setSaveMemoryFlag(true);
+	    printf("\t[mem saved]");
+	}
+    }
+
+    template <typename TDevice>
+    int SkipAddLayer<TDevice>::outputBufPtrBias(const int timeStepTimesParallel, const int nnState)
+    {
+	if (m_virtualLayer){
+	    return this->precedingLayer().outputBufPtrBias(timeStepTimesParallel, nnState);
+	}else if (this->getSaveMemoryFlag()){
+	    return timeStepTimesParallel * this->size();
+	}else{
+	    return 0;
+	}
+    }
+
+    
     template class SkipAddLayer<Cpu>;
     template class SkipAddLayer<Gpu>;
     

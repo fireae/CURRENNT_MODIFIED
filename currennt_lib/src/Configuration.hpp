@@ -170,7 +170,10 @@ private:
     /* Add 20170326 external input*/
     std::string m_exInputDir;
     std::string m_exInputExt;
-    std::string m_exInputDim;
+    int         m_exInputDim;
+    std::string m_exInputDirs;
+    std::string m_exInputExts;
+    std::string m_exInputDims;
 
     /* Add 20170404 */
     int         m_verbose;
@@ -179,6 +182,9 @@ private:
 
     /* Add 20170612 */
     int         m_mdnVarFixEpochNum;
+
+    /* Add 20170711 */
+    int         m_vaePlotManifold;
     
     unsigned m_truncSeqLength;
     unsigned m_parallelSequences;
@@ -212,7 +218,7 @@ private:
     std::string m_autosavePrefix;
     std::string m_continueFile;
     std::string m_cachePath;
-
+    
     std::vector<std::string> m_trainingFiles;
     std::vector<std::string> m_validationFiles;
     std::vector<std::string> m_testFiles;
@@ -252,7 +258,8 @@ public:
      * @return True if the NN shall be trained
      */
     bool trainingMode() const;
-
+    bool generatingMode() const;
+    
     const std::string& printWeightPath() const;
     const int& printWeightOpt() const;
     /**
@@ -678,7 +685,10 @@ public:
 
     const std::string& exInputDir() const;
     const std::string& exInputExt() const;
-    const std::string& exInputDim() const;
+    const int& exInputDim() const;
+    const std::string& exInputDirs() const;
+    const std::string& exInputExts() const;
+    const std::string& exInputDims() const;
 
     const int& verboseLevel() const;
 
@@ -687,6 +697,8 @@ public:
     const int& runningMode()  const;
 
     const int& mdnVarUpdateEpoch() const;
+
+    const int& vaePlotManifold() const;
 };
 
 
