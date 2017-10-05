@@ -552,7 +552,7 @@ int trainerMain(const Configuration &config)
 
 	/********************* Convert the Json network file  *************************/
         }else if(config.printWeightPath().size()>0){
-	    // print to binary format
+	    // print to binary format (0 for normal binary format, 1 for HTS-engine format)
 	    if (config.printWeightOpt() < 2){
 		printf("Print binary weight file in '%s' with option %d\n",
 		       config.printWeightPath().c_str(),
@@ -561,7 +561,7 @@ int trainerMain(const Configuration &config)
 						config.printWeightOpt());
 		printf("done.\n");
 		
-	    // print to HTS-engine format
+	    // convert .autosave to .trained_network
 	    }else if (config.printWeightOpt() == 2){
 		// save the trained network to the output file
 		printf("Translate the network in '%s'... ",

@@ -194,8 +194,7 @@ namespace layers{
 	virtual int feedBackDim();
 
 
-	virtual void biasProb(real_vector &secondOutput,  const int bufferDim,  const int dimStart,
-			      real_vector &biasDataVec,   const int timeStep);
+	virtual void setGenMethod(cpu_real_vector &control, const int timeStep);
     };
 
 
@@ -335,8 +334,7 @@ namespace layers{
 
 	virtual int  feedBackDim();
 
-	virtual void biasProb(real_vector &secondOutput,  const int bufferDim,  const int dimStart,
-			      real_vector &biasDataVec,   const int timeStep);
+	virtual void setGenMethod(cpu_real_vector &control, const int timeStep);
 
     };
 

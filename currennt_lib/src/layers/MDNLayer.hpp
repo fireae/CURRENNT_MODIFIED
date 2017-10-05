@@ -94,9 +94,9 @@ namespace layers {
 
 
 	// for probablistic model
-	std::string    m_probBiasDir;        //
-	int            m_probBiasDim;        //
-	real_vector    m_probBiasVec;
+	std::string     m_probBiasDir;        //
+	int             m_probBiasDim;        //
+	cpu_real_vector m_probBiasVec;
 
 	// for uvSigmoid softmax
 	std::string    m_uvSigmoidStr;

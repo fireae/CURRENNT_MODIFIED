@@ -620,10 +620,10 @@ namespace layers {
 		printf("[Probablistic bias used]");
 		m_probBiasVec = tmp;	    
 	    }else if (m_probBiasDim > 0){
-		printf("\tWARNING: the prob bias must be %d in dimension\n", m_secondOutputDim);
-		printf("\tWARNING: prob bias data will not used\n");
-		m_probBiasDim = -1;
-		m_probBiasVec.clear();
+		//printf("\tWARNING: the prob bias must be %d in dimension\n", m_secondOutputDim);
+		//printf("\tWARNING: prob bias data will not used\n");
+		Cpu::real_vector tmp(this->outputs().size()/this->size(), 0.0);
+		m_probBiasVec = tmp;
 	    }else{
 		m_probBiasDim = -1;
 		m_probBiasVec.clear();
@@ -930,10 +930,11 @@ namespace layers {
 	// for frame by frame, we always assume that parameter and output should be generated
 	if (para > -1.50 || para < -3.0){
 	    BOOST_FOREACH (boost::shared_ptr<MDNUnit<TDevice> > &mdnUnit, m_mdnUnits){
-		if (m_probBiasDim > 0){
-		    mdnUnit->biasProb(this->m_probBiasVec,  0,  0,
-				      this->m_probBiasVec,  timeStep);
-		}
+
+		// Dirty code: m_probBiasVec is use to change the genMethod of mdnUnit
+		if (m_probBiasDim > 0)
+		    mdnUnit->setGenMethod(this->m_probBiasVec, timeStep);
+		
 		mdnUnit->getOutput(timeStep, ((para>0)?(para):(0.0001)), (this->_targets()));
 		mdnUnit->getParameter(timeStep,
 				      helpers::getRawPointer(this->m_mdnParaVec));
@@ -1126,33 +1127,41 @@ namespace layers {
 
 	// Load additional probabilistic data for biased generation in model with feedback link
 	// NOTE: this part should be moved to DataSet.cpp
-	if (m_probBiasDim > 0){
-	    int bias = 0;
-	    for (int i = 0; i < fraction.numSequences(); i++){
-		std::string fileName = m_probBiasDir + "/" + fraction.seqInfo(i).seqTag + ".bin";
-		
-		std::ifstream ifs(fileName.c_str(), std::ifstream::binary | std::ifstream::in);
-		if (!ifs.good()){
-		    throw std::runtime_error(std::string("Fail to open ")+fileName);
-		}
-		std::streampos numEleS, numEleE;
-		long int numEle;
-		real_t tempVal;
-		numEleS = ifs.tellg();
-		ifs.seekg(0, std::ios::end);
-		numEleE = ifs.tellg();
-		numEle  = (numEleE-numEleS)/sizeof(real_t);
-		ifs.seekg(0, std::ios::beg);
-		std::vector<real_t> tempVec;
-		for (unsigned int i = 0; i<numEle; i++){
-		    ifs.read ((char *)&tempVal, sizeof(real_t));
-		    tempVec.push_back(tempVal);
-		}
-		thrust::copy(tempVec.begin(), tempVec.end(), m_probBiasVec.begin() + bias);
-		bias += numEle;
-		ifs.close();
+	
+	// Now, this part is used only for generation stage
+	if (m_probBiasDim > 0 && Configuration::instance().generatingMode() > 0){
+	    
+	    if (fraction.numSequences() > 1)
+		throw std::runtime_error("Please turn of parallel mode");
+
+	    int i = 0;
+	    std::string fileName = m_probBiasDir + "/" + fraction.seqInfo(i).seqTag + ".bin";
+	    
+	    std::ifstream ifs(fileName.c_str(), std::ifstream::binary | std::ifstream::in);
+	    if (!ifs.good())
+		throw std::runtime_error(std::string("Fail to open ")+fileName);
+	   
+	    std::streampos numEleS, numEleE;
+	    long int numEle;
+	    real_t tempVal;
+	    numEleS = ifs.tellg();
+	    ifs.seekg(0, std::ios::end);
+	    numEleE = ifs.tellg();
+	    numEle  = (numEleE-numEleS)/sizeof(real_t);
+	    ifs.seekg(0, std::ios::beg);
+	    std::vector<real_t> tempVec;
+	    for (unsigned int i = 0; i<numEle; i++){
+		ifs.read ((char *)&tempVal, sizeof(real_t));
+		tempVec.push_back(tempVal);
 	    }
-	}	
+	    if (numEle < fraction.maxSeqLength())
+		throw std::runtime_error("Probability bias vector is too short");
+	    
+	    i = (numEle < m_probBiasVec.size())?(numEle):(m_probBiasVec.size());
+	    thrust::copy(tempVec.begin(), tempVec.begin() + i, m_probBiasVec.begin());
+	    ifs.close();
+	    
+	}
     }
 
     // export

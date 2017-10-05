@@ -2012,16 +2012,35 @@ namespace {
 		    *targetClass = (real_t)j;
 		    }
 		*/
-		// for plain softmax, special care should be taken to handle the first dimension
-	    }else if (genMethod == NN_SOFTMAX_GEN_SAMP){
+	    }else if (genMethod >= NN_SOFTMAX_GEN_SAMP){
 		real_t probAccum = 0.0;
 		real_t randomNum = (randomSeeds==NULL)?(randomSeed):(randomSeeds[outputIdx]);
-		for (int i = 0; i<paradim; i++){
-		    pos = outputIdx * paradim + i;
-		    probAccum += prob[pos];
-		    if (randomNum < probAccum){
-			*targetClass = (real_t)i;
-			break;
+
+		if (genMethod > NN_SOFTMAX_GEN_SAMP){
+		    // sharpen the distribution
+		    real_t normFact  = 0.0;
+		    for (int i = 0; i<paradim; i++){
+			pos = outputIdx * paradim + i;
+			normFact += pow(prob[pos], (real_t)(genMethod - NN_SOFTMAX_GEN_SAMP));
+		    }
+		    for (int i = 0; i<paradim; i++){
+			pos = outputIdx * paradim + i;
+			probAccum += (pow(prob[pos], (real_t)(genMethod - NN_SOFTMAX_GEN_SAMP))/
+				      normFact);
+			if (randomNum < probAccum){
+			    *targetClass = (real_t)i;
+			    break;
+			}
+		    }
+		}else{
+		    // not sharpen the distribution
+		    for (int i = 0; i<paradim; i++){
+			pos = outputIdx * paradim + i;
+			probAccum += prob[pos];
+			if (randomNum < probAccum){
+			    *targetClass = (real_t)i;
+			    break;
+			}
 		    }
 		}
 	    }
@@ -2378,6 +2397,7 @@ namespace {
 
     
     // copy segment
+    /*
     struct ProbBiasSoftmax
     {
 	real_t *source;
@@ -2395,7 +2415,7 @@ namespace {
 	
 	__host__ __device__ void operator() (const thrust::tuple<real_t&, int> &t) const
 	{
-	    /* 2017/02/22 For probablity modification
+	    / 2017/02/22 For probablity modification
 	    int timeIdx    = t.get<1>();
 	    real_t probSum = 0.0;
 	    for (int i =0; i < copyDim; i++){
@@ -2407,7 +2427,7 @@ namespace {
 		    target[timeIdx * tarDim + tarS + i] =
 			(target[timeIdx * tarDim + tarS + i] +
 			 source[timeIdx * srcDim + srcS + i]) / probSum;
-			 }*/
+			 }/
 	    int timeIdx    = t.get<1>();
 	    target[timeIdx * copyDim] = (ratio     * target[timeIdx * copyDim] +
 					 (1-ratio) * (1-source[timeIdx * copyDim]));
@@ -2416,7 +2436,7 @@ namespace {
 						 (1-ratio) * source[timeIdx * copyDim + i]);
 	    }
 	}
-    };
+	};*/
 
     /********************************************************
      other utilizes
@@ -2693,9 +2713,7 @@ namespace layers {
     }
 
     template <typename TDevice>
-    void MDNUnit<TDevice>::biasProb(real_vector &secondOutput, const int dimStart,
-				    const int bufferDim,
-				    real_vector &biasDataVec,  const int timeStep)
+    void MDNUnit<TDevice>::setGenMethod(cpu_real_vector &control, const int timeStep)
     {	
     }
 	
@@ -3616,7 +3634,7 @@ namespace layers {
 
 	//
 	real_vector noiseVec(n, 0.0);
-	if (this->m_genMethod == NN_SOFTMAX_GEN_SAMP){
+	if (this->m_genMethod >= NN_SOFTMAX_GEN_SAMP){
 	    thrust::counting_iterator<unsigned int> index_sequence_begin(0);
 	    thrust::transform(index_sequence_begin, index_sequence_begin + n,
 			      noiseVec.begin(),
@@ -3687,7 +3705,7 @@ namespace layers {
 					     const real_t para,real_vector &targets)
     {
 	real_t randomSeed;
-	if (this->m_genMethod == NN_SOFTMAX_GEN_SAMP)
+	if (this->m_genMethod >= NN_SOFTMAX_GEN_SAMP)
 	    randomSeed = GetRandomNumber();	    
 	else
 	    randomSeed = 0.0;
@@ -4124,13 +4142,26 @@ namespace layers {
     }
 
     template <typename TDevice>
-    void MDNUnit_softmax<TDevice>::biasProb(real_vector &secondOutput, const int bufferDim,
-					    const int dimStart,
-					    real_vector &biasDataVec,  const int timeStep)
+    void MDNUnit_softmax<TDevice>::setGenMethod(cpu_real_vector &control, const int timeStep)
     {
 	int ts = timeStep * this->m_precedingLayer.parallelSequences();
 	int te = ts + this->m_precedingLayer.parallelSequences();
-
+	
+	if (timeStep < control.size()){
+	    if (control[timeStep] > 0.5){
+		this->m_genMethod = NN_SOFTMAX_GEN_BEST;
+	    }else{
+		if (control[timeStep] < 0)
+		    this->m_genMethod = NN_SOFTMAX_GEN_SAMP - control[timeStep];
+		else
+		    this->m_genMethod = NN_SOFTMAX_GEN_SAMP;
+	    }
+	}
+	
+	// Add 20170923
+	// Dirty code: use the biasDataVec to change the genMethod dynamically
+	
+	
 	/* 2017/02/22 Method for shift the probability vector for feedback
 	if (this->m_feedBackType == MDNUNIT_FEEDBACK_OPT_0){
 	    internal::ProbBiasSoftmax fn;
@@ -4152,7 +4183,9 @@ namespace layers {
 					   thrust::counting_iterator<int>(0)+te)),
 		fn);
 	    
-		}*/
+		}
+	*/
+	/*
 	if (bufferDim == 0 && dimStart == 0){
 	    internal::ProbBiasSoftmax fn;
 	    fn.target = helpers::getRawPointer(this->m_paraVec);
@@ -4173,7 +4206,7 @@ namespace layers {
 					   thrust::counting_iterator<int>(0)+te)),
 		fn);
 	    		
-	}
+		}*/
     }
 
     /********************************************************
