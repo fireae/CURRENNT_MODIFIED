@@ -78,7 +78,8 @@ namespace layers {
             const helpers::JsonValue &weightsSection,
             int                       inputWeightsPerBlock, 
             int                       internalWeightsPerBlock,
-            Layer<TDevice>           &precedingLayer
+            Layer<TDevice>           &precedingLayer,
+	    int                       maxSeqLength
             );
 
         /**
@@ -203,6 +204,8 @@ namespace layers {
 
 	virtual void cleanGradidents();	
 	const unsigned& optOpt() const;
+
+	
     };
 
 } // namespace layers

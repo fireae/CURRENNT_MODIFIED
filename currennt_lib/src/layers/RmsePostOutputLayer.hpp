@@ -53,7 +53,7 @@ namespace layers {
          */
         RmsePostOutputLayer(
             const helpers::JsonValue &layerChild, 
-            Layer<TDevice> &precedingLayer
+            Layer<TDevice> &precedingLayer, int maxSeqLength
             );
 
         /**

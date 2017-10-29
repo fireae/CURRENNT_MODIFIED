@@ -100,8 +100,9 @@ namespace {
 namespace layers {
 
     template <typename TDevice>
-    WeightedSsePostOutputLayer<TDevice>::WeightedSsePostOutputLayer(const helpers::JsonValue &layerChild, Layer<TDevice> &precedingLayer)
-        : PostOutputLayer<TDevice>  (layerChild, precedingLayer, precedingLayer.size() * 2)
+    WeightedSsePostOutputLayer<TDevice>::WeightedSsePostOutputLayer(const helpers::JsonValue &layerChild, Layer<TDevice> &precedingLayer, int maxSeqLength)
+        : PostOutputLayer<TDevice>  (layerChild, precedingLayer,
+				     precedingLayer.size() * 2, maxSeqLength)
     {
     }
 

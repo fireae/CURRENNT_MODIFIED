@@ -561,7 +561,7 @@ int trainerMain(const Configuration &config)
 						config.printWeightOpt());
 		printf("done.\n");
 		
-	    // convert .autosave to .trained_network
+	    // printconvert .autosave to HTS-engine format.trained_network
 	    }else if (config.printWeightOpt() == 2){
 		// save the trained network to the output file
 		printf("Translate the network in '%s'... ",

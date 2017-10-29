@@ -58,7 +58,12 @@ namespace layers {
 	int             m_ganState;          // State for one-sided smoothing for Gan
 	
 	int             m_postoutputFlag;    // Type of postoutput layer
-	
+
+	int             m_useExternalOutput; // 
+	real_vector     m_dataBuffer;
+	real_vector     m_externalDataMV;
+	std::string     m_externalDataMVStr;
+
     protected:
         real_vector&    _targets();
         real_vector&    _actualOutputs();
@@ -85,6 +90,7 @@ namespace layers {
             const helpers::JsonValue &layerChild, 
             Layer<TDevice>  &precedingLayer,
             int requiredSize,
+	    int maxSeqLength,
             bool createOutputs = true
             );
 	

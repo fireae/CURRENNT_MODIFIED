@@ -43,20 +43,22 @@ namespace layers {
         typedef typename TDevice::real_vector    real_vector;
         typedef typename TDevice::pattype_vector pattype_vector;
 	typedef typename Cpu::real_vector        cpu_real_vector;
+	typedef typename Cpu::pattype_vector     cpu_pattype_vector;
 	
     private:
         const std::string m_name;
         const int         m_size;
         const int         m_parallelSequences;
         const int         m_maxSeqLength;
-
+	const int         m_timeResolution;    // time resolution, >= 1
+	
         int               m_curMaxSeqLength;
         int               m_curMinSeqLength;
         int               m_curNumSeqs;
         real_vector       m_outputs;
         real_vector       m_outputErrors;
         pattype_vector    m_patTypes;
-	
+
 	/* Add 16-02-22 Wang: for WE updating */
 	bool              m_InputWeUpdate;     // the whether layer is the input layer with WE 
 	                                       // to be updated ?
@@ -72,7 +74,8 @@ namespace layers {
 	bool              m_flagTrainingMode;
 	/* Add 17-09-06 Wang: for optimizing the memory usage during generation */
 	bool              m_flagSaveOutputMemory;
-	
+
+	std::string       m_layerFlag;          // a general flag
     protected:
         real_vector& _outputs();
 	
@@ -278,7 +281,10 @@ namespace layers {
 	void setSaveMemoryFlag(const bool newFlag);
 
 	bool getSaveMemoryFlag() const;
-	
+
+	const int& getResolution();
+
+	virtual const std::string& getLayerFlag();
     };
 
 } // namespace layers

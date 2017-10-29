@@ -50,19 +50,26 @@ namespace layers{
 
 	real_vector    m_coreBuf;        // internal data buffer
 	real_vector    m_contextBuf;     // buffer for the textual data
+	real_vector    m_contextGraBuf;
 	real_vector    m_contextTanhBuf; 
-	
+	real_vector    m_contextRawBuf;
 	real_vector    m_contextMV;
 	std::string    m_contextMVStr;
+	int            m_contextCurMaxLength;
 	
-	bool                  m_iniWavCoreC;
-	WavNetCore<TDevice>  *m_iniWavCPtr;
-  
+	TrainableLayer<TDevice> *m_exInputLayer;
+	
+	bool                     m_iniWavCoreC;
+	WavNetCore<TDevice>     *m_iniWavCPtr;
+
+	void __loadContextBuff();
+	
     public:
 	WavNetCore(
 	    const helpers::JsonValue &layerChild,
 	    const helpers::JsonValue &weightsSection,
-            Layer<TDevice>           &precedingLayer
+            Layer<TDevice>           &precedingLayer,
+	    int                       maxSeqLength
 	);
 
 	virtual ~WavNetCore();

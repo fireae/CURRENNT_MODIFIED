@@ -487,6 +487,15 @@ namespace data_sets {
 	return v;
     }
 
+    Cpu::real_vector DataSet::_loadExOutputsFromCache(const sequence_t &seq)
+    {
+	Cpu::real_vector v(seq.exOutputLength * seq.exOutputDim);
+	m_cacheFile.seekg(seq.exOutputBegin);
+	m_cacheFile.read((char*)v.data(), sizeof(real_t) * v.size());
+	assert (m_cacheFile.tellg() - seq.exOutputBegin == v.size() * sizeof(real_t));
+	return v;
+    }
+
     Cpu::int_vector DataSet::_loadTargetClassesFromCache(const sequence_t &seq)
     {
         Cpu::int_vector v(seq.length);
@@ -543,6 +552,13 @@ namespace data_sets {
         int context_length = context_left + context_right + 1;
         int output_lag     = Configuration::instance().outputTimeLag();
 
+	Cpu::int_vector resolutionBuf;
+	if (Configuration::instance().resolutions().size())
+	    misFuncs::ParseIntOpt(Configuration::instance().resolutions(), resolutionBuf);
+	else
+	    resolutionBuf.clear();
+	
+	
         //printf("(%d) Making task firstSeqIdx=%d...\n", (int)m_sequences.size(), firstSeqIdx);
         boost::shared_ptr<DataSetFraction> frac(new DataSetFraction);
 
@@ -555,18 +571,21 @@ namespace data_sets {
 	// Add 0815: info of the external input data
 	if (m_exInputFlag){
 	    if (m_exInputDims.size())
-		frac->m_exInputDim        = SumCpuIntVec(m_exInputDims);
+		frac->m_exInputDim        = misFuncs::SumCpuIntVec(m_exInputDims);
 	    else
 		frac->m_exInputDim        = m_exInputDim;
 	}
-	
+
+	if (m_exOutputFlag){
+	    frac->m_exOutputDim        = misFuncs::SumCpuIntVec(m_exOutputDims);
+	}
+
 	frac->m_maxExInputLength  = std::numeric_limits<int>::min();
 	frac->m_minExInputLength  = std::numeric_limits<int>::max();
+	frac->m_maxExOutputLength  = std::numeric_limits<int>::min();
+	frac->m_minExOutputLength  = std::numeric_limits<int>::max();
 	
-	// Add 0620:  
-	//frac->m_maxTxtLength      = std::numeric_limits<int>::min();
-	//frac->m_txtPatternSize    = m_hasTxtData ? m_txtDataPatternSize : 0;
-	
+	// Dust #2017101205
 
         // fill fraction sequence info
         for (int seqIdx = firstSeqIdx; seqIdx < firstSeqIdx + m_parallelSequences; ++seqIdx) {
@@ -578,17 +597,19 @@ namespace data_sets {
 						    m_sequences[seqIdx].exInputLength);
 		frac->m_minExInputLength = std::min(frac->m_minExInputLength,
 						    m_sequences[seqIdx].exInputLength);
+		frac->m_maxExOutputLength = std::max(frac->m_maxExOutputLength,
+						    m_sequences[seqIdx].exOutputLength);
+		frac->m_minExOutputLength = std::min(frac->m_minExOutputLength,
+						    m_sequences[seqIdx].exOutputLength);
 		
                 DataSetFraction::seq_info_t seqInfo;
                 seqInfo.originalSeqIdx = m_sequences[seqIdx].originalSeqIdx;
                 seqInfo.length         = m_sequences[seqIdx].length;
                 seqInfo.seqTag         = m_sequences[seqIdx].seqTag;
-
-		/*frac->m_maxTxtLength   = m_hasTxtData ?
-		    std::max(frac->m_maxTxtLength, m_sequences[seqIdx].txtLength) : 
-		    frac->m_maxTxtLength;    
-		    seqInfo.txtLength      = m_hasTxtData ? (m_sequences[seqIdx].txtLength) : 0;*/
+		seqInfo.exInputLength  = m_sequences[seqIdx].exInputLength;
+		seqInfo.exOutputLength = m_sequences[seqIdx].exOutputLength;
 		
+		// Dust #2017101206		
                 frac->m_seqInfo.push_back(seqInfo);
             }
         }
@@ -599,18 +620,35 @@ namespace data_sets {
         frac->m_patTypes.resize(frac->m_maxSeqLength * m_parallelSequences,
 				PATTYPE_NONE);
 	frac->m_fracTotalLength = 0;
-	
+
 	if (m_exInputFlag)
 	    frac->m_exInputData.resize(frac->m_maxExInputLength * m_parallelSequences *
 				       frac->m_exInputDim, 0);
 	else
 	    frac->m_exInputData.clear();
-	// Add 0620 Wang
-	/*if (m_hasTxtData)
-	    frac->m_txtData.resize((frac->m_maxTxtLength * m_parallelSequences* 
-				    frac->m_txtPatternSize), 0);
+
+	if (m_exOutputFlag)
+	    frac->m_exOutputData.resize(frac->m_maxExOutputLength * m_parallelSequences *
+					frac->m_exOutputDim, 0);
 	else
-	frac->m_txtData.clear();*/
+	    frac->m_exOutputData.clear();
+
+	
+	
+	// prepare the resolution information buffer
+	int patTypesResoLength = 0;
+	for (int resoIdx = 0; resoIdx < resolutionBuf.size(); resoIdx++){
+	    DataSetFraction::reso_info tempResoBuf;
+	    tempResoBuf.resolution = resolutionBuf[resoIdx];
+	    tempResoBuf.bufferPos  = patTypesResoLength;
+	    tempResoBuf.length     = misFuncs::getResoLength(frac->m_patTypes.size(),
+							     resolutionBuf[resoIdx]);
+	    patTypesResoLength += tempResoBuf.length;
+	    frac->m_resolutionBuffer.push_back(tempResoBuf);
+	}
+	frac->m_patTypesLowTimeRes.resize(patTypesResoLength, PATTYPE_NONE);
+	
+	// Dust #2017101207
 	
 	if (m_auxDirPath.size()>0){
 	    if (m_auxDataTyp == AUXDATATYPE_CHAR){
@@ -692,6 +730,7 @@ namespace data_sets {
                     frac->m_targetClasses[timestep * m_parallelSequences + i] = tgt;
                 }
             }
+	    
             // outputs
             else {
                 Cpu::real_vector outputs = _loadOutputsFromCache(seq);
@@ -710,16 +749,8 @@ namespace data_sets {
                 }
             }
 	    
-	    // Add Wang 0620: Wang read in the txtData into fraction
-	    /*if (m_hasTxtData){
-		Cpu::int_vector txtData = _loadTxtDataFromCache(seq);
-		for (int txtstep = 0; txtstep < seq.txtLength; txtstep++){
-		     int txtStart = m_txtDataPatternSize * (txtstep * m_parallelSequences + i);
-		     int srcStart = m_txtDataPatternSize * (txtstep);
-		    thrust::copy_n(txtData.begin() + srcStart, m_txtDataPatternSize,
-				   frac->m_txtData.begin() + txtStart);
-		}
-		}*/
+	    // Dust #2017101208
+	    
 	    if (m_exInputFlag){
 		Cpu::real_vector exInput = _loadExInputsFromCache(seq);
 		for (int timestep = 0; timestep < seq.exInputLength; ++timestep) {
@@ -727,6 +758,16 @@ namespace data_sets {
 		    int srcStart  = seq.exInputDim * timestep;
 		    thrust::copy_n(exInput.begin() + srcStart, seq.exInputDim, 
 				   frac->m_exInputData.begin() + tgtStart);
+		}
+	    }
+
+	    if (m_exOutputFlag){
+		Cpu::real_vector exOutput = _loadExOutputsFromCache(seq);
+		for (int timestep = 0; timestep < seq.exOutputLength; ++timestep) {
+		    int tgtStart  = seq.exOutputDim * (timestep * m_parallelSequences + i);
+		    int srcStart  = seq.exOutputDim * timestep;
+		    thrust::copy_n(exOutput.begin() + srcStart, seq.exOutputDim, 
+				   frac->m_exOutputData.begin() + tgtStart);
 		}
 	    }
 
@@ -788,6 +829,15 @@ namespace data_sets {
 
                 frac->m_patTypes[timestep * m_parallelSequences + i] = patType;
 		frac->m_fracTotalLength = frac->m_fracTotalLength+1;
+
+		// also fill in the resolution buffer
+		for (int resoIdx = 0; resoIdx < frac->m_resolutionBuffer.size(); resoIdx++){
+		    int dataPos = timestep / frac->m_resolutionBuffer[resoIdx].resolution;
+		    dataPos  = dataPos * m_parallelSequences + i;
+		    dataPos += frac->m_resolutionBuffer[resoIdx].bufferPos;
+		    frac->m_patTypesLowTimeRes[dataPos] =
+			(frac->m_patTypesLowTimeRes[dataPos]==PATTYPE_FIRST?PATTYPE_FIRST:patType);
+		}
             }
         }
 
@@ -824,6 +874,7 @@ namespace data_sets {
         , m_outputPatternSize(0)
         , m_curFirstSeqIdx   (-1)
 	, m_exInputFlag      (false)
+	, m_exOutputFlag     (false)
 	, m_auxDirPath       ("")
     {
     }
@@ -870,9 +921,9 @@ namespace data_sets {
 		m_exInputExts.clear();
 		m_exInputDims.clear();
 	    }else if (config.exInputDims().size() > 0){
-		ParseStrOpt(config.exInputDirs(), m_exInputDirs, ",");
-		ParseStrOpt(config.exInputExts(), m_exInputExts, ",");
-		ParseIntOpt(config.exInputDims(), m_exInputDims);
+		misFuncs::ParseStrOpt(config.exInputDirs(), m_exInputDirs, ",");
+		misFuncs::ParseStrOpt(config.exInputExts(), m_exInputExts, ",");
+		misFuncs::ParseIntOpt(config.exInputDims(), m_exInputDims);
 		if (m_exInputDirs.size() != m_exInputExts.size() ||
 		    m_exInputDirs.size() != m_exInputDims.size())
 		    throw std::runtime_error("ExtInput options unequal length");
@@ -894,6 +945,25 @@ namespace data_sets {
 	    m_exInputExts.clear();
 	    m_exInputDims.clear();
 	}
+
+	// Add 171012: Prepare the external output data
+	if (config.exOutputDirs().size()){
+	    misFuncs::ParseStrOpt(config.exOutputDirs(), m_exOutputDirs, ",");
+	    misFuncs::ParseStrOpt(config.exOutputExts(), m_exOutputExts, ",");
+	    misFuncs::ParseIntOpt(config.exOutputDims(), m_exOutputDims);
+	    if (m_exOutputDirs.size() != m_exOutputExts.size() ||
+		m_exOutputDirs.size() != m_exOutputDims.size())
+		throw std::runtime_error("ExOutput options unequal length");
+	    m_exOutputFlag = true;
+	    m_exOutputType = DATASET_EXINPUT_TYPE_1;
+	}else{
+	    m_exOutputFlag = false;
+	    m_exOutputType = DATASET_EXINPUT_TYPE_0;
+	    m_exOutputDirs.clear();
+	    m_exOutputExts.clear();
+	    m_exOutputDims.clear();
+	}
+	
 	
         // Preparation: cache data
         std::string tmpFileName = "";
@@ -936,16 +1006,7 @@ namespace data_sets {
                     }else{
                         m_outputPatternSize = internal::readNcDimension(ncid, "targetPattSize");
                     }
-		    // Add Wang 0620: check the txt data
-		    /*m_hasTxtData            = internal::hasNcDimension (ncid, "txtLength");
-		    if (m_hasTxtData){
-			m_txtDataPatternSize = internal::readNcDimension(ncid, "txtPattSize");
-			if (m_txtDataPatternSize != 1)
-			    throw std::runtime_error("Only support txtPattSize=1, in .nc files");
-			if (truncSeqLength > 0){
-			    printf("WARNING:truncSeqLength will be set to -1 in LstmCharW mode");
-			    truncSeqLength = -1;
-			}}*/
+		    // Dust #2017101201
                 }else{
 		    if (m_isClassificationData) {
                         if (!internal::hasNcDimension(ncid, "numLabels")) 
@@ -959,12 +1020,7 @@ namespace data_sets {
                     }
                     if (m_inputPatternSize != internal::readNcDimension(ncid, "inputPattSize"))
                         throw std::runtime_error("Number of inputs mismatch in NC files");
-		    
-		    // Add Wang 0620: check the txt data
-		    /*if (m_hasTxtData &&
-			m_txtDataPatternSize != internal::readNcDimension(ncid, "txtPattSize")){
-			throw std::runtime_error("txtPattSize mismatch");
-			}*/
+		    // Dust #2017101202
                 }
 
 		// Read in sequence macro information
@@ -973,16 +1029,12 @@ namespace data_sets {
                 nSeq     = std::max(nSeq, 1);
                 int inputsBegin  = 0;
                 int targetsBegin = 0;
-		// int txtDataBegin = 0;
+
                 for (int i = 0; i < nSeq; ++i) {
                     int seqLength      = internal::readNcIntArray(ncid, "seqLengths", i);
                     m_totalTimesteps  += seqLength;
 		    
-		    // Add Wang 0620: check the txt data
-		    /*int txtLength      = (m_hasTxtData ?
-					 (internal::readNcIntArray(ncid,"txtLengths",i)) : 0);
-					 m_totalTxtLength  += txtLength;*/
-		    
+		    // Dust #2017101203
                     std::string seqTag = internal::readNcStringArray(ncid, "seqTags", i, 
 								     maxSeqTagLength);
                     int k = 0;
@@ -996,7 +1048,7 @@ namespace data_sets {
                         else
                             seq.length = seqLength;
                         seq.seqTag         = seqTag;
-			//seq.txtLength      = txtLength;
+			//seq.txtLength    = txtLength;
 			seq.beginInUtt     = rePosInUtt; 
                         sequences.push_back(seq);
                         seqLength         -= seq.length;
@@ -1013,14 +1065,18 @@ namespace data_sets {
 		    
                     m_minSeqLength = std::min(m_minSeqLength, seq->length);
                     m_maxSeqLength = std::max(m_maxSeqLength, seq->length);
-		    //m_maxTxtLength = std::max(m_maxTxtLength, seq->txtLength);// Add 0620
+		    //m_maxTxtLength = std::max(m_maxTxtLength, seq->txtLength);
 
-                    // read input patterns and store them in the cache file
+                    // Step1. read input patterns and store them in the cache file
                     seq->inputsBegin = m_cacheFile.tellp();
                     Cpu::real_vector inputs =
 			internal::readNcPatternArray(ncid, "inputs", inputsBegin, seq->length,
 						     m_inputPatternSize);
+
+		    // also prepare the external input data
 		    if (m_exInputType == DATASET_EXINPUT_TYPE_1){
+			if (m_inputPatternSize != 1)
+			    throw std::runtime_error("input is not index for external input ");
 			// When the input index is in increasing order
 			// exInputStartPos and EndPos are used to load data from external files
 			seq->exInputStartPos = inputs[0];   
@@ -1041,7 +1097,8 @@ namespace data_sets {
                     assert (m_cacheFile.tellp() - seq->inputsBegin == 
 			    seq->length * m_inputPatternSize * sizeof(real_t));
 
-                    // read targets and store them in the cache file
+		    
+                    // Step2. read targets and store them in the cache file
                     seq->targetsBegin = m_cacheFile.tellp();
                     if (m_isClassificationData) {
                         Cpu::int_vector targets = internal::readNcArray<int>(
@@ -1049,33 +1106,42 @@ namespace data_sets {
 							seq->length);
                         m_cacheFile.write((const char*)targets.data(), sizeof(int)*targets.size());
                         assert (m_cacheFile.tellp()-seq->targetsBegin==seq->length * sizeof(int));
+
+			if (m_exOutputType == DATASET_EXINPUT_TYPE_1)
+			    throw std::runtime_error("ExOutput not for the classification task");
+			    
                     }else {
+		
+
                         Cpu::real_vector targets = internal::readNcPatternArray(
 							ncid, "targetPatterns", targetsBegin, 
 							seq->length, m_outputPatternSize);
+
+			// prepare the external output data
+			if (m_exOutputType == DATASET_EXINPUT_TYPE_1){
+			    if (m_outputPatternSize != 1)
+				throw std::runtime_error("output is not index for ExOutput");
+			    seq->exOutputStartPos = targets[0];   
+			    seq->exOutputEndPos   = targets[seq->length-1] + 1;
+
+			    Cpu::real_vector tempVec(targets.size(), targets[0]);
+			    thrust::transform(targets.begin(), targets.end(), tempVec.begin(), 
+					      targets.begin(), thrust::minus<float>());
+			}else{
+			    seq->exOutputStartPos = -1;
+			    seq->exOutputEndPos   = -1;
+			}
+			
                         m_cacheFile.write((const char*)targets.data(),
 					  sizeof(real_t) * targets.size());
                         assert (m_cacheFile.tellp() - seq->targetsBegin == 
 				seq->length * m_outputPatternSize * sizeof(real_t));
                     }
+
 		    
-		    // Add 0620 Wang: read and store the txt data
-		    /*if (m_hasTxtData){
-			seq->txtDataBegin       = m_cacheFile.tellp();
-			Cpu::int_vector txtData = 
-			    internal::readNcPatternArrayInt(ncid, "txtData", txtDataBegin, 
-							    seq->txtLength,  m_txtDataPatternSize);
-			
-			m_cacheFile.write((const char *)txtData.data(),
-					  sizeof(int) * txtData.size());
-			
-			assert (m_cacheFile.tellp() - seq->txtDataBegin == 
-				seq->txtLength * m_txtDataPatternSize * sizeof(int));
-		    }else{
-			seq->txtDataBegin = 0;
-		    }*/
+		    //Dust #2017101204
 		    
-		    // Add 1111: to read auxillary data from external binary data files
+		    // Step3. Add 1111: to read auxillary data from external binary data files
 		    if (m_auxDirPath.size()>0){
 			seq->auxDataBegin    = m_cacheFile.tellp();
 			seq->auxDataDim      = m_auxDataDim;
@@ -1124,7 +1190,7 @@ namespace data_sets {
 			seq->auxDataTyp   = 0;
 		    }
 
-		    // Add 170327: to read external input data
+		    // Step4. Add 170327: to read external input data
 		    if (m_exInputFlag){
 			if (config.exInputDim() > 0){
 			    // Only read one file among external input files
@@ -1150,7 +1216,7 @@ namespace data_sets {
 				   (seq->exInputDim * seq->exInputLength * sizeof(real_t)));
 			}else if (config.exInputDims().size() > 0){
 			    // load multiple files
-			    seq->exInputDim    = SumCpuIntVec(m_exInputDims);
+			    seq->exInputDim    = misFuncs::SumCpuIntVec(m_exInputDims);
 			    seq->exInputLength = seq->exInputEndPos - seq->exInputStartPos;
 			    Cpu::real_vector exDataBuf(seq->exInputDim *
 						       (seq->exInputEndPos - seq->exInputStartPos),
@@ -1188,6 +1254,47 @@ namespace data_sets {
 			seq->exInputLength = 0;
 			seq->exInputDim    = 0;
 		    }
+
+		    // Step5. To read external output data
+		    if (m_exOutputFlag){
+			// load multiple files
+			seq->exOutputDim    = misFuncs::SumCpuIntVec(m_exOutputDims);
+			seq->exOutputLength = seq->exOutputEndPos - seq->exOutputStartPos;
+			Cpu::real_vector exDataBuf(seq->exOutputDim *
+						   (seq->exOutputEndPos - seq->exOutputStartPos),
+						   0.0);
+			int cnt = 0;
+			int dimCnt = 0;
+			for (int i = 0; i < m_exOutputDirs.size(); i++){
+			    std::string fileName = (m_exOutputDirs[i] + "/" + seq->seqTag +
+						    m_exOutputExts[i]); 
+
+			    int stPos, etPos;
+				if (m_exOutputType == DATASET_EXINPUT_TYPE_1){
+				    stPos = seq->exOutputStartPos * m_exOutputDims[i];
+				    etPos = seq->exOutputEndPos   * m_exOutputDims[i];
+				}else{
+				    stPos = 0; etPos = -1;
+				}
+				cnt += internal::readRealDataAndFill(
+					fileName, exDataBuf, stPos, etPos,
+					seq->exOutputDim, m_exOutputDims[i], dimCnt);
+				dimCnt += m_exOutputDims[i];
+				
+			    }
+			    assert(seq->exOutputLength * seq->exOutputDim == cnt);
+			    seq->exOutputBegin    = m_cacheFile.tellp();
+			    m_cacheFile.write((const char *)(exDataBuf.data()),
+					      sizeof(real_t) * cnt);
+			    assert((m_cacheFile.tellp()-seq->exOutputBegin)==
+				   (seq->exOutputDim * seq->exOutputLength * sizeof(real_t)));
+			
+		    }else{
+			seq->exOutputBegin  = 0;
+			seq->exOutputLength = 0;
+			seq->exOutputDim    = 0;
+		    }
+		    
 		    
                     inputsBegin  += seq->length; // position in data.nc
                     targetsBegin += seq->length; // position in data.nc
@@ -1446,3 +1553,85 @@ namespace data_sets {
     
 
 } // namespace data_sets
+
+
+/* Dust 
+
+   Dust #2017101201
+		    // Add Wang 0620: check the txt data
+		    m_hasTxtData            = internal::hasNcDimension (ncid, "txtLength");
+		    if (m_hasTxtData){
+			m_txtDataPatternSize = internal::readNcDimension(ncid, "txtPattSize");
+			if (m_txtDataPatternSize != 1)
+			    throw std::runtime_error("Only support txtPattSize=1, in .nc files");
+			if (truncSeqLength > 0){
+			    printf("WARNING:truncSeqLength will be set to -1 in LstmCharW mode");
+			    truncSeqLength = -1;
+			}}
+
+   Dust #2017101202
+		    // Add Wang 0620: check the txt data
+		    if (m_hasTxtData &&
+			m_txtDataPatternSize != internal::readNcDimension(ncid, "txtPattSize")){
+			throw std::runtime_error("txtPattSize mismatch");
+			}
+
+   Dust #2017101203		       
+		    // Add Wang 0620: check the txt data
+		    int txtLength      = (m_hasTxtData ?
+					 (internal::readNcIntArray(ncid,"txtLengths",i)) : 0);
+					 m_totalTxtLength  += txtLength;
+
+   Dust #2017101204		       
+		    // Add 0620 Wang: read and store the txt data
+		    if (m_hasTxtData){
+			seq->txtDataBegin       = m_cacheFile.tellp();
+			Cpu::int_vector txtData = 
+			    internal::readNcPatternArrayInt(ncid, "txtData", txtDataBegin, 
+							    seq->txtLength,  m_txtDataPatternSize);
+			
+			m_cacheFile.write((const char *)txtData.data(),
+					  sizeof(int) * txtData.size());
+			
+			assert (m_cacheFile.tellp() - seq->txtDataBegin == 
+				seq->txtLength * m_txtDataPatternSize * sizeof(int));
+		    }else{
+			seq->txtDataBegin = 0;
+		    }
+
+
+   Dust #2017101205
+	// Add 0620:  
+	//frac->m_maxTxtLength      = std::numeric_limits<int>::min();
+	//frac->m_txtPatternSize    = m_hasTxtData ? m_txtDataPatternSize : 0;
+
+   Dust #2017101206
+		frac->m_maxTxtLength   = m_hasTxtData ?
+		    std::max(frac->m_maxTxtLength, m_sequences[seqIdx].txtLength) : 
+		    frac->m_maxTxtLength;    
+		    seqInfo.txtLength      = m_hasTxtData ? (m_sequences[seqIdx].txtLength) : 0;
+
+
+   Dst #2017101207
+	// Add 0620 Wang
+	if (m_hasTxtData)
+	    frac->m_txtData.resize((frac->m_maxTxtLength * m_parallelSequences* 
+				    frac->m_txtPatternSize), 0);
+	else
+	frac->m_txtData.clear();
+
+
+   Dust #2017101208
+	// Add Wang 0620: Wang read in the txtData into fraction
+	    if (m_hasTxtData){
+		Cpu::int_vector txtData = _loadTxtDataFromCache(seq);
+		for (int txtstep = 0; txtstep < seq.txtLength; txtstep++){
+		     int txtStart = m_txtDataPatternSize * (txtstep * m_parallelSequences + i);
+		     int srcStart = m_txtDataPatternSize * (txtstep);
+		    thrust::copy_n(txtData.begin() + srcStart, m_txtDataPatternSize,
+				   frac->m_txtData.begin() + txtStart);
+		}
+		}
+	
+*/
+

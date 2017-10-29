@@ -25,6 +25,7 @@
 #endif
 
 #include "Layer.hpp"
+#include "../helpers/misFuncs.hpp"
 #include "../helpers/JsonClasses.hpp"
 
 #include <sstream>
@@ -33,6 +34,8 @@
 
 namespace layers {
 
+    
+    
     template <typename TDevice>
     typename Layer<TDevice>::real_vector& Layer<TDevice>::_outputs()
     {
@@ -61,8 +64,13 @@ namespace layers {
 			      (*layerChild)["name"].GetString()  : "")
         , m_size             (layerChild->HasMember("size") ? 
 			      (*layerChild)["size"].GetInt()     : 0)
+	, m_timeResolution   (layerChild->HasMember("resolution") ? 
+			      (*layerChild)["resolution"].GetInt() : 1)
         , m_parallelSequences(parallelSequences)
-        , m_maxSeqLength     (maxSeqLength)
+        , m_maxSeqLength     (misFuncs::getResoLength(
+				maxSeqLength,
+				(layerChild->HasMember("resolution") ? 
+				 (*layerChild)["resolution"].GetInt() : 1)))
         , m_curMaxSeqLength  (0)
         , m_curMinSeqLength  (0)
         , m_curNumSeqs       (0)
@@ -76,8 +84,14 @@ namespace layers {
         if (m_name.empty())
             throw std::runtime_error("Empty layer name in layer description");
         if (!layerChild->HasMember("size"))
-            throw std::runtime_error(std::string("Missing value 'size' in layer '") + m_name + "'");
+            throw std::runtime_error("Missing 'size' in layer");
 
+	if (m_timeResolution > 1){
+	    printf("\n\tLayer resolution %d ", m_timeResolution);
+	}else if (m_timeResolution < 1){
+	    throw std::runtime_error("resolution cannot be less than 1");
+	}
+	
         // allocate memory for output
         if (createOutputs)
             m_outputs = Cpu::real_vector(m_parallelSequences * m_maxSeqLength * m_size);
@@ -97,6 +111,12 @@ namespace layers {
 
 	// set the flag
 	m_flagTrainingMode  = (flagTrainingMode ? true : false);
+
+	
+	m_layerFlag = (layerChild->HasMember("layerFlag") ? 
+		       (*layerChild)["layerFlag"].GetString() : "");
+	
+
     }
 
     template <typename TDevice>
@@ -114,6 +134,12 @@ namespace layers {
     int Layer<TDevice>::size() const
     {
         return m_size;
+    }
+
+    template <typename TDevice>
+    const std::string& Layer<TDevice>::getLayerFlag()
+    {
+	return m_layerFlag;
     }
 
     template <typename TDevice>
@@ -147,6 +173,12 @@ namespace layers {
     }
 
     template <typename TDevice>
+    const int& Layer<TDevice>::getResolution()
+    {
+	return m_timeResolution;
+    }
+    
+    template <typename TDevice>
     const typename Layer<TDevice>::pattype_vector& Layer<TDevice>::patTypes() const
     {
         return m_patTypes;
@@ -169,7 +201,8 @@ namespace layers {
     {
 	if (m_outputErrorsCopy.size() != m_outputErrors.size())
 	    m_outputErrorsCopy = m_outputErrors;
-	thrust::copy(m_outputErrors.begin(), m_outputErrors.end(), m_outputErrorsCopy.begin());
+	thrust::copy(m_outputErrors.begin(), m_outputErrors.end(),
+		     m_outputErrorsCopy.begin());
         return m_outputErrorsCopy;
     }
     
@@ -177,10 +210,27 @@ namespace layers {
     void Layer<TDevice>::loadSequences(const data_sets::DataSetFraction &fraction,
 				       const int nnState)
     {
-        m_curMaxSeqLength = fraction.maxSeqLength();
-        m_curMinSeqLength = fraction.minSeqLength();
-        m_curNumSeqs      = fraction.numSequences();
-        m_patTypes        = fraction.patTypes();
+	m_curMaxSeqLength = misFuncs::getResoLength(fraction.maxSeqLength(), m_timeResolution);
+	m_curMinSeqLength = misFuncs::getResoLength(fraction.minSeqLength(), m_timeResolution);
+	m_curNumSeqs      = fraction.numSequences();
+	    
+	if (m_timeResolution == 1){
+	    m_patTypes    = fraction.patTypes();
+	}else{
+
+	    int buffPos   = fraction.patTypesLowTimesResPos(m_timeResolution);
+	    int buffLen   = fraction.patTypesLowTimesResLen(m_timeResolution);
+	    if (buffPos < 0 || buffLen < 0){
+		printf(" %s resolution not found in --resolutions", this->name().c_str());
+		throw std::runtime_error("Resolution error");
+	    }
+	    //m_patTypes.resize(buffLen, PATTYPE_NONE);
+	    //thrust::fill(m_patTypes.begin(), m_patTypes.end(), PATTYPE_NONE);
+	    thrust::copy(fraction.patTypesLowTimeRes().begin() + buffPos,
+			 fraction.patTypesLowTimeRes().begin() + buffPos + buffLen,
+			 m_patTypes.begin());
+	    	
+	}
     }
     
     template <typename TDevice>
@@ -196,6 +246,11 @@ namespace layers {
         layerObject.AddMember("type", type().c_str(), allocator);
         layerObject.AddMember("size", size(),         allocator);
 
+	if (m_timeResolution > 1)
+	    layerObject.AddMember("resolution", m_timeResolution, allocator);
+	if (m_layerFlag.size() > 0)
+	    layerObject.AddMember("layerFlag", m_layerFlag.c_str(), allocator);
+	
         // add the layer object to the layers array
         layersArray->PushBack(layerObject, allocator);
     }

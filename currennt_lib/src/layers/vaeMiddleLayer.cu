@@ -297,8 +297,10 @@ namespace layers{
     
     template <typename TDevice>
     VaeMiddleLayer<TDevice>::VaeMiddleLayer(const helpers::JsonValue &layerChild,
-					    Layer<TDevice> &precedingLayer)
-	: PostOutputLayer<TDevice> (layerChild, precedingLayer, precedingLayer.size()/2, true)
+					    Layer<TDevice> &precedingLayer,
+					    int maxSeqLength)
+	: PostOutputLayer<TDevice> (layerChild, precedingLayer, precedingLayer.size()/2,
+				    maxSeqLength, true)
 	, m_noiseStd    (1.0)
 	, m_noiseMean   (0.0)
 	, m_noiseRepeat (0)
@@ -341,6 +343,9 @@ namespace layers{
     {
 	Layer<TDevice>::loadSequences(fraction, nnState);
 
+	if (this->getResolution() != 1)
+	    throw std::runtime_error("vaeLayer is not ready for resolution option");
+	
 	if (nnState == NN_STATE_GENERATION_STAGE && this->size() == 2 && m_vaeUsageOpt==1){
 	    printf("Plot manifold");
 	    real_vector tmp(fraction.outputs().size());
@@ -440,7 +445,7 @@ namespace layers{
 			  index_sequence_begin + timeLength * this->size(),
 			  m_noiseInput.begin(),
 			  internal::genNoise(m_noiseMean, m_noiseStd,
-					     (int)(GetRandomNumber()*10000.0)));
+					     (int)(misFuncs::GetRandomNumber()*10000.0)));
 	if (m_noiseRepeat){
 	    internal::noiseRepeat fn;
 	    fn.noiseDim = this->size();
@@ -523,7 +528,7 @@ namespace layers{
 			      index_sequence_begin + timeLength * this->size(),
 			      m_noiseInput.begin(),
 			      internal::genNoise(m_noiseMean, m_noiseStd,
-						 (int)(GetRandomNumber()*10000.0)));
+						 (int)(misFuncs::GetRandomNumber()*10000.0)));
 
 	    if (m_noiseRepeat){
 		internal::noiseRepeat fn;

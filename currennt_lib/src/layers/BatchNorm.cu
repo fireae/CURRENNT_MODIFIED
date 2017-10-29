@@ -319,8 +319,9 @@ namespace layers{
     template <typename TDevice>
     BatchNormLayer<TDevice>::BatchNormLayer(const helpers::JsonValue &layerChild, 
 					    const helpers::JsonValue &weightsSection, 
-					    Layer<TDevice> &precedingLayer)
-        : TrainableLayer<TDevice>(layerChild, weightsSection, 0, 4, precedingLayer)
+					    Layer<TDevice> &precedingLayer,
+					    int maxSeqLength)
+        : TrainableLayer<TDevice>(layerChild, weightsSection, 0, 4, precedingLayer, maxSeqLength)
     {
 	// Trainable parameters: alpha + beta, for each dimension of previous output
 	if (this->size() != precedingLayer.size()){

@@ -171,10 +171,17 @@ private:
     std::string m_exInputDir;
     std::string m_exInputExt;
     int         m_exInputDim;
+    
+    /* Add 20170901 external inputs (multiple files) */
     std::string m_exInputDirs;
     std::string m_exInputExts;
     std::string m_exInputDims;
-
+    
+    std::string m_exOutputDirs;
+    std::string m_exOutputExts;
+    std::string m_exOutputDims;
+    
+    
     /* Add 20170404 */
     int         m_verbose;
     int         m_fakeEpochNum;
@@ -185,6 +192,9 @@ private:
 
     /* Add 20170711 */
     int         m_vaePlotManifold;
+
+    /* Add 20171007 */
+    std::string m_resolutions;
     
     unsigned m_truncSeqLength;
     unsigned m_parallelSequences;
@@ -223,7 +233,7 @@ private:
     std::vector<std::string> m_validationFiles;
     std::vector<std::string> m_testFiles;
     std::vector<std::string> m_feedForwardInputFiles;
-
+    
 public:
     /**
      * Parses the command line
@@ -686,9 +696,14 @@ public:
     const std::string& exInputDir() const;
     const std::string& exInputExt() const;
     const int& exInputDim() const;
+    
     const std::string& exInputDirs() const;
     const std::string& exInputExts() const;
     const std::string& exInputDims() const;
+    
+    const std::string& exOutputDirs() const;
+    const std::string& exOutputExts() const;
+    const std::string& exOutputDims() const;
 
     const int& verboseLevel() const;
 
@@ -699,6 +714,8 @@ public:
     const int& mdnVarUpdateEpoch() const;
 
     const int& vaePlotManifold() const;
+
+    const std::string& resolutions() const;
 };
 
 

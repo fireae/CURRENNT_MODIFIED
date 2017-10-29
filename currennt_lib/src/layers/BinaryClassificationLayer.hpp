@@ -45,7 +45,7 @@ namespace layers {
          */
         BinaryClassificationLayer(
             const helpers::JsonValue &layerChild, 
-            Layer<TDevice>  &precedingLayer
+            Layer<TDevice>  &precedingLayer, int maxSeqLength
             );
 
         /**

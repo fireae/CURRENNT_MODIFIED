@@ -116,7 +116,8 @@ namespace layers {
 	MDNLayer(
 		 const helpers::JsonValue &layerChild,
 		 const helpers::JsonValue &weightsSection,
-		 Layer<TDevice> &precedingLayer
+		 Layer<TDevice> &precedingLayer,
+		 int maxSeqLength
 		 );
 	
 	virtual ~MDNLayer();

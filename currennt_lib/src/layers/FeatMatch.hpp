@@ -51,7 +51,8 @@ namespace layers {
 	
     public:
 	FeatMatchLayer(const helpers::JsonValue &layerChild, 
-			  Layer<TDevice>  &precedingLayer);
+		       Layer<TDevice>  &precedingLayer,
+		       int maxSeqLength);
 	
 	virtual ~FeatMatchLayer();
 

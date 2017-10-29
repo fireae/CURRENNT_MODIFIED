@@ -52,19 +52,19 @@ namespace beamsearch{
     class searchState
     {
 	typedef typename TDevice::real_vector real_vector;
-	typedef typename Cpu::real_vector cpu_real_vector;
+	typedef typename Cpu::real_vector     cpu_real_vec;
 	typedef typename TDevice::int_vector  int_vector;
-	typedef typename Cpu::int_vector      cpu_int_vector;
+	typedef typename Cpu::int_vector      cpu_int_vec;
 
     private:
-	int          m_stateID;    // ID of the current state
-	real_t       m_prob;       // probability
-	int          m_timeStep;
-	int_vector   m_stateTrace; // trace of the state ID
-	real_vector  m_probTrace;  // trace of the probability distribution
+	int              m_stateID;    // ID of the current state
+	real_t           m_prob;       // probability
+	int              m_timeStep;
+	cpu_int_vec      m_stateTrace; // trace of the state ID
+	cpu_real_vec     m_probTrace;  // trace of the probability distribution
 
-	std::vector<int>         m_netStateSize;   // pointer in m_netState
-	std::vector<real_vector> m_netState;     // hidden variables of the network
+	std::vector<int>          m_netStateSize;   // pointer in m_netState
+	std::vector<cpu_real_vec> m_netState;     // hidden variables of the network
 	
 	
     public:
@@ -74,12 +74,12 @@ namespace beamsearch{
 
 	const int      getStateID();
 	const real_t   getProb();
-	const int      getStateID(const int id);
-	const real_t   getProb(const int id);
+	      int      getStateID(const int id);
+	      real_t   getProb(const int id);
 	const int      getTimeStep();
-	int_vector&    getStateTrace();
-	real_vector&   getProbTrace();
-	real_vector&   getNetState(const int id);
+	cpu_int_vec&    getStateTrace();
+	cpu_real_vec&   getProbTrace();
+	cpu_real_vec&   getNetState(const int id);
 	
 	void setStateID(const int stateID);
 	void setTimeStep(const int timeStep);
@@ -87,7 +87,7 @@ namespace beamsearch{
 	void mulProb(const real_t prob);
 	void setStateTrace(const int time, const int stateID);
 	void setProbTrace(const int time, const real_t prob);
-	void setNetState(const int layerID, real_vector& state);
+	void setNetState(const int layerID, cpu_real_vec& state);
 	void liteCopy(searchState<TDevice>& sourceState);
 	void fullCopy(searchState<TDevice>& sourceState);
 	void print();
@@ -114,7 +114,7 @@ namespace beamsearch{
     {
 	m_netState.resize(netStateSize.size());
 	
-	cpu_real_vector tmp;
+	cpu_real_vec tmp;
 	int tmpBuf = 0;
 	for (int i = 0; i < netStateSize.size(); i++) {
 	    tmpBuf += netStateSize[i];
@@ -124,10 +124,10 @@ namespace beamsearch{
 
 	m_netStateSize = netStateSize;
 
-	cpu_real_vector tmp2(maxSeqLength * stateNM, 0.0);
+	cpu_real_vec tmp2(maxSeqLength * stateNM, 0.0);
 	m_probTrace = tmp2;
 
-	cpu_int_vector tmp3(maxSeqLength, 0);
+	cpu_int_vec tmp3(maxSeqLength, 0);
 	m_stateTrace = tmp3;
 	
     }
@@ -156,7 +156,7 @@ namespace beamsearch{
     }
 
     template <typename TDevice>
-    const int searchState<TDevice>::getStateID(const int id)
+    int searchState<TDevice>::getStateID(const int id)
     {
 	if (id >= m_stateTrace.size())
 	    throw std::runtime_error("state ID is larger than expected");
@@ -164,13 +164,13 @@ namespace beamsearch{
     }
 
     template <typename TDevice>
-    typename searchState<TDevice>::int_vector& searchState<TDevice>::getStateTrace()
+    typename searchState<TDevice>::cpu_int_vec& searchState<TDevice>::getStateTrace()
     {
 	return m_stateTrace;
     }
 
     template <typename TDevice>
-    typename searchState<TDevice>::real_vector& searchState<TDevice>::getProbTrace()
+    typename searchState<TDevice>::cpu_real_vec& searchState<TDevice>::getProbTrace()
     {
 	return m_probTrace;
     }
@@ -203,7 +203,7 @@ namespace beamsearch{
     }
 
     template <typename TDevice>
-    const real_t searchState<TDevice>::getProb(const int id)
+    real_t searchState<TDevice>::getProb(const int id)
     {
 	if (id >= m_probTrace.size())
 	    throw std::runtime_error("prob ID is larger than expected");
@@ -211,7 +211,8 @@ namespace beamsearch{
     }
 
     template <typename TDevice>
-    typename searchState<TDevice>::real_vector& searchState<TDevice>::getNetState(const int id)
+    typename searchState<TDevice>::cpu_real_vec& searchState<TDevice>::getNetState(
+	const int id)
     {
 	if (id >= m_netStateSize.size())
 	    throw std::runtime_error("layer ID is larger than expected");
@@ -262,7 +263,7 @@ namespace beamsearch{
     }
 
     template <typename TDevice>
-    void searchState<TDevice>::setNetState(const int layerID, real_vector& state)
+    void searchState<TDevice>::setNetState(const int layerID, cpu_real_vec& state)
     {
 	if (layerID >= m_netStateSize.size())
 	    throw std::runtime_error("setNetState, time is larger than expected");
@@ -276,7 +277,7 @@ namespace beamsearch{
     {
 	printf("%d:%d\t%f\t", m_timeStep, m_stateID, m_prob);
 	//printf("%d", m_stateTrace.size());
-	cpu_int_vector tmp = m_stateTrace;
+	cpu_int_vec tmp = m_stateTrace;
 	for (int i = 0; i <= m_timeStep; i++)
 	    printf("%d ", tmp[i]);
 	printf("\n");
@@ -797,6 +798,15 @@ NeuralNetwork<TDevice>::NeuralNetwork(
 		    m_layers[i]->linkTargetLayer(*(m_layers[tmp_wavNetCore].get()));
 		}
 	    }
+	    // link the external trainable input, if exist
+	    for (size_t i = 0; i < m_layers.size(); ++i) {
+		if (m_layers[i]->getLayerFlag() == std::string("wavenetConditionInputLayer")){
+		    if (m_layers[i]->type() == std::string("wavenetc"))
+			throw std::runtime_error("External input cannot be from wavenetc");
+		    m_layers[tmp_wavNetCore]->linkTargetLayer(*(m_layers[i].get()));
+		    break;
+		}
+	    }
 	}
 	
     }
@@ -1285,14 +1295,17 @@ void NeuralNetwork<TDevice>::computeForwardPassGen(const int curMaxSeqLength,
 			if (layerCnt >= m_firstFeedBackLayer){
 			    int layerID = layerCnt - m_firstFeedBackLayer;
 			    layer->prepareStepGeneration(timeStep);
-			    if (timeStep > 0)
-				layer->setHiddenState(timeStep-1, bmState2.getNetState(layerID));
+			    if (timeStep > 0){
+				netStateTmp = bmState2.getNetState(layerID);
+				layer->setHiddenState(timeStep-1, netStateTmp);
+			    }
 			    layer->computeForwardPass(timeStep, m_trainingState);
 
 			    // store the state of network in new states 
 			    // this should be in step3. but this is more efficient
 			    layer->retrieveHiddenState(timeStep, netStateTmp);
-			    bmState.setNetState(layerID, netStateTmp);
+			    netStateTmpTmp = netStateTmp;
+			    bmState.setNetState(layerID, netStateTmpTmp);
 			}
 			layerCnt++;
 		    }
@@ -1361,7 +1374,7 @@ void NeuralNetwork<TDevice>::computeBackwardPass()
 	    // Stop the backpropagation when the layer's learning rate is specified as 0
 	    layers::TrainableLayer<TDevice> *trainableLayer = 
 		dynamic_cast<layers::TrainableLayer<TDevice>*>(layer.get());
-	    if (trainableLayer && closeToZero(trainableLayer->learningRate()))
+	    if (trainableLayer && misFuncs::closeToZero(trainableLayer->learningRate()))
 		break;
 
 	    // Or, stop if it is a mdn output layer in acoustic model
@@ -1569,9 +1582,9 @@ std::vector<std::vector<std::vector<real_t> > > NeuralNetwork<TDevice>::getOutpu
 
     // retrieve the output
     layers::Layer<TDevice> &ol  = outputLayer(tempLayerID);
-    
+    Cpu::pattype_vector tmpPatTypes = ol.patTypes();
     for (int patIdx = 0; patIdx < (int)ol.patTypes().size(); ++patIdx) {
-	switch (ol.patTypes()[patIdx]) {
+	switch (tmpPatTypes[patIdx]) {
 	case PATTYPE_FIRST:
 	    outputs.resize(outputs.size() + 1);
 	    

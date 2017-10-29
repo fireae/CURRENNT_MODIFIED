@@ -229,8 +229,10 @@ namespace layers {
     SoftmaxLayer<TDevice, TFfActFn>::SoftmaxLayer(
         const helpers::JsonValue &layerChild, 
         const helpers::JsonValue &weightsSection,
-        Layer<TDevice> &precedingLayer)
-        : FeedForwardLayer<TDevice, TFfActFn>(layerChild, weightsSection, precedingLayer)
+        Layer<TDevice> &precedingLayer,
+	int maxSeqLength)
+        : FeedForwardLayer<TDevice, TFfActFn>(layerChild, weightsSection,
+					      precedingLayer, maxSeqLength)
     {
         // resize the vector for temporary values
         m_patTmp.resize(this->patTypes().size());

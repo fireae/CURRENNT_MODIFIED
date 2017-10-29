@@ -165,6 +165,7 @@ namespace layers {
             const helpers::JsonValue &layerChild, 
             const helpers::JsonValue &weightsSection,
             Layer<TDevice>           &precedingLayer,
+	    int                       maxSeqLength,
             bool                      bidirectional = false
             );
 

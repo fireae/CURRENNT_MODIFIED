@@ -47,7 +47,7 @@ namespace layers {
          */
         SseMaskPostOutputLayer(
             const helpers::JsonValue &layerChild, 
-            Layer<TDevice> &precedingLayer
+            Layer<TDevice> &precedingLayer, int maxSeqLength
             );
 
         /**

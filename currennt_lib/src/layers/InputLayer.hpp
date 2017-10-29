@@ -46,7 +46,7 @@ namespace layers {
 	unsigned int      m_weDim;
 	unsigned int      m_weIDDim;
 	bool              m_flagWeUpdate;
-	//Cpu::real_vector  m_weBufferInput;
+
 	
 	/* Add 17/01/29 */
 	Cpu::real_vector  m_weMask;

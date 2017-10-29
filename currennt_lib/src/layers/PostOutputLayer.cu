@@ -25,6 +25,7 @@
 #include "../helpers/misFuncs.hpp"
 #include "../MacroDefine.hpp"
 #include "../Configuration.hpp"
+#include "../helpers/JsonClasses.hpp"
 
 #include <boost/lexical_cast.hpp>
 
@@ -55,7 +56,43 @@ namespace {
 		buffer[outputIdx * bufDim + dimIdx] = 0.0;
         }
     };
-    
+
+    struct loadExternalData
+    {
+	int  featureDim;
+	int  paralNum;
+	int  maxFeatureLength;
+	int  resolution;
+	
+	const real_t *sourceData;
+	const real_t *frameIndex;
+	const real_t *contextMV;
+	const char   *patTypes;
+	
+	__host__ __device__ void operator() (const thrust::tuple<real_t&, int> &t) const
+	{
+	    int dimIdx  = t.get<1>() % featureDim;
+	    int timeIdx = t.get<1>() / featureDim;
+	    int paralIdx= timeIdx    % paralNum;
+
+	    if (patTypes[timeIdx] == PATTYPE_NONE)
+		t.get<0>() = 0.0;
+	    else{
+		int featIdx = frameIndex[timeIdx * resolution] * paralNum + paralIdx;
+		if (frameIndex[timeIdx * resolution] >= maxFeatureLength){
+		    t.get<0>() = 0.0;
+		}else if(contextMV){
+		    t.get<0>() = ((sourceData[featIdx * featureDim + dimIdx] - contextMV[dimIdx])/
+				  ((contextMV[dimIdx + featureDim]<1e-5f) ?
+				   (1.0): (contextMV[dimIdx + featureDim])));
+		}else{
+		    t.get<0>() = sourceData[featIdx * featureDim + dimIdx];
+		}
+		
+	    }
+	}
+    };
+
 }
 }
 
@@ -102,14 +139,17 @@ namespace layers {
         const helpers::JsonValue &layerChild, 
         Layer<TDevice> &precedingLayer,
         int requiredSize,
+	int maxSeqLength,
         bool createOutputs)
         : Layer<TDevice>  (layerChild, precedingLayer.parallelSequences(), 
-			   precedingLayer.maxSeqLength(),
+			   maxSeqLength,
 			   Configuration::instance().trainingMode(),			   
 			   createOutputs)
         , m_precedingLayer(precedingLayer)
 	, m_precedingMiddleOutLayer (NULL)
 	, m_postoutputFlag(NN_POSTOUTPUTLAYER_LAST)
+	, m_useExternalOutput(layerChild->HasMember("useExternalOutput") ? 
+			      (*layerChild)["useExternalOutput"].GetInt() : 0)
     {
 	// Modify 0506. For MDN, requireSize = -1, no need to check here
 	// if (this->size() != requiredSize)
@@ -127,7 +167,25 @@ namespace layers {
 	// Add 170411
 	// Prepare the feedback data buffer
 	m_feedBackOutput = this->outputs();
-	
+
+	if (this->getResolution() != 1 || precedingLayer.getResolution() != 1)
+	    throw std::runtime_error("PostOutput and Output layer only supports resolution 1");
+
+	m_dataBuffer.clear();
+
+	m_externalDataMVStr = ((layerChild->HasMember("externalDataMV")) ?
+			       ((*layerChild)["externalDataMV"].GetString()) : "");
+	cpu_real_vector tmp;
+	m_externalDataMV.clear();
+	if (m_externalDataMVStr.size()){
+	    if (misFuncs::ReadRealData(m_externalDataMVStr, tmp) != this->size() * 2)
+		throw std::runtime_error("externalDataMV dimension unmatched with layer size");
+	    m_externalDataMV = tmp;
+	    printf("\n\tRead MV from %s", m_externalDataMVStr.c_str());
+	}else{
+	    printf("\n\tSkip reading MV");
+	}
+
     }
 
     template <typename TDevice>
@@ -140,21 +198,63 @@ namespace layers {
 						 const int nnState)
     {
 	if (m_precedingMiddleOutLayer == NULL){
-	    // The normal case 
-	    if (fraction.outputPatternSize() != this->size()) {
-		printf("Patter size mis match %d (layer) vs %d (data)",
-		       this->size(), fraction.outputPatternSize());
-		throw std::runtime_error("Error in network.jsn and data.nc");
-	    }
-	    
-	    Layer<TDevice>::loadSequences(fraction, nnState);
 
-	    if (!this->_outputs().empty())
-        	thrust::copy(fraction.outputs().begin(), fraction.outputs().end(), 
-			     this->_outputs().begin());
+	    Layer<TDevice>::loadSequences(fraction, nnState);
 	    
+	    // The normal case 
+	    if (m_useExternalOutput == 0){
+		if (fraction.outputPatternSize() != this->size()) {
+		    printf("Patter size mis match %d (layer) vs %d (data)",
+			   this->size(), fraction.outputPatternSize());
+		    throw std::runtime_error("Error in network.jsn and data.nc");
+		}
+		if (!this->_outputs().empty())
+		    thrust::copy(fraction.outputs().begin(), fraction.outputs().end(), 
+				 this->_outputs().begin());
+		
+	    }else{
+		if (fraction.externalOutputSize() != this->size()){
+		    printf("Patter size mis match %d (layer) vs %d (data)",
+			   this->size(), fraction.externalOutputSize());
+		    throw std::runtime_error("Error in network.jsn and external data");
+		}
+		if (!this->_outputs().empty()){
+		    
+		    m_dataBuffer.resize(fraction.outputs().size() +
+					fraction.exOutputData().size(), 0.0);
+		    thrust::copy(fraction.outputs().begin(),
+				 fraction.outputs().end(),
+				 m_dataBuffer.begin());
+		    thrust::copy(fraction.exOutputData().begin(),
+				 fraction.exOutputData().end(),
+				 m_dataBuffer.begin() + fraction.outputs().size());
+	
+		    internal::loadExternalData fn1;
+		    fn1.featureDim = fraction.externalOutputSize();
+		    fn1.paralNum   = this->parallelSequences();
+		    fn1.maxFeatureLength = fraction.maxExOutputLength();
+		    fn1.sourceData = (helpers::getRawPointer(m_dataBuffer) +
+				      fraction.outputs().size());
+		    fn1.frameIndex = helpers::getRawPointer(m_dataBuffer);
+		    fn1.patTypes   = helpers::getRawPointer(this->patTypes());
+		    fn1.contextMV  = ((m_externalDataMV.size() ==this->size() * 2)?
+				      helpers::getRawPointer(m_externalDataMV) : NULL);
+		    fn1.resolution = this->getResolution();
+		    
+		    int n = this->curMaxSeqLength() * this->parallelSequences() * this->size();
+		    thrust::for_each(
+			thrust::make_zip_iterator(
+				thrust::make_tuple(this->_outputs().begin(),
+						   thrust::counting_iterator<int>(0))),
+			thrust::make_zip_iterator(
+				thrust::make_tuple(this->_outputs().begin()           + n,
+						   thrust::counting_iterator<int>(0) + n)),
+			fn1);
+		    
+		}
+		    
+	    }
 	    m_ganState = NN_SIGMOID_GAN_DEFAULT;
-	    
 	}else{
 	    // when this postoutput layer is after a middleoutput layer
 	    Layer<TDevice>::loadSequences(fraction, nnState);
@@ -225,41 +325,13 @@ namespace layers {
     template <typename TDevice>
     bool PostOutputLayer<TDevice>::readMseWeight(const std::string mseWeightPath)
     {
-	std::ifstream ifs(mseWeightPath.c_str(), std::ifstream::binary | std::ifstream::in);
-	if (!ifs.good()){
-	    throw std::runtime_error(std::string("Fail to open ")+mseWeightPath);
-	}
-	m_flagMseWeight         = true;
-
-	// get the number of we data
-	std::streampos numEleS, numEleE;
-	long int numEle;
-	numEleS = ifs.tellg();
-	ifs.seekg(0, std::ios::end);
-	numEleE = ifs.tellg();
-	numEle  = (numEleE-numEleS)/sizeof(real_t);
-	ifs.seekg(0, std::ios::beg);
-	
-	if (numEle != this->size()){
-	    printf("MSE weight vector length incompatible: %d %d", (int)numEle, (int)this->size());
-	    throw std::runtime_error("Error in MSE weight configuration");
-	}
-	
-	// read in the data
-	real_t tempVal;
-	std::vector<real_t> tempVec;
-	for (unsigned int i = 0; i<numEle; i++){
-	    ifs.read ((char *)&tempVal, sizeof(real_t));
-	    tempVec.push_back(tempVal);
-	}
-	Cpu::real_vector tempVec2(numEle, 1.0);
-	thrust::copy(tempVec.begin(), tempVec.end(), tempVec2.begin());
-	m_outputMseWeights = tempVec2;
+	// Dust 01
+	Cpu::real_vector tempVec2;
+	misFuncs::ReadRealData(mseWeightPath, tempVec2);
+	m_outputMseWeights    = tempVec2;
 	m_outputMseWeightsCPU = tempVec2;
-	
-	std::cout << "Read #dim" << numEle << " mse vector" << std::endl;
-	
-	ifs.close();
+	std::cout << "Read #dim " << tempVec2.size() << " mse vector" << std::endl;
+	m_flagMseWeight       = true;
 	return true;
     }
     
@@ -389,6 +461,13 @@ namespace layers {
 					      const helpers::JsonAllocator &allocator) const
     {
         Layer<TDevice>::exportLayer(layersArray, allocator);
+	if (m_useExternalOutput)
+	    (*layersArray)[layersArray->Size() - 1].AddMember("useExternalOutput",
+							      m_useExternalOutput, allocator);
+	if (m_externalDataMVStr.size())
+	    (*layersArray)[layersArray->Size() - 1].AddMember("externalDataMV",
+							      m_externalDataMVStr.c_str(),
+							      allocator);
     }
     
     template <typename TDevice>
@@ -414,3 +493,39 @@ namespace layers {
     template class PostOutputLayer<Gpu>;
 
 } // namespace layers
+
+
+/*
+	// Dust 01
+	std::ifstream ifs(mseWeightPath.c_str(), std::ifstream::binary | std::ifstream::in);
+	if (!ifs.good()){
+	    throw std::runtime_error(std::string("Fail to open ")+mseWeightPath);
+	}
+	m_flagMseWeight         = true;
+
+	// get the number of we data
+	std::streampos numEleS, numEleE;
+	long int numEle;
+	numEleS = ifs.tellg();
+	ifs.seekg(0, std::ios::end);
+	numEleE = ifs.tellg();
+	numEle  = (numEleE-numEleS)/sizeof(real_t);
+	ifs.seekg(0, std::ios::beg);
+	
+	if (numEle != this->size()){
+	    printf("MSE weight vector length incompatible: %d %d", (int)numEle, (int)this->size());
+	    throw std::runtime_error("Error in MSE weight configuration");
+	}
+	
+	// read in the data
+	real_t tempVal;
+	std::vector<real_t> tempVec;
+	for (unsigned int i = 0; i<numEle; i++){
+	    ifs.read ((char *)&tempVal, sizeof(real_t));
+	    tempVec.push_back(tempVal);
+	    }
+	
+	Cpu::real_vector tempVec2(numEle, 1.0);
+	thrust::copy(tempVec.begin(), tempVec.end(), tempVec2.begin());
+	ifs.close();
+*/

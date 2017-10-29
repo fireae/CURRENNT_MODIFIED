@@ -24,66 +24,61 @@
  * You should have received a copy of the GNU General Public License
  * along with CURRENNT.  If not, see <http://www.gnu.org/licenses/>.
  *****************************************************************************/
+/*
+ */
 
-#ifndef LAYERS_BATCHNORM
-#define LAYERS_BATCHNORM
+#ifndef LAYERS_EXTERNALLOADER_HPP
+#define LAYERS_EXTERNALLOADER_HPP
+
 
 #include "TrainableLayer.hpp"
 
 namespace layers{
 
     template <typename TDevice>
-    class BatchNormLayer : public TrainableLayer<TDevice>
+    class ExternalLoader : public TrainableLayer<TDevice>
     {
-	typedef typename TDevice::real_vector real_vector;
-	typedef typename TDevice::int_vector  int_vector;
-	typedef typename TDevice::bool_vector bool_vector;
-	typedef typename TDevice::pattype_vector pattype_vector;
-
-	real_vector m_stats;     // mean and variance of each batch
-	real_vector m_outNormed; // normed data output without being scaled
+	typedef typename TDevice::real_vector     real_vector;
+	typedef typename Cpu::real_vector         cpu_real_vector;
+	typedef typename TDevice::int_vector      int_vector;
+	typedef typename TDevice::pattype_vector  pattype_vector;
+	typedef typename Cpu::int_vector          cpu_int_vector;
 	
-	real_t      m_stdConst;  // const floor for the var
-	real_t      m_batchCnt;
-	// bool        m_trainFlag;  // replaced by this->flagTrainingMode()
-	int         m_preEpoch;
-	real_t      m_batchSize; //
-
-	real_vector m_oneVector; // all-one vector
-	real_vector m_buff;
-
+    private:
+	real_vector    m_dataBuffer;
+	real_vector    m_externalDataMV;
+	std::string    m_externalDataMVStr;
 	
     public:
 	
-	BatchNormLayer(
-		const helpers::JsonValue &layerChild, 
-		const helpers::JsonValue &weightsSection,
-		Layer<TDevice>           &precedingLayer,
-		int                       maxSeqLength);
+	ExternalLoader(
+	    const helpers::JsonValue &layerChild,
+	    const helpers::JsonValue &weightsSection,
+            Layer<TDevice>           &precedingLayer,
+	    int                       maxSeqLength
+	);
 
-	virtual ~BatchNormLayer();
-
+	virtual ~ExternalLoader();
+	
+	
 	virtual const std::string& type() const;
 	
-	/**
-         * @see Layer::computeForwardPass()
-         */
-        virtual void computeForwardPass(const int nnState);
-
-         /**
-         * @see Layer::computeBackwardPass()
-         */
-        virtual void computeBackwardPass(const int nnState);
-
-	/***
-	 * 
-	 */
+	// NN forward
+	virtual void computeForwardPass(const int nnState);
+	
+	// NN forward, per frame
 	virtual void computeForwardPass(const int timeStep, const int nnState);
 	
-	
+	// NN backward
+	virtual void computeBackwardPass(const int nnState);
+
+	// export
+	virtual void exportLayer(const helpers::JsonValue &layersArray, 
+				 const helpers::JsonAllocator &allocator) const;
+	//
+	virtual void loadSequences(const data_sets::DataSetFraction &fraction, const int nnState);
     };
     
 }
-
 
 #endif

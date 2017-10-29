@@ -356,8 +356,9 @@ namespace layers{
     template <typename TDevice>
     OperationLayer<TDevice>::OperationLayer(const helpers::JsonValue &layerChild,
 					    const helpers::JsonValue &weightsSection,
-					    Layer<TDevice>           &precedingLayer)
-	: TrainableLayer<TDevice>(layerChild, weightsSection, 0, 0, precedingLayer)
+					    Layer<TDevice>           &precedingLayer,
+					    int                       maxSeqLength)
+	: TrainableLayer<TDevice>(layerChild, weightsSection, 0, 0, precedingLayer, maxSeqLength)
 	, m_noiseMag    (1.0)
 	, m_noiseSize   (0)
 	, m_noiseRepeat (0)
@@ -385,7 +386,7 @@ namespace layers{
 			 ((*layerChild)["setZero"].GetString()) : (""));
 	if (m_setZeroStr.size()){
 	    m_setZeroVec_H.clear();
-	    ParseFloatOpt(m_setZeroStr, m_setZeroVec_H);
+	    misFuncs::ParseFloatOpt(m_setZeroStr, m_setZeroVec_H);
 	    m_setZeroVec_D = m_setZeroVec_H;
 	}else{
 	    m_setZeroVec_D.resize(this->precedingLayer().size(), 1.0);
@@ -512,7 +513,9 @@ namespace layers{
 	TrainableLayer<TDevice>::loadSequences(fraction, nnState);
 
 	// Load information for lst shot mode
-	
+	if (this->getResolution() != 1){
+	    throw std::runtime_error("Operation layer is not ready for resolution option");
+	}
 	
 	if (m_lastShot  == NN_OPE_LAST_SHOT_MODE1 || m_lastShot == NN_OPE_LAST_SHOT_MODE2){
 	    
@@ -624,7 +627,7 @@ namespace layers{
 				  index_sequence_begin + timeLength * m_noiseSize,
 				  m_noiseInput.begin(),
 				  internal::genNoise(-1.0 * m_noiseMag, m_noiseMag,
-						     (int)(GetRandomNumber()*10000.0)));
+						     (int)(misFuncs::GetRandomNumber()*10000.0)));
 
 	    }
 	
@@ -742,7 +745,7 @@ namespace layers{
 				  index_sequence_begin + timeLength * m_noiseSize,
 				  m_noiseInput.begin(),
 				  internal::genNoise(-1.0 * m_noiseMag, m_noiseMag,
-						     (int)(GetRandomNumber()*10000.0)));
+						     (int)(misFuncs::GetRandomNumber()*10000.0)));
 
 	    }
 	    {

@@ -34,6 +34,8 @@
 #include <string>
 #include "../Types.hpp"
 
+
+namespace misFuncs{
 /* ***** Functions for string process ***** */
 void   ParseStrOpt(const std::string stringOpt, std::vector<std::string> &optVec,
 		   const std::string para="_");
@@ -51,8 +53,14 @@ void   PrintVecBinH(Cpu::int_vector &temp);
 int    flagUpdateDiscriminator(const int epoch, const int frac);
 
 /* ***** Functions for numerical process ***** */
-
 real_t GetRandomNumber();
 bool   closeToZero(const real_t t1, const real_t lowBound = -0.0001,
 		   const real_t upBound = 0.0001);
+
+int getResoLength(const int maxSeqLength, const int timeResolution);
+
+/* ***** Function for I/O ****** */
+int ReadRealData(const std::string dataPath, Cpu::real_vector &data);
+
+}
 #endif

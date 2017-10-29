@@ -449,11 +449,12 @@ namespace layers {
     RnnLayer<TDevice>::RnnLayer(const helpers::JsonValue &layerChild, 
 				const helpers::JsonValue &weightsSection,
 				Layer<TDevice>           &precedingLayer,
+				int                       maxSeqLength,
 				bool                      bidirectional)
         : TrainableLayer<TDevice>(layerChild, weightsSection, 
 				  1, 
 				  helpers::safeJsonGetInt(layerChild, "size")/(bidirectional?2:1),
-				  precedingLayer)
+				  precedingLayer, maxSeqLength)
         , m_isBidirectional      (bidirectional)
     {
         if (m_isBidirectional && this->size() % 2 != 0)

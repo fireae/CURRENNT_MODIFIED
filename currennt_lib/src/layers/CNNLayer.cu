@@ -489,7 +489,7 @@ namespace CNNTools{
     void ParseCNNOpt(const std::string cnnOpt, int layerSize, Cpu::int_vector &dupOpt,
 		     Cpu::int_vector  &outOpt){
 
-	ParseIntOpt(cnnOpt, outOpt);
+	misFuncs::ParseIntOpt(cnnOpt, outOpt);
 	if (dupOpt.size()<1)
 	    return;
 		
@@ -539,10 +539,10 @@ namespace CNNTools{
 	    Cpu::int_vector height;
 	    Cpu::int_vector stride;
 		
-	    ParseIntOpt(winHeightOpt, height);
-	    ParseIntOpt(winWidthOpt,  width);
+	    misFuncs::ParseIntOpt(winHeightOpt, height);
+	    misFuncs::ParseIntOpt(winWidthOpt,  width);
 	    if (winStrideOpt.size() > 0)
-		ParseIntOpt(winStrideOpt,  stride);
+		misFuncs::ParseIntOpt(winStrideOpt,  stride);
 	    else
 		stride.resize(width.size(), 1);
 		
@@ -611,7 +611,7 @@ namespace CNNTools{
 	    wCopyInfo.resize(thisLayerSize, 0);
 	   
 	    Cpu::int_vector width;
-	    ParseIntOpt(winWidthOpt,  width);
+	    misFuncs::ParseIntOpt(winWidthOpt,  width);
 	    if (width.size() != thisLayerSize)
 		throw std::runtime_error("Unequal length of width and layer size");
 
@@ -644,11 +644,11 @@ namespace CNNTools{
 	if (winHeightOpt.size() > 0){
 	    // 2-D convolution
 
-	    ParseIntOpt(winHeightOpt, height);
-	    ParseIntOpt(winWidthOpt,  width);
+	    misFuncs::ParseIntOpt(winHeightOpt, height);
+	    misFuncs::ParseIntOpt(winWidthOpt,  width);
 
 	    if (winStrideOpt.size() > 0)
-		ParseIntOpt(winStrideOpt,  stride);
+		misFuncs::ParseIntOpt(winStrideOpt,  stride);
 	    else
 		stride.resize(width.size(), 1);
 		
@@ -699,7 +699,7 @@ namespace CNNTools{
 
 	    // default 1-D convolution
 	    
-	    ParseIntOpt(winWidthOpt, width);
+	    misFuncs::ParseIntOpt(winWidthOpt, width);
 	    if (width.size() > 0){
 		// count the total number of filter widths
 		// parameter = width * pre_layer_size + #filter
@@ -789,8 +789,8 @@ namespace CNNTools{
 	Cpu::int_vector height;
 	filterWeightMap.resize(weightNum, 0);
 	
-	ParseIntOpt(winHeightOpt, height);
-	ParseIntOpt(winWidthOpt,  width);
+	misFuncs::ParseIntOpt(winHeightOpt, height);
+	misFuncs::ParseIntOpt(winWidthOpt,  width);
 	if (height.size() != width.size())
 	    throw std::runtime_error("Error height width unequal length");
 
@@ -862,7 +862,7 @@ namespace layers {
     CNNLayer<TDevice>::CNNLayer(
         const helpers::JsonValue &layerChild, 
         const helpers::JsonValue &weightsSection,
-        Layer<TDevice> &precedingLayer)
+        Layer<TDevice> &precedingLayer, int maxSeqLength)
 	: m_winWidth_Opt    ((layerChild->HasMember("window_width")) ? 
 			     ((*layerChild)["window_width"].GetString()) : (""))
 	, m_winInterval_Opt ((layerChild->HasMember("window_tap_interval")) ? 
@@ -883,7 +883,7 @@ namespace layers {
 					(layerChild->HasMember("size")) ? 
 					((*layerChild)["size"].GetInt()) : (0),
 					precedingLayer.size(), false, false),
-				    precedingLayer)
+				    precedingLayer, maxSeqLength)
 	, m_outputTanh(1)
     {
 	
@@ -995,7 +995,7 @@ namespace layers {
 	*/
 	
 	// allocate memory for convolution buffer (\sum_window_Length * Time)
-	m_conBuffer.resize(this->precedingLayer().patTypes().size() * m_winTotalL, 0);
+	m_conBuffer.resize(this->patTypes().size() * m_winTotalL, 0);
 
 	// allocate memmory for weight buffer
 	m_weightBuffer.resize(precedingLayer.size() * m_winTotalL + this->size(), 0.0);

@@ -43,9 +43,17 @@
 #include <fstream>
 
 /* ***** Functions for string process ***** */
+namespace misFuncs {
+    
 void ParseStrOpt(const std::string stringOpt, std::vector<std::string> &optVec,
 		 const std::string para){
     std::vector<std::string> tempArgs;
+    
+    if (stringOpt.size()==0){
+	optVec.clear();
+	return;
+    }
+    
     boost::split(tempArgs, stringOpt, boost::is_any_of(para));
     for (int i =0 ; i<tempArgs.size(); i++)
 	optVec.push_back(tempArgs[i]);
@@ -56,6 +64,11 @@ void ParseIntOpt(const std::string stringOpt, Cpu::int_vector &optVec){
     std::vector<std::string> tempArgs;
     std::vector<std::string> tempArgs2;
     std::vector<int> tmpresult;
+    
+    if (stringOpt.size()==0){
+	optVec.clear();
+	return;
+    }
     
     boost::split(tempArgs, stringOpt, boost::is_any_of("_"));
     for (int i =0 ; i<tempArgs.size(); i++){
@@ -77,6 +90,11 @@ void ParseFloatOpt(const std::string stringOpt, Cpu::real_vector &optVec){
     std::vector<std::string> tempArgs;
     std::vector<std::string> tempArgs2;
     std::vector<real_t> tmpresult;
+
+    if (stringOpt.size()==0){
+	optVec.clear();
+	return;
+    }
     
     boost::split(tempArgs, stringOpt, boost::is_any_of("_"));
     for (int i =0 ; i<tempArgs.size(); i++){
@@ -170,4 +188,44 @@ int flagUpdateDiscriminator(const int epoch, const int frac){
 bool closeToZero(const real_t t1, const real_t lowBound, const real_t upBound)
 {
     return ((t1 > lowBound) && (t1 < upBound));
+}
+
+int ReadRealData(const std::string dataPath, Cpu::real_vector &data)
+{
+    // 
+    std::ifstream ifs(dataPath.c_str(), std::ifstream::binary | std::ifstream::in);
+    if (!ifs.good())
+	throw std::runtime_error(std::string("Fail to open ")+dataPath);
+    
+    // get the number of we data
+    std::streampos numEleS, numEleE;
+    long int numEle;
+    numEleS = ifs.tellg();
+    ifs.seekg(0, std::ios::end);
+    numEleE = ifs.tellg();
+    numEle  = (numEleE-numEleS)/sizeof(real_t);
+    ifs.seekg(0, std::ios::beg);
+    
+    // read in the data
+    if (data.size() < numEle)
+	data.resize(numEle, 0);
+    
+    real_t tempVal;
+    for (unsigned int i = 0; i<numEle; i++){
+	ifs.read ((char *)&tempVal, sizeof(real_t));
+	data[i] = tempVal;
+    }
+    //thrust::copy(tempVec.begin(), tempVec.end(), data.begin());
+    ifs.close();
+    return numEle;
+}
+
+int getResoLength(const int maxSeqLength, const int timeResolution)
+{
+    if (timeResolution == 1)
+	return maxSeqLength;
+    else
+	return maxSeqLength / timeResolution + ((maxSeqLength % timeResolution>0)?1:0);
+}
+
 }

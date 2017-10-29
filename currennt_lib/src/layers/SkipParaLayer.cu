@@ -190,10 +190,10 @@ namespace layers{
     SkipParaLayer<TDevice, TActFn>::SkipParaLayer(
 					const helpers::JsonValue &layerChild,
 					const helpers::JsonValue &weightsSection,
-					std::vector<Layer<TDevice>*> &precedingLayers
-					)
+					std::vector<Layer<TDevice>*> &precedingLayers,
+					int maxSeqLength)
 	// use preLayers[0] as fake preceding layers
-	: SkipLayer<TDevice>(layerChild, weightsSection, precedingLayers, true)
+	: SkipLayer<TDevice>(layerChild, weightsSection, precedingLayers, maxSeqLength, true)
     {
 	// currently, only two previous layers are allowed: one from previous skiplayer, and another
 	//  from normal feed-forward layer

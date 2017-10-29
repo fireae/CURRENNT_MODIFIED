@@ -75,7 +75,7 @@ namespace optimizers {
             m_neuralNetwork.loadSequences(*frac);
 	    // Compute forward pass
             m_neuralNetwork.computeForwardPass(frac->maxSeqLength(), (m_curEpoch-1));
-	    // Reload data (if case the targets output data buffer is used for schedule sampling)
+	    // Reload data (in case the targets buffer is used for schedule sampling)
 	    m_neuralNetwork.restoreTarget(*frac);
 
 	    // calculate the errors
@@ -83,7 +83,8 @@ namespace optimizers {
 	    errorTemp2 = (m_neuralNetwork.calculateError(false)/ds.totalSequences());
 	    
 	    if (Configuration::instance().verboseLevel() == OP_VERBOSE_LEVEL_1){
-		std::cerr << uttCnt << ", " << errorTemp1 << ", " << errorTemp2 << std::endl;
+		std::cerr << uttCnt << ", " << errorTemp1*ds.totalSequences();
+		std::cerr << ", " << errorTemp2*ds.totalSequences() << std::endl;
 	    }
 	    error    += errorTemp1;
 	    secError += errorTemp2;

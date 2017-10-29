@@ -96,15 +96,16 @@ namespace layers{
     SkipCatLayer<TDevice>::SkipCatLayer(
 					const helpers::JsonValue &layerChild,
 					const helpers::JsonValue &weightsSection,
-					std::vector<Layer<TDevice>*> &precedingLayers
-					)
+					std::vector<Layer<TDevice>*> &precedingLayers,
+					int maxSeqLength)
 	// use preLayers[0] as fake preceding layers
-	: SkipLayer<TDevice>(layerChild, weightsSection, precedingLayers, false)
+	: SkipLayer<TDevice>(layerChild, weightsSection, precedingLayers, maxSeqLength, false)
     {
 	// initialization
 	m_preLayers.clear();
 	m_preSkipDim.clear();
 	m_preSkipDimAccu.clear();
+
 	
 	// Link previous Skip layer
 	if (precedingLayers.size() < 1)
@@ -115,7 +116,7 @@ namespace layers{
 	
 	if (m_previousSkipStr.size()){
 	    std::vector<std::string> tmpOpt;
-	    ParseStrOpt(m_previousSkipStr, tmpOpt, ",");
+	    misFuncs::ParseStrOpt(m_previousSkipStr, tmpOpt, ",");
 	    for (int cnt = 0 ; cnt < tmpOpt.size(); cnt++) {
 		BOOST_FOREACH (Layer<TDevice> *layer, precedingLayers) {
 		    if (layer->name() == tmpOpt[cnt]){
@@ -146,7 +147,7 @@ namespace layers{
 	m_preSkipDimStr = (layerChild->HasMember("preSkipLayerDim") ? 
 				((*layerChild)["preSkipLayerDim"].GetString()) : "");
 	if (m_preSkipDimStr.size()){
-	    ParseIntOpt(m_preSkipDimStr, m_preSkipDim);
+	    misFuncs::ParseIntOpt(m_preSkipDimStr, m_preSkipDim);
 	}else{
 	    // default case, concatenate all the previous layers
 	    m_preSkipDim.resize(m_preLayers.size() * 2, 0);
@@ -171,6 +172,10 @@ namespace layers{
 	    }
 	    m_preSkipDimAccu[cnt] = tmpDim;
 	    tmpDim += (m_preSkipDim[2*cnt + 1] - m_preSkipDim[2*cnt]);
+
+	    if (this->getResolution() != m_preLayers[cnt]->getResolution()){
+		throw std::runtime_error("SkipCat layer only concatenate layers with same resolution");
+	    }
 	}
 	if (tmpDim != this->size()){
 	    printf("Layer size %d, but sum of input size is %d\n", this->size(), tmpDim);
@@ -205,16 +210,17 @@ namespace layers{
 		     0.0);
 	
 	// initialization for backward pass
-	thrust::fill(this->outputErrors().begin(), 
-		     (this->outputErrors().begin() + 
-		      this->curMaxSeqLength() * this->parallelSequences() * this->size()),
-		     0.0
-		     );
+	if (this->flagTrainingMode()){
+	    thrust::fill(this->outputErrors().begin(), 
+			 (this->outputErrors().begin() + 
+			  this->curMaxSeqLength() * this->parallelSequences() * this->size()),
+			 0.0);
 
-	thrust::fill(this->outputErrorsFromSkipLayer().begin(),
-		     (this->outputErrorsFromSkipLayer().begin() + 
-		      this->curMaxSeqLength() * this->parallelSequences() * this->size()),
-		     0.0);
+	    thrust::fill(this->outputErrorsFromSkipLayer().begin(),
+			 (this->outputErrorsFromSkipLayer().begin() + 
+			  this->curMaxSeqLength() * this->parallelSequences() * this->size()),
+			 0.0);
+	}
 
 	// accumulating the outputs of previous layers
 	{{

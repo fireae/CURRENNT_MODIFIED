@@ -288,9 +288,10 @@ namespace layers {
     template <typename TDevice, typename TActFn>
     FeedForwardLayer<TDevice, TActFn>::FeedForwardLayer(const helpers::JsonValue &layerChild, 
 							const helpers::JsonValue &weightsSection, 
-							Layer<TDevice> &precedingLayer)
+							Layer<TDevice> &precedingLayer,
+							int maxSeqLength)
         : TrainableLayer<TDevice>(layerChild, weightsSection, 1, weightForBatchNorm(layerChild),
-				  precedingLayer)
+				  precedingLayer, maxSeqLength)
     {
 	
 	// Initialization for batch normalization

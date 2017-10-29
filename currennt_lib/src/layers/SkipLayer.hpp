@@ -65,6 +65,7 @@ namespace layers {
 	SkipLayer(const helpers::JsonValue &layerChild,
 		  const helpers::JsonValue &weightsSection,
 		  std::vector<Layer<TDevice>*> precedingLayers,
+		  int maxSeqLength,
 		  bool trainable);
 
 	// Destructor

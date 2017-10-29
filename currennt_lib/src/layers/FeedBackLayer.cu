@@ -399,9 +399,10 @@ namespace layers{
     template <typename TDevice>
     FeedBackLayer<TDevice>::FeedBackLayer(const helpers::JsonValue &layerChild,
 					  const helpers::JsonValue &weightsSection,
-					  Layer<TDevice>           &precedingLayer
+					  Layer<TDevice>           &precedingLayer,
+					  int                        maxSeqLength
 					  )
-	: TrainableLayer<TDevice>(layerChild, weightsSection, 0, 0, precedingLayer)
+	: TrainableLayer<TDevice>(layerChild, weightsSection, 0, 0, precedingLayer, maxSeqLength)
 	, m_targetDim   (-1)
 	, m_targetLayer (NULL)
     {
@@ -543,6 +544,9 @@ namespace layers{
 
 	// read in the boundary information
 	if (m_aggStr.size()){
+
+	    if (this->getResolution() != 1)
+		throw std::runtime_error("Feedback layer is ready for resolution option");
 	    //
 	    if (this->parallelSequences()>1){
 		printf("Please use parallel_sequences = 1\n");

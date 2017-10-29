@@ -204,8 +204,10 @@ namespace layers{
     
     template <typename TDevice>
     MiddleOutputLayer<TDevice>::MiddleOutputLayer(const helpers::JsonValue &layerChild,
-						  Layer<TDevice> &precedingLayer)
-	: PostOutputLayer<TDevice> (layerChild, precedingLayer, precedingLayer.size(), true)
+						  Layer<TDevice> &precedingLayer,
+						  int maxSeqLength)
+	: PostOutputLayer<TDevice> (layerChild, precedingLayer, precedingLayer.size(),
+				    maxSeqLength, true)
 	, m_natPriDim (-1)
 	, m_natSecDim (-1)
 	, m_state     (UNKNOWN)

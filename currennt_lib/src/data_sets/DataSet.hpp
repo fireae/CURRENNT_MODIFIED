@@ -72,6 +72,14 @@ namespace data_sets {
 	    int            exInputStartPos;  //
 	    int            exInputEndPos;    // 
 	    std::streampos exInputBegin;     //
+
+
+	    // Add 171012, support to the external output data
+	    int            exOutputDim;       // 
+	    int            exOutputLength;    //
+	    int            exOutputStartPos;  //
+	    int            exOutputEndPos;    // 
+	    std::streampos exOutputBegin;     //
         };
 
     private:
@@ -82,6 +90,7 @@ namespace data_sets {
         Cpu::real_vector    _loadInputsFromCache(const sequence_t &seq);
         Cpu::real_vector    _loadOutputsFromCache(const sequence_t &seq);
 	Cpu::real_vector    _loadExInputsFromCache(const sequence_t &seq);
+	Cpu::real_vector    _loadExOutputsFromCache(const sequence_t &seq);
         Cpu::int_vector     _loadTargetClassesFromCache(const sequence_t &seq);
         boost::shared_ptr<DataSetFraction> _makeFractionTask(int firstSeqIdx);
         boost::shared_ptr<DataSetFraction> _makeFirstFractionTask();
@@ -141,6 +150,13 @@ namespace data_sets {
 	std::vector<std::string> m_exInputDirs;
 	std::vector<std::string> m_exInputExts;
 	Cpu::int_vector          m_exInputDims;
+
+	int         m_exOutputType;             // reserved
+	bool        m_exOutputFlag;
+
+	std::vector<std::string> m_exOutputDirs;
+	std::vector<std::string> m_exOutputExts;
+	Cpu::int_vector          m_exOutputDims;
 
 	
     public:
@@ -309,3 +325,5 @@ namespace data_sets {
 
 
 #endif // DATA_SETS_DATASET_HPP
+
+

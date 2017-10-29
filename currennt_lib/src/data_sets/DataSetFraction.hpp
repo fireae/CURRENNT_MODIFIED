@@ -44,11 +44,17 @@ namespace data_sets {
             int         originalSeqIdx;  //
             int         length;          //
 	    int         exInputLength;   //
+	    int         exOutputLength;  //
             std::string seqTag;          //
 	    
 	    //int         txtLength;
         };
-
+	
+	struct reso_info {
+            int         resolution;  //
+	    int         bufferPos;   //
+	    int         length;
+        };
     private:
         int m_inputPatternSize;
         int m_outputPatternSize;
@@ -82,6 +88,15 @@ namespace data_sets {
 	int                 m_minExInputLength;
 	Cpu::real_vector    m_exInputData;
 
+	// Add 0815
+	int                 m_exOutputDim;
+	int                 m_maxExOutputLength;
+	int                 m_minExOutputLength;
+	Cpu::real_vector    m_exOutputData;
+
+	// Add 1007
+        Cpu::pattype_vector    m_patTypesLowTimeRes;
+	std::vector<reso_info> m_resolutionBuffer;
 	
     private:
         /**
@@ -113,6 +128,8 @@ namespace data_sets {
          * Returns the size of external input data
          */
         int externalInputSize() const;
+
+	int externalOutputSize() const;
        	
         /**
          * Returns the length of the longest sequence
@@ -134,7 +151,11 @@ namespace data_sets {
 	int maxExInputLength() const;
 	
 	int minExInputLength() const;
+
+	int maxExOutputLength() const;
 	
+	int minExOutputLength() const;
+
         /**
          * Returns the number of sequences in the fraction
          *
@@ -182,6 +203,13 @@ namespace data_sets {
 	 * Return the external Input data
 	 */
 	const Cpu::real_vector&    exInputData()    const;
+
+	/**
+	 * Return the external Output data
+	 */
+	const Cpu::real_vector&    exOutputData()    const;
+
+	
         /**
          * Returns the target classes vector
          *
@@ -202,7 +230,18 @@ namespace data_sets {
 	 * Return the number of valid frames for this current fraction
 	 */
 	int fracTimeLength() const;
+
+
+	/*
+	 * Return the pattypes of low time resolution track
+	 */
+	const Cpu::pattype_vector& patTypesLowTimeRes() const;
+
+	int   patTypesLowTimesResPos(const int resolution) const;
+	int   patTypesLowTimesResLen(const int resolution) const;
+	
     };
+    
 
 } // namespace data_sets
 

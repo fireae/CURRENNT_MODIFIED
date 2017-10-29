@@ -91,8 +91,8 @@ namespace layers {
     template <typename TDevice>
     MDNLayer<TDevice>::MDNLayer(const helpers::JsonValue &layerChild, 
 				const helpers::JsonValue &weightsSection, 
-				Layer<TDevice> &precedingLayer)
-	: PostOutputLayer<TDevice>(layerChild, precedingLayer, -1)
+				Layer<TDevice> &precedingLayer, int maxSeqLength)
+	: PostOutputLayer<TDevice>(layerChild, precedingLayer, -1, maxSeqLength)
     {
         const Configuration &config = Configuration::instance();
 

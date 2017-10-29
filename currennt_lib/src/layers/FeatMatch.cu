@@ -127,8 +127,10 @@ namespace layers{
     
     template <typename TDevice>
     FeatMatchLayer<TDevice>::FeatMatchLayer(const helpers::JsonValue &layerChild,
-						  Layer<TDevice> &precedingLayer)
-	: PostOutputLayer<TDevice> (layerChild, precedingLayer, precedingLayer.size(), true)
+					    Layer<TDevice> &precedingLayer,
+					    int maxSeqLength)
+	: PostOutputLayer<TDevice> (layerChild, precedingLayer, precedingLayer.size(),
+				    maxSeqLength, true)
 	, m_ganRatio (1.0)
     {
 	m_ganRatio  = (layerChild->HasMember("ganRatioGen") ? 

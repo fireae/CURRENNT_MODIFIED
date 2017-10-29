@@ -61,13 +61,15 @@ namespace layers {
 				    int maxSeqLength)
         : Layer<TDevice>(layerChild, parallelSequences, maxSeqLength,
 			 Configuration::instance().trainingMode())
-	, m_weDim(-1)
+	, m_weDim(0)
 	, m_flagWeUpdate(false)
     {
-	// m_weBufferInput.resize(parallelSequences*maxSeqLength*this->size(), 0.0);
+
 	m_weMask.clear();
 	m_weMaskFlag = false;
 
+	if (this->getResolution() > 1)
+	    throw std::runtime_error("Resolution for input layer should be 1");
     }
 
     template <typename TDevice>
@@ -97,11 +99,7 @@ namespace layers {
 	    }
 	}else{
 	    if (fraction.inputPatternSize() != this->size())
-		throw std::runtime_error(
-		   std::string("Input layer size of ") + 
-		   boost::lexical_cast<std::string>(this->size()) + 
-		   " != data input pattern size of " + 
-		   boost::lexical_cast<std::string>(fraction.inputPatternSize()));
+		throw std::runtime_error("Input layer size of != data input pattern size of ");
         }
 
         Layer<TDevice>::loadSequences(fraction, nnState);
@@ -114,24 +112,22 @@ namespace layers {
 	    // when embedded vectors are used
 
 	    // Before loadSequences(), readWeBank() should have been called
-	    int weidx=0;
-	    long unsigned int bias=0;
-	    long unsigned int fracTime=(fraction.inputs().size()/fraction.inputPatternSize());
-	    if (fracTime>m_weIdx.size())
-		throw std::runtime_error("m_weIdx size is smaller than fracTime\n");
+	    int weidx = 0;
+	    long unsigned int bias = 0;
+	    long unsigned int fracTime = (fraction.inputs().size()/fraction.inputPatternSize());
+	    Cpu::real_vector tempInput;
+	    
+	    if (fracTime > m_weIdx.size()) throw std::runtime_error("m_weIdx is too short\n");
 	    thrust::fill(m_weIdx.begin(), m_weIdx.end(), -1);
 	    
 	    // Block20170904x01
-	    
-	    //Code based on CPU sequential method
-	    Cpu::real_vector tempInput;
 	    tempInput.resize(this->size(), 0.0);
 	    for (int i = 0; i < fracTime; i++){
 		bias = i * fraction.inputPatternSize();
 		
 		// copy the normal input data
-		thrust::copy(fraction.inputs().begin()+bias, 
-			     fraction.inputs().begin()+bias+fraction.inputPatternSize(), 
+		thrust::copy(fraction.inputs().begin() + bias, 
+			     fraction.inputs().begin() + bias + fraction.inputPatternSize(), 
 			     tempInput.begin());
 		
 		// retrieve the embedded vector idx and save m_weIdx
@@ -149,37 +145,11 @@ namespace layers {
 			     m_weBank.begin()  + (weidx+1) * m_weDim, 
 			     tempInput.begin() + fraction.inputPatternSize()  - 1);
 
-		// Optinal: add noise to the input
-		// Note: this is different from the input_noise_sigma
-		//       here, the noise will be added every epoch
-		if (this->m_weNoiseStartDim > 0){		    
-		    if (this->m_weNoiseStartDim >= this->size() ||
-			this->m_weNoiseEndDim   >  this->size()){
-			throw std::runtime_error("weNoiseDimenion error");
-		    }
-		    const Configuration &config = Configuration::instance();	    
-		    static boost::mt19937 *gen = NULL;
-		    if (!gen) {
-			gen = new boost::mt19937;
-			gen->seed(config.randomSeed()+100);
-		    }
-		    boost::random::normal_distribution<real_t> dist(0.0, this->m_weNoiseDev);
-		    for (size_t j = this->m_weNoiseStartDim; j < this->m_weNoiseEndDim; ++j)
-			tempInput[j] += dist(*gen);;
-		}
-
+		// Block#01
 		// copy the we data into the input data (output of the InputLayer)
 		thrust::copy(tempInput.begin(), tempInput.end(),
-			     this->_outputs().begin()+i*this->size());
-		
+			     this->_outputs().begin() + i * this->size());
 	    }
-	    
-	    // for debugging
-	    if (0){
-		Cpu::real_vector tempVec(this->_outputs());
-		std::cout << tempVec.size() << std::endl;
-	    }
-
 	}
 	else
 	{
@@ -233,47 +203,23 @@ namespace layers {
 					 const unsigned maxLength)
     {
 	// 
-	if (dim < 1){
-	    throw std::runtime_error(std::string("Dimention of weBank below 1"));
-	}	
-	std::ifstream ifs(weBankPath.c_str(), std::ifstream::binary | std::ifstream::in);
-	if (!ifs.good()){
-	    throw std::runtime_error(std::string("Fail to open ")+weBankPath);
-	}
-	
+	if (dim < 1) throw std::runtime_error("Dimention of weBank below 1");
 	// save the information
 	m_weDim                 = dim;
 	m_flagWeUpdate          = true;
 	m_weIDDim               = dimidx;
+
+	// to store the word vector sequences for each frame
+	m_weIdx    = Cpu::real_vector(maxLength, -1);
 	
 	// set the flag for We input
 	this->_setInputWeUpdate(true);  
 	
-	// get the number of we data
-	std::streampos numEleS, numEleE;
-	long int numEle;
-	numEleS = ifs.tellg();
-	ifs.seekg(0, std::ios::end);
-	numEleE = ifs.tellg();
-	numEle  = (numEleE-numEleS)/sizeof(real_t);
-	ifs.seekg(0, std::ios::beg);
-	
-	// read in the data
-	m_weBank = Cpu::real_vector(numEle, 0);
-	real_t tempVal;
-	std::vector<real_t> tempVec;
-	for (unsigned int i = 0; i<numEle; i++){
-	    ifs.read ((char *)&tempVal, sizeof(real_t));
-	    tempVec.push_back(tempVal);
-	}
-	thrust::copy(tempVec.begin(), tempVec.end(), m_weBank.begin());
+	// read the WE bank from IO
 	printf("Initialize embedded vectors");
-	printf("\n\tRead %d vectors, of dimension %d\n", (int)numEle/dim, dim);
-	
-	// to store the word vector sequences for each frame
-	m_weIdx    = Cpu::real_vector(maxLength, -1);
-	ifs.close();
-
+	printf("\n\tRead %d vectors, of dimension %d\n",
+	       misFuncs::ReadRealData(weBankPath, m_weBank)/dim, dim);
+	// Block#02	
 	return true;
     }
     
@@ -329,6 +275,8 @@ namespace layers {
 	if (this->m_weNoiseStartDim > 0){
 	    printf("WE noise: from %d to %d, %f\n", weNoiseStartDim, weNoiseEndDim, weNoiseDev);
 	}
+	if (this->m_weNoiseStartDim > 0)
+	    throw std::runtime_error("noise on WE is deprecated");
 	return true;
     }
 
@@ -337,21 +285,17 @@ namespace layers {
     {
 	if (m_weBank.size()>0){
 	    Cpu::real_vector tempVec;
-	    bool tempflag;
-	    
-	    tempflag = false;
 	    tempVec.resize(m_weBank.size());
 	    
 	    std::vector<real_t>::iterator t = b;
 	    for (int i = 0; i < m_weBank.size(); ++t, i++){
-		if (*t <0 || *t >1){
+		if (*t <0 || *t >1)
 		    throw std::runtime_error("DataMask is out of range [0, 1]");
-		}else
+		else
 		    tempVec[i] = *t;
 	    }	    
 	    // copy the mask data into m_weMask
 	    m_weMask     = tempVec;
-	
 	    // set the flag
 	    m_weMaskFlag = true;
 	}
@@ -385,3 +329,59 @@ namespace layers {
     template class InputLayer<Gpu>;
 
 } // namespace layers
+
+
+
+/*
+Block#01
+		// Optinal: add noise to the input
+		// Note: this is different from the input_noise_sigma
+		//       here, the noise will be added every epoch
+		if (this->m_weNoiseStartDim > 0){		    
+		    if (this->m_weNoiseStartDim >= this->size() ||
+			this->m_weNoiseEndDim   >  this->size()){
+			throw std::runtime_error("weNoiseDimenion error");
+		    }
+		    const Configuration &config = Configuration::instance();	    
+		    static boost::mt19937 *gen = NULL;
+		    if (!gen) {
+			gen = new boost::mt19937;
+			gen->seed(config.randomSeed()+100);
+		    }
+		    boost::random::normal_distribution<real_t> dist(0.0, this->m_weNoiseDev);
+		    for (size_t j = this->m_weNoiseStartDim; j < this->m_weNoiseEndDim; ++j)
+			tempInput[j] += dist(*gen);;
+		}
+
+
+Block#02
+	
+	std::ifstream ifs(weBankPath.c_str(), std::ifstream::binary | std::ifstream::in);
+	if (!ifs.good()){
+	    throw std::runtime_error(std::string("Fail to open ")+weBankPath);
+	}
+
+	// get the number of we data
+	std::streampos numEleS, numEleE;
+	long int numEle;
+	numEleS = ifs.tellg();
+	ifs.seekg(0, std::ios::end);
+	numEleE = ifs.tellg();
+	numEle  = (numEleE-numEleS)/sizeof(real_t);
+	ifs.seekg(0, std::ios::beg);
+	
+	// read in the data
+	m_weBank = Cpu::real_vector(numEle, 0);
+	real_t tempVal;
+	std::vector<real_t> tempVec;
+	for (unsigned int i = 0; i<numEle; i++){
+	    ifs.read ((char *)&tempVal, sizeof(real_t));
+	    tempVec.push_back(tempVal);
+	}
+	thrust::copy(tempVec.begin(), tempVec.end(), m_weBank.begin());
+	printf("Initialize embedded vectors");
+	printf("\n\tRead %d vectors, of dimension %d\n", (int)numEle/dim, dim);
+	ifs.close();
+	
+
+*/

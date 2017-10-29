@@ -118,8 +118,8 @@ namespace {
 namespace layers {
 
     template <typename TDevice>
-    BinaryClassificationLayer<TDevice>::BinaryClassificationLayer(const helpers::JsonValue &layerChild, Layer<TDevice> &precedingLayer)
-        : PostOutputLayer<TDevice>(layerChild, precedingLayer, precedingLayer.size())
+    BinaryClassificationLayer<TDevice>::BinaryClassificationLayer(const helpers::JsonValue &layerChild, Layer<TDevice> &precedingLayer, int maxSeqLength)
+        : PostOutputLayer<TDevice>(layerChild, precedingLayer, precedingLayer.size(), maxSeqLength)
     {
         if (this->size() != 1)
             throw std::runtime_error("The binary classification post output layer cannot be used for an output layer size != 1");
@@ -158,10 +158,13 @@ namespace layers {
     template <typename TDevice>
     void BinaryClassificationLayer<TDevice>::loadSequences(const data_sets::DataSetFraction &fraction, const int nnState)
     {
+	
         PostOutputLayer<TDevice>::loadSequences(fraction, nnState);
-
-        // In this case, we can copy the integer vector of target classes, since they are equal to the real target values (0/1)
-        thrust::copy(fraction.targetClasses().begin(), fraction.targetClasses().end(), this->_targets().begin());
+        // In this case, we can copy the integer vector of target classes,
+	// since they are equal to the real target values (0/1)
+        thrust::copy(fraction.targetClasses().begin(),
+		     fraction.targetClasses().end(),
+		     this->_targets().begin());
     }
 
     template <typename TDevice>

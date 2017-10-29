@@ -167,8 +167,9 @@ namespace layers {
 
     template <typename TDevice>
     KLPostOutputLayer<TDevice>::KLPostOutputLayer(const helpers::JsonValue &layerChild, 
-						  Layer<TDevice> &precedingLayer)
-        : PostOutputLayer<TDevice>(layerChild, precedingLayer, precedingLayer.size())
+						  Layer<TDevice> &precedingLayer,
+						  int maxSeqLength)
+        : PostOutputLayer<TDevice>(layerChild, precedingLayer, precedingLayer.size(), maxSeqLength)
     {
 	const Configuration &config = Configuration::instance();
 	m_dataType = config.KLDOutputDataType();

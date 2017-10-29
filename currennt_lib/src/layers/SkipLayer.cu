@@ -37,10 +37,11 @@ namespace layers{
     SkipLayer<TDevice>::SkipLayer(const helpers::JsonValue &layerChild,
 				  const helpers::JsonValue &weightsSection,
 				  std::vector<Layer<TDevice>*> precedingLayers,
+				  int maxSeqLength,
 				  bool trainable)
 	// use preLayers[0] as fake preceding layers
 	: TrainableLayer<TDevice>(layerChild, weightsSection,
-				  (trainable ? 1 : 0), 0, *(precedingLayers.back()))
+				  (trainable ? 1 : 0), 0, *(precedingLayers.back()), maxSeqLength)
     {
 	if (this->flagTrainingMode())
 	    m_outputErrorsFromSkipLayer = Cpu::real_vector(this->outputs().size(), (real_t)0.0);

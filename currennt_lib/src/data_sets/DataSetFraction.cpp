@@ -48,6 +48,11 @@ namespace data_sets {
         return m_exInputDim;
     }
 
+    int DataSetFraction::externalOutputSize() const
+    {
+        return m_exOutputDim;
+    }
+
     int DataSetFraction::maxSeqLength() const
     {
         return m_maxSeqLength;
@@ -67,7 +72,17 @@ namespace data_sets {
     {
         return m_minExInputLength;
     }
-    
+
+    int DataSetFraction::maxExOutputLength() const
+    {
+        return m_maxExOutputLength;
+    }
+
+    int DataSetFraction::minExOutputLength() const
+    {
+        return m_minExOutputLength;
+    }
+
     int DataSetFraction::numSequences() const
     {
         return (int)m_seqInfo.size();
@@ -122,7 +137,12 @@ namespace data_sets {
     {
 	return m_exInputData;
     }
-    
+
+    const Cpu::real_vector& DataSetFraction::exOutputData()    const
+    {
+	return m_exOutputData;
+    }
+
     /*
     const Cpu::int_vector& DataSetFraction::txtData() const
     {
@@ -138,4 +158,28 @@ namespace data_sets {
 	return m_fracTotalLength;
     }
 
+
+    const Cpu::pattype_vector& DataSetFraction::patTypesLowTimeRes() const
+    {
+	return m_patTypesLowTimeRes;
+    }
+    
+    int   DataSetFraction::patTypesLowTimesResPos(const int resolution) const
+    {
+	for (int i = 0; i < m_resolutionBuffer.size(); i++){
+	    if (m_resolutionBuffer[i].resolution == resolution)
+		return m_resolutionBuffer[i].bufferPos;
+	}
+	return -1;
+    }
+    
+    int   DataSetFraction::patTypesLowTimesResLen(const int resolution) const
+    {
+	for (int i = 0; i < m_resolutionBuffer.size(); i++){
+	    if (m_resolutionBuffer[i].resolution == resolution)
+		return m_resolutionBuffer[i].length;
+	}
+	return -1;
+    }
+    
 } // namespace data_sets

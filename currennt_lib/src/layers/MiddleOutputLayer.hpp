@@ -68,7 +68,7 @@ namespace layers {
 	
     public:
 	MiddleOutputLayer(const helpers::JsonValue &layerChild, 
-			  Layer<TDevice>  &precedingLayer);
+			  Layer<TDevice>  &precedingLayer, int maxSeqLength);
 	
 	virtual ~MiddleOutputLayer();
 

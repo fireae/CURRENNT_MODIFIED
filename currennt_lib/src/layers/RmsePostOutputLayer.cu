@@ -104,8 +104,10 @@ namespace {
 namespace layers {
 
     template <typename TDevice>
-    RmsePostOutputLayer<TDevice>::RmsePostOutputLayer(const helpers::JsonValue &layerChild, Layer<TDevice> &precedingLayer)
-        : PostOutputLayer<TDevice>(layerChild, precedingLayer, precedingLayer.size())
+    RmsePostOutputLayer<TDevice>::RmsePostOutputLayer(const helpers::JsonValue &layerChild,
+						      Layer<TDevice> &precedingLayer,
+						      int maxSeqLength)
+        : PostOutputLayer<TDevice>(layerChild, precedingLayer, precedingLayer.size(), maxSeqLength)
     {
         // resize the vector for RMSEs
         m_rmses.resize(this->patTypes().size());

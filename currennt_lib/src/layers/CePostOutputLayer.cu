@@ -107,8 +107,9 @@ namespace layers {
 
     template <typename TDevice>
     CePostOutputLayer<TDevice>::CePostOutputLayer(const helpers::JsonValue &layerChild, 
-						  Layer<TDevice> &precedingLayer)
-        : PostOutputLayer<TDevice>(layerChild, precedingLayer, precedingLayer.size())
+						  Layer<TDevice> &precedingLayer,
+						  int maxSeqLength)
+        : PostOutputLayer<TDevice>(layerChild, precedingLayer, precedingLayer.size(), maxSeqLength)
     {
     }
 

@@ -464,8 +464,9 @@ namespace layers {
     ParaLayer<TDevice, TActFn>::ParaLayer(
         const helpers::JsonValue &layerChild, 
         const helpers::JsonValue &weightsSection,
-        Layer<TDevice> &precedingLayer)
-        : FeedForwardLayer<TDevice, TActFn>(layerChild, weightsSection, precedingLayer)
+        Layer<TDevice> &precedingLayer,
+	int maxSeqLength)
+        : FeedForwardLayer<TDevice, TActFn>(layerChild, weightsSection, precedingLayer, maxSeqLength)
     {
 	
 	// Read the configuration file

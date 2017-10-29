@@ -377,7 +377,10 @@ Configuration::Configuration(int argc, const char *argv[])
 	("mdnVarFixEpochNum",
 	 po::value(&m_mdnVarFixEpochNum)->default_value(-1),
 	 "Fix the variance of mdn (GMM) as 1 for this number of epochs. Default (not use)")
-        ;
+	("resolutions",
+	 po::value(&m_resolutions)->default_value(""),
+	 "resolution defined in network.jsn. Format: res1_res2_res3")
+	;
 
     po::options_description autosaveOptions("Autosave options");
     autosaveOptions.add_options()
@@ -523,6 +526,15 @@ Configuration::Configuration(int argc, const char *argv[])
 	("ExtInputDims",
 	 po::value(&m_exInputDims) ->default_value(""),
 	 "External input dimension")
+	("ExtOutputDirs",
+	 po::value(&m_exOutputDirs) ->default_value(""),
+	 "External output directory")
+	("ExtOutputExts",
+	 po::value(&m_exOutputExts) ->default_value(""),
+	 "External output extension")
+	("ExtOutputDims",
+	 po::value(&m_exOutputDims) ->default_value(""),
+	 "External output dimension")
         ;
 
     po::options_description weightsInitializationOptions("Weight initialization options");
@@ -1368,6 +1380,19 @@ const std::string& Configuration::exInputDims() const
     return m_exInputDims;
 }
 
+const std::string& Configuration::exOutputDirs() const
+{
+    return m_exOutputDirs;
+}
+const std::string& Configuration::exOutputExts() const
+{
+    return m_exOutputExts;
+}
+const std::string& Configuration::exOutputDims() const
+{
+    return m_exOutputDims;
+}
+
 
 const int& Configuration::verboseLevel() const
 {
@@ -1393,4 +1418,9 @@ const int& Configuration::mdnVarUpdateEpoch() const
 const int& Configuration::vaePlotManifold() const
 {
     return m_vaePlotManifold;
+}
+
+const std::string& Configuration::resolutions() const
+{
+    return m_resolutions;
 }

@@ -100,8 +100,11 @@ namespace {
 namespace layers {
 
     template <typename TDevice>
-    SseMaskPostOutputLayer<TDevice>::SseMaskPostOutputLayer(const helpers::JsonValue &layerChild, Layer<TDevice> &precedingLayer)
-        : PostOutputLayer<TDevice>  (layerChild, precedingLayer, precedingLayer.size() * 2)
+    SseMaskPostOutputLayer<TDevice>::SseMaskPostOutputLayer(const helpers::JsonValue &layerChild,
+							    Layer<TDevice> &precedingLayer,
+							    int maxSeqLength)
+        : PostOutputLayer<TDevice>  (layerChild, precedingLayer,
+				     precedingLayer.size() * 2, maxSeqLength)
     {
     }
 

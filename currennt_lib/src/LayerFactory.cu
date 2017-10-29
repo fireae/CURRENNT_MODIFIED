@@ -55,6 +55,7 @@
 #include "layers/ParaLayer.hpp"
 #include "layers/FeedBackLayer.hpp"
 #include "layers/wavNetCore.hpp"
+#include "layers/ExternalLoader.hpp"
 #include <stdexcept>
 
 
@@ -73,43 +74,62 @@ layers::Layer<TDevice>* LayerFactory<TDevice>::createLayer(
     if (layerType == "input")
     	return new InputLayer<TDevice>(layerChild, parallelSequences, maxSeqLength);
     else if (layerType == "feedforward_tanh")
-    	return new FeedForwardLayer<TDevice, Tanh>(layerChild, weightsSection, *precedingLayer);
+    	return new FeedForwardLayer<TDevice, Tanh>(layerChild, weightsSection,
+						   *precedingLayer, maxSeqLength);
     else if (layerType == "feedforward_logistic")
-    	return new FeedForwardLayer<TDevice, Logistic>(layerChild, weightsSection, *precedingLayer);
+    	return new FeedForwardLayer<TDevice, Logistic>(layerChild, weightsSection,
+						       *precedingLayer, maxSeqLength);
     else if (layerType == "feedforward_identity")
-    	return new FeedForwardLayer<TDevice, Identity>(layerChild, weightsSection, *precedingLayer);
+    	return new FeedForwardLayer<TDevice, Identity>(layerChild, weightsSection,
+						       *precedingLayer, maxSeqLength);
     else if (layerType == "feedforward_relu")
-    	return new FeedForwardLayer<TDevice, Relu>(layerChild, weightsSection, *precedingLayer);
+    	return new FeedForwardLayer<TDevice, Relu>(layerChild, weightsSection,
+						   *precedingLayer, maxSeqLength);
     else if (layerType == "paralayer")
-    	return new ParaLayer<TDevice, Identity>(layerChild, weightsSection, *precedingLayer);    
+    	return new ParaLayer<TDevice, Identity>(layerChild, weightsSection,
+						*precedingLayer, maxSeqLength);    
     else if (layerType == "softmax")
-    	return new SoftmaxLayer<TDevice, Identity>(layerChild, weightsSection, *precedingLayer);
+    	return new SoftmaxLayer<TDevice, Identity>(layerChild, weightsSection,
+						   *precedingLayer, maxSeqLength);
     else if (layerType == "lstm")
-    	return new LstmLayer<TDevice>(layerChild, weightsSection, *precedingLayer, false);
+    	return new LstmLayer<TDevice>(layerChild, weightsSection,
+				      *precedingLayer, maxSeqLength, false);
     else if (layerType == "blstm")
-    	return new LstmLayer<TDevice>(layerChild, weightsSection, *precedingLayer, true);
+    	return new LstmLayer<TDevice>(layerChild, weightsSection,
+				      *precedingLayer, maxSeqLength, true);
     else if (layerType == "rnn")
-    	return new RnnLayer<TDevice>(layerChild, weightsSection, *precedingLayer, false);
+    	return new RnnLayer<TDevice>(layerChild, weightsSection,
+				     *precedingLayer, maxSeqLength, false);
     else if (layerType == "brnn")
-    	return new RnnLayer<TDevice>(layerChild, weightsSection, *precedingLayer, true);
+    	return new RnnLayer<TDevice>(layerChild, weightsSection,
+				     *precedingLayer, maxSeqLength, true);
     else if (layerType == "feedback")
-    	return new FeedBackLayer<TDevice>(layerChild, weightsSection, *precedingLayer);
+    	return new FeedBackLayer<TDevice>(layerChild, weightsSection,
+					  *precedingLayer, maxSeqLength);
     else if (layerType == "batchnorm")
-    	return new BatchNormLayer<TDevice>(layerChild, weightsSection, *precedingLayer);
+    	return new BatchNormLayer<TDevice>(layerChild, weightsSection,
+					   *precedingLayer, maxSeqLength);
     else if (layerType == "cnn")
-        return new CNNLayer<TDevice>(layerChild, weightsSection, *precedingLayer);    
+        return new CNNLayer<TDevice>(layerChild, weightsSection,
+				     *precedingLayer, maxSeqLength);    
     else if (layerType == "maxpooling")
-        return new MaxPoolingLayer<TDevice>(layerChild, weightsSection, *precedingLayer);    
+        return new MaxPoolingLayer<TDevice>(layerChild, weightsSection,
+					    *precedingLayer, maxSeqLength);    
     else if (layerType == "middleoutput")
-        return new MiddleOutputLayer<TDevice>(layerChild, *precedingLayer);    
+        return new MiddleOutputLayer<TDevice>(layerChild, *precedingLayer, maxSeqLength);    
     else if (layerType == "operator")
-        return new OperationLayer<TDevice>(layerChild, weightsSection, *precedingLayer);    
+        return new OperationLayer<TDevice>(layerChild, weightsSection,
+					   *precedingLayer, maxSeqLength);    
     else if (layerType == "featmatch")
-        return new FeatMatchLayer<TDevice>(layerChild, *precedingLayer);    
+        return new FeatMatchLayer<TDevice>(layerChild, *precedingLayer, maxSeqLength);    
     else if (layerType == "vae")
-        return new VaeMiddleLayer<TDevice>(layerChild, *precedingLayer);    
+        return new VaeMiddleLayer<TDevice>(layerChild, *precedingLayer, maxSeqLength);    
     else if (layerType == "wavnetc")
-    	return new WavNetCore<TDevice>(layerChild, weightsSection, *precedingLayer);
+    	return new WavNetCore<TDevice>(layerChild, weightsSection,
+				       *precedingLayer, maxSeqLength);
+    else if (layerType == "externalloader")
+    	return new ExternalLoader<TDevice>(layerChild, weightsSection,
+					   *precedingLayer, maxSeqLength);
     /*
     // not implemented yet
     else if (layerType == "lstmw")
@@ -129,24 +149,28 @@ layers::Layer<TDevice>* LayerFactory<TDevice>::createLayer(
         //if (!precedingTrainableLayer)
     	//    throw std::runtime_error("Cannot add post output layer after a non trainable layer");
         if (layerType == "sse")
-    	    return new SsePostOutputLayer<TDevice>(layerChild, *precedingLayer);
+    	    return new SsePostOutputLayer<TDevice>(layerChild, *precedingLayer, maxSeqLength);
         else if (layerType == "kld")
-    	    return new KLPostOutputLayer<TDevice>(layerChild, *precedingLayer);
+    	    return new KLPostOutputLayer<TDevice>(layerChild, *precedingLayer, maxSeqLength);
 	else if (layerType == "weightedsse")
-    	    return new WeightedSsePostOutputLayer<TDevice>(layerChild, *precedingLayer);
+    	    return new WeightedSsePostOutputLayer<TDevice>(layerChild,
+							   *precedingLayer, maxSeqLength);
         else if (layerType == "rmse")
-            return new RmsePostOutputLayer<TDevice>(layerChild, *precedingLayer);
+            return new RmsePostOutputLayer<TDevice>(layerChild, *precedingLayer, maxSeqLength);
         else if (layerType == "ce")
-            return new CePostOutputLayer<TDevice>(layerChild, *precedingLayer);
+            return new CePostOutputLayer<TDevice>(layerChild, *precedingLayer, maxSeqLength);
         if (layerType == "sse_mask" || layerType == "wf") 
 	    // wf provided for compat. with dev. version
-    	    return new SseMaskPostOutputLayer<TDevice>(layerChild, *precedingLayer);
+    	    return new SseMaskPostOutputLayer<TDevice>(layerChild, *precedingLayer, maxSeqLength);
         else if (layerType == "binary_classification")
-    	    return new BinaryClassificationLayer<TDevice>(layerChild, *precedingLayer);
+    	    return new BinaryClassificationLayer<TDevice>(layerChild,
+							  *precedingLayer, maxSeqLength);
 	else if (layerType == "mdn")
-	    return new MDNLayer<TDevice>(layerChild, weightsSection, *precedingLayer);
+	    return new MDNLayer<TDevice>(layerChild, weightsSection,
+					 *precedingLayer, maxSeqLength);
         else // if (layerType == "multiclass_classification")
-    	    return new MulticlassClassificationLayer<TDevice>(layerChild, *precedingLayer);
+    	    return new MulticlassClassificationLayer<TDevice>(layerChild,
+							      *precedingLayer, maxSeqLength);
     }
     else
         throw std::runtime_error(std::string("Error in network.jsn: unknown type'") +
@@ -169,9 +193,11 @@ layers::Layer<TDevice>* LayerFactory<TDevice>::createSkipAddLayer(
 	throw std::runtime_error(std::string("The layer is not skipadd"));
     }
     if (layerType == "skipadd" || layerType == "skipini"){
-	return new SkipAddLayer<TDevice>(layerChild, weightsSection, precedingLayers);
+	return new SkipAddLayer<TDevice>(layerChild, weightsSection,
+					 precedingLayers, maxSeqLength);
     }else{
-	return new SkipCatLayer<TDevice>(layerChild, weightsSection, precedingLayers);
+	return new SkipCatLayer<TDevice>(layerChild, weightsSection,
+					 precedingLayers, maxSeqLength);
     }
 }
 
@@ -194,13 +220,17 @@ layers::Layer<TDevice>* LayerFactory<TDevice>::createSkipParaLayer(
 	throw std::runtime_error(std::string("Error in network.jsn"));
     }else{
 	if (layerType == "skippara_tanh"){
-	    return new SkipParaLayer<TDevice, Tanh>(layerChild,weightsSection,precedingLayers);
+	    return new SkipParaLayer<TDevice, Tanh>(layerChild, weightsSection,
+						    precedingLayers, maxSeqLength);
 	}else if(layerType == "skippara_logistic"){
-	    return new SkipParaLayer<TDevice, Logistic>(layerChild,weightsSection,precedingLayers);
+	    return new SkipParaLayer<TDevice, Logistic>(layerChild, weightsSection,
+							precedingLayers, maxSeqLength);
 	}else if(layerType == "skippara_identity"){
-	    return new SkipParaLayer<TDevice, Identity>(layerChild,weightsSection,precedingLayers);	    
+	    return new SkipParaLayer<TDevice, Identity>(layerChild, weightsSection,
+							precedingLayers, maxSeqLength);	    
 	}else if(layerType == "skippara_relu"){
-	    return new SkipParaLayer<TDevice, Relu>(layerChild, weightsSection, precedingLayers);
+	    return new SkipParaLayer<TDevice, Relu>(layerChild, weightsSection,
+						    precedingLayers, maxSeqLength);
 	}else{
 	    printf("Type of Skippara can only be: skippara_tanh, skippara_logistic,");
 	    printf("skippara_identity, skippara_relu\n");

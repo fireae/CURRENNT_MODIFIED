@@ -142,8 +142,9 @@ namespace {
 namespace layers {
 
     template <typename TDevice>
-    MulticlassClassificationLayer<TDevice>::MulticlassClassificationLayer(const helpers::JsonValue &layerChild, Layer<TDevice> &precedingLayer)
-        : PostOutputLayer<TDevice>(layerChild, precedingLayer, precedingLayer.size(), false)
+    MulticlassClassificationLayer<TDevice>::MulticlassClassificationLayer(const helpers::JsonValue &layerChild, Layer<TDevice> &precedingLayer, int maxSeqLength)
+        : PostOutputLayer<TDevice>(layerChild, precedingLayer, precedingLayer.size(),
+				   maxSeqLength, false)
     {
         if (this->size() == 1)
             throw std::runtime_error("The multiclass classification post output layer cannot be used for an output layer size of 1");

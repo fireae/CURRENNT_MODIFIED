@@ -207,6 +207,41 @@ namespace {
         }
     };
 
+    struct SumGradientsForExternalInut
+    {
+	// from the perspective of externalLayer
+	int featureDim;
+	int resolution;
+	int maxTimeLength;
+	int parall;
+	
+	real_t     *inputGrad;
+	const char *patTypesEx;
+	const char *patTypes;
+	
+	__host__ __device__ void operator() (const thrust::tuple<real_t&, int> &t) const
+	{
+	    int timeIdx  = t.get<1>() / featureDim;
+	    int dimIdx   = t.get<1>() % featureDim;
+	    int timeRel  = timeIdx    / parall;	    
+	    int paraIdx  = timeIdx    % parall;
+	    
+	    if (patTypesEx[timeIdx] == PATTYPE_NONE){
+		t.get<0>() = 0.0;
+		return;
+	    }else{
+		int idx;
+		for (int i = 0; i<resolution; i++){
+		    idx = (timeRel * resolution + i) * parall + paraIdx;
+		    if (idx < maxTimeLength && patTypes[idx] != PATTYPE_NONE)
+			t.get<0>() += inputGrad[idx * featureDim + dimIdx];
+		}
+		return;
+	    }
+	}
+
+    };
+
 }
 }
 
@@ -244,11 +279,13 @@ namespace layers{
     template <typename TDevice>
     WavNetCore<TDevice>::WavNetCore(const helpers::JsonValue &layerChild,
 				    const helpers::JsonValue &weightsSection,
-				    Layer<TDevice>           &precedingLayer)
+				    Layer<TDevice>           &precedingLayer,
+				    int maxSeqLength)
 	: TrainableLayer<TDevice>(layerChild, weightsSection, 0,
 				  ((layerChild->HasMember("contextDim")) ? 
 				   ((*layerChild)["contextDim"].GetInt()) : (0)) * 2,
-				  precedingLayer)
+				  precedingLayer, maxSeqLength)
+	, m_exInputLayer         (NULL)
     {
 	m_contextDim   = ((layerChild->HasMember("contextDim")) ? 
 			  ((*layerChild)["contextDim"].GetInt()) : (0));
@@ -279,7 +316,7 @@ namespace layers{
 	    m_contextMV = tmp;
 	}
 	
-	
+	m_contextCurMaxLength = -1;
     }
 
     template <typename TDevice>
@@ -297,54 +334,84 @@ namespace layers{
 	if (m_contextMVStr.size())
 	    (*layersArray)[layersArray->Size() - 1].AddMember("contextMV", m_contextMVStr.c_str(),
 							      allocator);
-	
+
     }
 
+
     template <typename TDevice>
-    void WavNetCore<TDevice>::loadSequences(const data_sets::DataSetFraction &fraction,
-					    const int nnState)
+    void WavNetCore<TDevice>::__loadContextBuff()
     {
-	TrainableLayer<TDevice>::loadSequences(fraction, nnState);
-	if (m_iniWavCoreC){
-	    if (m_contextDim == 0){
-		// not load anything
-		return;
-	    }
-	    // Load the external linguistic features
-	    if (fraction.externalInputSize() != m_contextDim){
-		printf("Linguistic feature dim  %d mismatch", fraction.externalInputSize());
-		throw std::runtime_error("Unmatched linguistic feature dimension");
-	    }
-	    if (m_contextBuf.size()<1){
-		throw std::runtime_error("Fail to initialize m_contextBuf");
-	    }
-	    {{
-		// PreLoad data
-		real_vector tmp(fraction.inputs().size() + fraction.exInputData().size(), 0.0);
-		thrust::copy(fraction.inputs().begin(), fraction.inputs().end(), tmp.begin());
-		thrust::copy(fraction.exInputData().begin(), fraction.exInputData().end(),
-			     tmp.begin() + fraction.inputs().size());
-	    
+	// load the data into the buffer
+	if (m_iniWavCoreC && m_contextDim > 0){
+	    //
+	    int dataPos = this->maxSeqLength() * this->parallelSequences();
+	    // Load the trainable external data from that layer
+	    if (m_exInputLayer != NULL)
+		thrust::copy(m_exInputLayer->outputs().begin(), m_exInputLayer->outputs().end(),
+			     m_contextRawBuf.begin() + dataPos);
+
+	    // Load the data to contextBuf
+	    {{	
 		internal::loadLinguisticFeature fn1;
-		fn1.featureDim = fraction.externalInputSize();
+		fn1.featureDim = m_contextDim;
 		fn1.paralNum   = this->parallelSequences();
-		fn1.maxFeatureLength = fraction.maxExInputLength();
-		fn1.sourceData = (helpers::getRawPointer(tmp) + + fraction.inputs().size());
-		fn1.frameIndex = helpers::getRawPointer(tmp);
+		fn1.maxFeatureLength = m_contextCurMaxLength;
+		fn1.sourceData = helpers::getRawPointer(m_contextRawBuf) + dataPos;
+		fn1.frameIndex = helpers::getRawPointer(m_contextRawBuf);
 		fn1.patTypes   = helpers::getRawPointer(this->patTypes());
+		
 		fn1.contextMV  = ((m_contextMV.size() == m_contextDim * 2)?
 				  helpers::getRawPointer(m_contextMV) : NULL);
 		
 		int n = this->curMaxSeqLength() * this->parallelSequences() * m_contextDim;
 		thrust::for_each(
-                 thrust::make_zip_iterator(
-		  thrust::make_tuple(m_contextBuf.begin(),
-				     thrust::counting_iterator<int>(0))),
-	         thrust::make_zip_iterator(
-		  thrust::make_tuple(m_contextBuf.begin()              + n,
-				     thrust::counting_iterator<int>(0) + n)),
-		 fn1);
+			thrust::make_zip_iterator(
+				thrust::make_tuple(m_contextBuf.begin(),
+						   thrust::counting_iterator<int>(0))),
+			thrust::make_zip_iterator(
+				thrust::make_tuple(m_contextBuf.begin()              + n,
+						   thrust::counting_iterator<int>(0) + n)),
+			fn1);
 	    }}
+	}else{
+	    return;
+	}
+    }
+    
+    template <typename TDevice>
+    void WavNetCore<TDevice>::loadSequences(const data_sets::DataSetFraction &fraction,
+					    const int nnState)
+    {
+	TrainableLayer<TDevice>::loadSequences(fraction, nnState);
+
+	
+	if (m_iniWavCoreC && m_contextDim > 0){
+	    
+	    if (m_contextRawBuf.size()<1)
+		throw std::runtime_error("Fail to initialize m_contextRawBuf");
+	    // load the input index
+	    thrust::copy(fraction.inputs().begin(),fraction.inputs().end(),m_contextRawBuf.begin());
+	    m_contextCurMaxLength = fraction.maxExInputLength();
+	    
+	    if (m_exInputLayer == NULL){
+		// Load the external linguistic features from fractionData
+		// check the fixed external data
+		if (fraction.externalInputSize() != m_contextDim){
+		    printf("Linguistic feature dim  %d mismatch", fraction.externalInputSize());
+		    throw std::runtime_error("Unmatched linguistic feature dimension");
+		}
+		// Note: __loadContextBuff also write to m_contextRawBuf
+		// but they are used in different cases
+		thrust::copy(fraction.exInputData().begin(), fraction.exInputData().end(),
+			     (m_contextRawBuf.begin() +
+			      this->maxSeqLength() * this->parallelSequences()));
+	    
+	    }else{
+		if (m_exInputLayer->size()!= m_contextDim){
+		    printf("Trainable external input dim  %d mismatch", m_exInputLayer->size());
+		    throw std::runtime_error("Unmatched trainable external feature dimension");
+		}
+	    }
 	}else{
 	    // no need to read the linguistic features again
 	}
@@ -361,24 +428,51 @@ namespace layers{
     template <typename TDevice>
     void WavNetCore<TDevice>::linkTargetLayer(Layer<TDevice> &targetLayer)
     {
-	if (targetLayer.name() == this->name()){
-	    // This is the initial wavNetCore layer
-	    m_iniWavCoreC = true;
-	    m_iniWavCPtr  = NULL;
-	    cpu_real_vector tmp(this->maxSeqLength()*this->parallelSequences() * m_contextDim, 0.0);
-	    m_contextBuf  = tmp;
-	    if (m_contextDim == 0)
-		printf("\nWavenet without conditional input");
+	if (targetLayer.type() == std::string("wavnetc")){
+	    //
+	    if (targetLayer.name() == this->name()){
+		// This is the initial wavNetCore layer
+		m_iniWavCoreC = true;
+		m_iniWavCPtr  = NULL;
+		
+		// Allocate the external data buffer, and index buffer
+		cpu_real_vector tmp(this->maxSeqLength() * this->parallelSequences() * m_contextDim,
+				    0.0);
+		m_contextBuf    = tmp;
+		tmp.resize(this->maxSeqLength()*this->parallelSequences()*(m_contextDim+1), 0.0);
+		m_contextRawBuf = tmp;
+		
+		if (m_contextDim == 0)
+		    printf("\nWavenet without conditional input");
+		
+	    }else{
+		// This is the following wavNetCore layers
+		// The following wavNetCore layers will directly read the m_contextBuf
+		// from the initial wavNetCore layer, no need to read it again
+		m_iniWavCoreC = false;
+		m_iniWavCPtr  = dynamic_cast<WavNetCore<TDevice>*>(&(targetLayer));
+		if (m_iniWavCPtr == NULL)
+		    throw std::runtime_error("Fail to link wavnetc");
+		m_contextBuf.clear();
+		m_contextRawBuf.clear();
+	    }
+	    m_exInputLayer = NULL;
+	    m_contextGraBuf.clear();
 	    
 	}else{
-	    // This is the following wavNetCore layers
-	    // The following wavNetCore layers will directly read the m_contextBuf
-	    // from the initial wavNetCore layer, no need to read it again
-	    m_iniWavCoreC = false;
-	    m_iniWavCPtr  = dynamic_cast<WavNetCore<TDevice>*>(&(targetLayer));
-	    if (m_iniWavCPtr == NULL)
-		throw std::runtime_error("Fail to link wavnetc");
-	    m_contextBuf.clear();
+	    // link the external trainable input layer
+	    if (m_iniWavCoreC){
+		m_exInputLayer = dynamic_cast<layers::TrainableLayer<TDevice>*>(&(targetLayer));
+		if (m_exInputLayer == NULL)
+		    throw std::runtime_error("Fail to link external layer for wavenetc");
+		if (m_contextDim != m_exInputLayer->size())
+		    throw std::runtime_error("External input layer size != contextDim");
+		printf("\nWavenet with external input layer %s", m_exInputLayer->name().c_str());
+		// a buffer to store gradients
+		m_contextGraBuf = m_contextBuf;
+	    }else{
+		throw std::runtime_error("Impossible bug");		
+	    }
 	}
     }
 
@@ -386,6 +480,12 @@ namespace layers{
     void WavNetCore<TDevice>::computeForwardPass(const int nnState)
     {
 	int timeLength = this->curMaxSeqLength() * this->parallelSequences();
+	
+	// Step0. initialze the gradients for external input
+	if (m_iniWavCoreC && this->m_exInputLayer != NULL)
+	    thrust::fill(m_contextGraBuf.begin(), m_contextGraBuf.end(), 0.0);
+	__loadContextBuff();
+	
 	
 	// Step1. transform the linguistic context
 	if (m_contextDim == 0){
@@ -452,6 +552,9 @@ namespace layers{
 	int shiftPre    = this->precedingLayer().outputBufPtrBias(effTimeStep, nnState);
 	int shiftCur    = this->outputBufPtrBias(effTimeStep, nnState);
 
+	// Load the data to contextBuf
+	if (timeStep == 0) __loadContextBuff();
+	
 	if (m_contextDim == 0){
 	    thrust::fill(m_coreBuf.begin() + (effTimeStep * this->size() - shiftCur) * 2,
 			 m_coreBuf.begin() +((effTimeStep * this->size() - shiftCur) * 2 + 
@@ -564,7 +667,8 @@ namespace layers{
                 fn);
 
 	}
-	
+
+	// Gradients to the transformation matrix
 	helpers::Matrix<TDevice> weightUpdatesMatrix(&this->_weightUpdates(),
 						     m_contextDim, this->size() * 2);
 	helpers::Matrix<TDevice> plOutputsMatrix(&(m_iniWavCoreC?(this->m_contextBuf):
@@ -573,7 +677,55 @@ namespace layers{
 	helpers::Matrix<TDevice> outputsMatrix  (&m_contextTanhBuf,
 						 this->size()*2, timeLength);
 	weightUpdatesMatrix.assignProduct(plOutputsMatrix, false, outputsMatrix, true);
+
 	
+	if (m_iniWavCoreC == false){
+	    // Gradients to the trainable external input layers
+	    if (m_iniWavCPtr->m_exInputLayer != NULL){
+		// accumulate the gradients from wavenets
+		helpers::Matrix<TDevice> gradBuf(&m_iniWavCPtr->m_contextGraBuf,
+						 m_contextDim, timeLength);
+		helpers::Matrix<TDevice> weightsMatrix(&this->weights(),
+						       m_contextDim, 2*this->size());		
+		helpers::Matrix<TDevice> outputsMatrix  (&m_contextTanhBuf,
+							 this->size()*2, timeLength);
+		gradBuf.addProduct(weightsMatrix, false, outputsMatrix, false);   
+	    }
+	}else{
+	    
+	    if (this->m_exInputLayer != NULL){
+		// accumulate the gradients from wavenets
+		helpers::Matrix<TDevice> gradBuf(&this->m_contextGraBuf,
+						 m_contextDim, timeLength);
+		helpers::Matrix<TDevice> weightsMatrix(&this->weights(),
+						       m_contextDim, 2*this->size());		
+		helpers::Matrix<TDevice> outputsMatrix  (&m_contextTanhBuf,
+							 this->size()*2, timeLength);
+		gradBuf.addProduct(weightsMatrix, false, outputsMatrix, false);
+		
+		// return the gradients to the previous layer
+		thrust::fill(this->m_exInputLayer->outputErrors().begin(),
+			     this->m_exInputLayer->outputErrors().end(), 0.0);
+		internal::SumGradientsForExternalInut fn2;
+		fn2.featureDim = this->m_exInputLayer->size();
+		fn2.resolution = this->m_exInputLayer->getResolution();
+		fn2.maxTimeLength = timeLength;
+		fn2.parall     = this->parallelSequences();
+		fn2.inputGrad  = helpers::getRawPointer(this->m_contextGraBuf);
+		fn2.patTypesEx = helpers::getRawPointer(this->m_exInputLayer->patTypes());
+		fn2.patTypes   = helpers::getRawPointer(this->patTypes());
+		int m = (this->m_exInputLayer->size() * this->m_exInputLayer->curMaxSeqLength() *
+			 this->parallelSequences());
+		thrust::for_each(
+		   thrust::make_zip_iterator(
+			thrust::make_tuple(this->m_exInputLayer->outputErrors().begin(),
+					   thrust::counting_iterator<int>(0))),
+		   thrust::make_zip_iterator(
+			thrust::make_tuple(this->m_exInputLayer->outputErrors().begin() + m,
+					   thrust::counting_iterator<int>(0) + m)),
+		   fn2);
+	    }
+	}
     }
 
     template <typename TDevice>

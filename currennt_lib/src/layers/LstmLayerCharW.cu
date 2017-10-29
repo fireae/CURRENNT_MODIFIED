@@ -1330,7 +1330,7 @@ namespace layers {
 		(CPNUM * helpers::safeJsonGetInt(layerChild, "mixNum")) +   
 		(blstm?2:1)*internal::tempSize(chaDim,helpers::safeJsonGetInt(layerChild,"size"))+ 
 		(chaDim * 4),
-		precedingLayer)
+		precedingLayer, precedingLayer.maxSeqLength())
     {
 
 	// Initialize CharW

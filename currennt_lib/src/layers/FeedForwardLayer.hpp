@@ -66,7 +66,8 @@ namespace layers {
         FeedForwardLayer(
             const helpers::JsonValue &layerChild, 
             const helpers::JsonValue &weightsSection,
-            Layer<TDevice>           &precedingLayer
+            Layer<TDevice>           &precedingLayer,
+	    int                       maxSeqLength
             );
 
         /**

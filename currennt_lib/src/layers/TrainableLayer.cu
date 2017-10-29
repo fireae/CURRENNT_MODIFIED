@@ -82,10 +82,11 @@ namespace layers {
 					    const helpers::JsonValue &weightsSection, 
                                             int inputWeightsPerBlock, 
 					    int internalWeightsPerBlock, 
-					    Layer<TDevice> &precedingLayer)
+					    Layer<TDevice> &precedingLayer,
+					    int maxSeqLength)
         : Layer<TDevice>           (layerChild,
 				    precedingLayer.parallelSequences(), 
-				    precedingLayer.maxSeqLength(),
+				    maxSeqLength,
 				    Configuration::instance().trainingMode())
         , m_precedingLayer         (precedingLayer)
         , m_inputWeightsPerBlock   (inputWeightsPerBlock)
@@ -110,11 +111,11 @@ namespace layers {
 	// extract the weights if they are given in the network file
         Cpu::real_vector weights;
 
-	if (m_learningRate == 0)
-	    printf("\n\tlearning rate = 0\n");
+	if (m_learningRate > -0.5)
+	    printf("\n\tlearning rate = %f", m_learningRate);
 	
         if (weightsSection.isValid() && weightsSection->HasMember(this->name().c_str())) {
-	    printf("Trainable layer: re-read weight");
+	    printf("\n\tTrainable layer: re-read weight");
             if (!weightsSection->HasMember(this->name().c_str()))
                 throw std::runtime_error(std::string("Missing weights section for layer '") + 
 					 this->name() + "'");
@@ -223,6 +224,7 @@ namespace layers {
 	m_weightMask    = weights;          // make it the same length as weights matrix 
 	m_weightNum     = weights.size(); 
 	m_weightMaskFlag= false;
+
     }
 
    
@@ -242,7 +244,7 @@ namespace layers {
     {
         return m_precedingLayer;
     }
-
+    
     template <typename TDevice>
     real_t TrainableLayer<TDevice>::bias() const
     {
@@ -403,7 +405,8 @@ namespace layers {
         Layer<TDevice>::exportLayer(layersArray, allocator);
         (*layersArray)[layersArray->Size() - 1].AddMember("bias", m_bias, allocator);
 	if (m_learningRate >= 0.0)
-	    (*layersArray)[layersArray->Size() - 1].AddMember("learningRate", m_bias, allocator);
+	    (*layersArray)[layersArray->Size() - 1].AddMember("learningRate", m_learningRate, allocator);
+
     }
     
     // Add 0511: re-initialize the weight (used for learning_rate checking)

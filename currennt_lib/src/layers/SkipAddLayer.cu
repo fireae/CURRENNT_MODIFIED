@@ -78,10 +78,10 @@ namespace layers{
     SkipAddLayer<TDevice>::SkipAddLayer(
 					const helpers::JsonValue &layerChild,
 					const helpers::JsonValue &weightsSection,
-					std::vector<Layer<TDevice>*> &precedingLayers
-					)
+					std::vector<Layer<TDevice>*> &precedingLayers,
+					int maxSeqLength)
 	// use preLayers[0] as fake preceding layers
-	: SkipLayer<TDevice>(layerChild, weightsSection, precedingLayers, false)
+	: SkipLayer<TDevice>(layerChild, weightsSection, precedingLayers, maxSeqLength, false)
 	, m_noiseRatio      (-1.0)
 	, m_flagSkipInit    (true)
     {
@@ -96,7 +96,7 @@ namespace layers{
 
 	    // previous layers are specified by preSkipLayer
 	    std::vector<std::string> tmpOpt;
-	    ParseStrOpt(m_previousSkipStr, tmpOpt, ",");
+	    misFuncs::ParseStrOpt(m_previousSkipStr, tmpOpt, ",");
 	    for (int cnt = 0 ; cnt < tmpOpt.size(); cnt++) {
 		BOOST_FOREACH (Layer<TDevice> *layer, precedingLayers) {
 		    if (layer->name() == tmpOpt[cnt]){
@@ -207,7 +207,7 @@ namespace layers{
 		     this->curMaxSeqLength() * this->parallelSequences() * this->size()),
 		    this->outputs().begin(),
 		    internal::tempPrg(-1.0 * m_noiseRatio, m_noiseRatio,
-				      (int)(GetRandomNumber() * 10000.0)));
+				      (int)(misFuncs::GetRandomNumber() * 10000.0)));
 	    }else{
 		thrust::fill(this->outputs().begin(), 
 			     (this->outputs().begin() + 

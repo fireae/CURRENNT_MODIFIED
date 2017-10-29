@@ -179,8 +179,9 @@ namespace layers {
     template <typename TDevice>
     MaxPoolingLayer<TDevice>::MaxPoolingLayer(const helpers::JsonValue &layerChild,
 					      const helpers::JsonValue &weightsSection,
-					      Layer<TDevice>           &precedingLayer)
-	: TrainableLayer<TDevice>(layerChild, weightsSection, 0, 0, precedingLayer)
+					      Layer<TDevice>           &precedingLayer,
+					      int maxSeqLength)
+	: TrainableLayer<TDevice>(layerChild, weightsSection, 0, 0, precedingLayer, maxSeqLength)
     {
 
 	throw std::runtime_error("Maxpooling is not fully implemented");
@@ -198,11 +199,11 @@ namespace layers {
 	}
 
 	m_width_H.clear();
-	ParseIntOpt(m_width, m_width_H);
+	misFuncs::ParseIntOpt(m_width, m_width_H);
 	m_width_D = m_width_H;
 
 	m_stride_H.clear();
-	ParseIntOpt(m_stride, m_stride_H);
+	misFuncs::ParseIntOpt(m_stride, m_stride_H);
 	m_stride_D = m_stride_H;
 
 	if (m_width_H.size() != this->size() ||
@@ -210,7 +211,7 @@ namespace layers {
 	    throw std::runtime_error("width and stride of maxpooling not equal to layer size");
 	}
 	
-	m_maxWidth =  MaxCpuIntVec(m_width_H);
+	m_maxWidth =  misFuncs::MaxCpuIntVec(m_width_H);
 	m_maxPos.resize(precedingLayer.outputs().size() * (2 * m_maxWidth + 1), 0);
 
 	if (this->precedingLayer().getSaveMemoryFlag())

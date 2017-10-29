@@ -3638,7 +3638,8 @@ namespace layers {
 	    thrust::counting_iterator<unsigned int> index_sequence_begin(0);
 	    thrust::transform(index_sequence_begin, index_sequence_begin + n,
 			      noiseVec.begin(),
-			      internal::genNoise(0.0, 1.0, (int)(GetRandomNumber()*1000.0)));
+			      internal::genNoise(0.0, 1.0,
+						 (int)(misFuncs::GetRandomNumber()*1000.0)));
 	}
 	
 	//real_t randomSeed;
@@ -3706,7 +3707,7 @@ namespace layers {
     {
 	real_t randomSeed;
 	if (this->m_genMethod >= NN_SOFTMAX_GEN_SAMP)
-	    randomSeed = GetRandomNumber();	    
+	    randomSeed = misFuncs::GetRandomNumber();	    
 	else
 	    randomSeed = 0.0;
 	
