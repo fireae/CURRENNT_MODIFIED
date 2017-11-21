@@ -220,12 +220,14 @@ int ReadRealData(const std::string dataPath, Cpu::real_vector &data)
     return numEle;
 }
 
-int getResoLength(const int maxSeqLength, const int timeResolution)
+int getResoLength(const int maxSeqLength, const int timeResolution, const int parallel)
 {
     if (timeResolution == 1)
 	return maxSeqLength;
-    else
-	return maxSeqLength / timeResolution + ((maxSeqLength % timeResolution>0)?1:0);
+    else{
+	int temp = maxSeqLength / parallel;
+	return (temp / timeResolution + ((temp % timeResolution>0) ? 1:0)) * parallel;
+    }
 }
 
 }

@@ -173,6 +173,9 @@ Configuration::Configuration(int argc, const char *argv[])
         ("revert_std",     
 	 po::value(&m_revertStd)->default_value(true),                        
 	 "de-normalize the generated data using mean and variance in data.nc (default: true)")
+        ("output_htk",     
+	 po::value(&m_outputHtk)->default_value(true),                        
+	 "whether generate HTK output (big-endian, float32) (default: true)")
 	/* Add 16-04-08 to tap in the output of arbitary layer */
 	("output_from",    
 	 po::value(&m_outputTapLayer)->default_value(-1),                     
@@ -200,6 +203,12 @@ Configuration::Configuration(int argc, const char *argv[])
 	 std::string(
 	      std::string("Option for inference in VAE. When z is 2-Dim and vaeManifold=1, ") +
 	      std::string("vae layer will read in the code z from fraction.outputs()")).c_str())
+	("vaeEncoderOutputLayer",
+	 po::value(&m_vaeEncoderOutputLayer)->default_value(-1),
+	 std::string("From which layer the code (latent variables) should be generated?").c_str())
+	("vaeCodeInputDir",
+	 po::value(&m_vaeCodeInputDir)->default_value(""),
+	 std::string("Directory of latent variables that will be fed into VAE decoder").c_str())
 	;
 
     po::options_description trainingOptions("Training options");
@@ -1131,6 +1140,11 @@ bool Configuration::revertStd() const
     return m_revertStd;
 }
 
+bool Configuration::outputHtk() const
+{
+    return m_outputHtk;
+}
+
 const real_t& Configuration::highwayGateBias() const
 {
     return m_highwayBias;
@@ -1423,4 +1437,15 @@ const int& Configuration::vaePlotManifold() const
 const std::string& Configuration::resolutions() const
 {
     return m_resolutions;
+}
+
+const int& Configuration::vaeEncoderOutputLayer() const
+{
+    return m_vaeEncoderOutputLayer;
+}
+
+
+const std::string& Configuration::vaeCodeInputDir() const
+{
+    return m_vaeCodeInputDir;
 }

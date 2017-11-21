@@ -28,6 +28,8 @@
 #include "layers/InputLayer.hpp"
 #include "layers/PostOutputLayer.hpp"
 #include "layers/FeedBackLayer.hpp"
+#include "layers/vqLayer.hpp"
+
 #include "helpers/JsonClasses.hpp"
 #include "MacroDefine.hpp"
 #include "helpers/misFuncs.hpp"
@@ -499,7 +501,7 @@ NeuralNetwork<TDevice>::NeuralNetwork(
 	    }else if (layerType == "featmatch"){
 		// for GAN
 		m_featMatchLayer = counter;
-	    }else if (layerType == "vae"){
+	    }else if (layerType == "vae" || layerType == "vqlayer"){
 		// for vae
 		m_vaeLayer       = counter;
 	    }else if (layerType == "wavnetc" && tmp_wavNetCore < 0){
@@ -808,7 +810,20 @@ NeuralNetwork<TDevice>::NeuralNetwork(
 		}
 	    }
 	}
-	
+
+	// Check the tim resolution
+	for (size_t i = 1; i < m_layers.size(); ++i){
+	    if (m_layers[i]->getResolution() != m_layers[i-1]->getResolution()){
+		// Only allow Operator, externalLoader,
+		//   feedback (without reading previous output)
+		if (m_layers[i]->type() != std::string("operator") &&
+		    m_layers[i]->type() != std::string("externalloader") &&
+		    m_layers[i]->type() != std::string("feedback")){
+		    printf("Invalid time resolution %s", m_layers[i]->name().c_str());
+		    throw std::runtime_error("Not operator, externalloader or feedback layer");
+		}
+	    }
+	}
     }
     catch (const std::exception &e) {
         throw std::runtime_error(std::string("Invalid network file: ") + e.what());
@@ -1010,15 +1025,17 @@ void NeuralNetwork<TDevice>::computeForwardPass(const int curMaxSeqLength,
 		if (m_vaeLayer > 0){
 		    // If vae exists, don't dropout until after VAE layers
 		    // ComputeForward
+		    int cnt = 0;
 		    BOOST_FOREACH (boost::shared_ptr<layers::Layer<TDevice> > &layer, m_layers){
 			layer->computeForwardPass(m_trainingState);
-			if (layer->type() == "vae") break;
+			if (cnt == m_vaeLayer) break;
+			cnt++;
 		    }
 		    // Drop out the feedback data randomly
 		    typename TDevice::real_vector temp = randNum;
 		    this->postOutputLayer().retrieveFeedBackData(temp, scheduleSampOpt);
 		    // computeforward after VAE layers
-		    int cnt = 0;
+		    cnt = 0;
 		    BOOST_FOREACH (boost::shared_ptr<layers::Layer<TDevice> > &layer, m_layers){
 			if (cnt > m_vaeLayer)
 			    layer->computeForwardPass(m_trainingState);
@@ -1146,12 +1163,33 @@ void NeuralNetwork<TDevice>::computeForwardPassGen(const int curMaxSeqLength,
 	real_t sampThreshold = 0.0;
 	int    cnt           = 0;
 	//int    beamSize      = 0;
-	
-	// Forward computation for layers before Feedback
-	BOOST_FOREACH (boost::shared_ptr<layers::Layer<TDevice> > &layer, m_layers){
-	    if (cnt == m_firstFeedBackLayer) break; 
-	    layer->computeForwardPass(m_trainingState);
-	    cnt++;
+
+	if (config.vaeEncoderOutputLayer() < 0){
+	    // For a normal network with feedback layers, layers without time dependency
+	    // can be simultaneously calculated with all frames
+	    // Forward computation for layers before Feedback
+	    BOOST_FOREACH (boost::shared_ptr<layers::Layer<TDevice> > &layer, m_layers){
+		if (cnt == m_firstFeedBackLayer) break; 
+		layer->computeForwardPass(m_trainingState);
+		cnt++;
+	    }
+	}else{
+	    // For a VAE network, the feedback layer in the encoder should take the
+	    // golden target features as input if what we want is just to extract latent
+	    // variables from the network. In this case, config.vaeEncoderOutputlayer() is
+	    // used to specify the layer to generate the latent variables
+	    if (config.vaeEncoderOutputLayer() >= m_layers.size())
+		throw std::runtime_error("vaeEncoderOutputLayer is larger than network depth");
+
+	    // Feedback
+	    this->postOutputLayer().retrieveFeedBackData();
+	    // Assume no dropout here
+	    BOOST_FOREACH (boost::shared_ptr<layers::Layer<TDevice> > &layer, m_layers){
+		if (cnt > config.vaeEncoderOutputLayer()) break; 
+		layer->computeForwardPass(m_trainingState);
+		cnt++;
+	    }
+	    return;
 	}
 
 	// Parameter for genreation
@@ -1193,6 +1231,8 @@ void NeuralNetwork<TDevice>::computeForwardPassGen(const int curMaxSeqLength,
 	case NN_FEEDBACK_BEAMSEARCH:
 	    methodCode = NN_FEEDBACK_SC_MAXONEHOT;
 	    //beamSize   = (int)scheduleSampPara;
+	    if (config.vaeEncoderOutputLayer() >= 0)
+		throw std::runtime_error("vaeEncoderOutputLayer is implemented for beamsearch");
 	    break;
 	}
 
@@ -1200,13 +1240,18 @@ void NeuralNetwork<TDevice>::computeForwardPassGen(const int curMaxSeqLength,
 	//Generation
 	// Normal generation (Greedy)
 	if (scheduleSampOpt != NN_FEEDBACK_BEAMSEARCH){
+	    int feedBackFrom = ((config.vaeEncoderOutputLayer() >= 0) ?
+				(config.vaeEncoderOutputLayer()+1):m_firstFeedBackLayer);
+	    
 	    for (int timeStep = 0, cnt = 0; timeStep < curMaxSeqLength; timeStep ++, cnt = 0){
 		BOOST_FOREACH (boost::shared_ptr<layers::Layer<TDevice> > &layer, m_layers){
-		    if (cnt >= m_firstFeedBackLayer){
+		    if (cnt >= feedBackFrom){
 			// prepare the matrix (for rnn, lstm)
 			layer->prepareStepGeneration(timeStep);
 			// compute for 1 frame
-			layer->computeForwardPass(timeStep, m_trainingState);    
+			if (timeStep % (layer->getResolution()) == 0)
+			    layer->computeForwardPass(timeStep/layer->getResolution(),
+						      m_trainingState);
 		    }
 		    cnt++;
 		}
@@ -1429,8 +1474,12 @@ real_t NeuralNetwork<TDevice>::calculateError(const bool flagGenerateMainError) 
     }else if (m_vaeLayer > 0){
 	if (flagGenerateMainError)
 	    return static_cast<layers::PostOutputLayer<TDevice>&>(*m_layers.back()).calculateError();
-	else
+	else if (m_layers[m_vaeLayer]->type() == "vae")
 	    return static_cast<layers::PostOutputLayer<TDevice>&>(*m_layers[m_vaeLayer]).calculateError();
+	else if (m_layers[m_vaeLayer]->type() == "vqlayer")
+	    return static_cast<layers::vqLayer<TDevice>&>(*m_layers[m_vaeLayer]).codeError();
+	else
+	    return 0;
     }else{
 	if(flagGenerateMainError)
 	    return static_cast<layers::PostOutputLayer<TDevice>&>(*m_layers.back()).calculateError();

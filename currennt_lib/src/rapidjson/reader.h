@@ -274,7 +274,7 @@ private:
 
 		for (SizeType memberCount = 0;;) {
 			if (stream.Peek() != '"') {
-				RAPIDJSON_PARSE_ERROR("Name of an object member must be a string", stream.Tell());
+			    RAPIDJSON_PARSE_ERROR("Name of an object member must be a string", stream.Tell());
 				break;
 			}
 

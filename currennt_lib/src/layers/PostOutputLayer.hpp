@@ -75,7 +75,7 @@ namespace layers {
 
 	/* Add 1012 for */
 	real_vector&     _mvVector();
-	
+	real_vector&     _dataBuffer();
 	const int&       _postLayerType();
 	
     public:

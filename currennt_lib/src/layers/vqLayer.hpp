@@ -27,33 +27,16 @@
 /*
  */
 
-#ifndef LAYERS_OPERATIONLAYER_HPP
-#define LAYERS_OPERATIONLAYER_HPP
+#ifndef LAYERS_VQLAYER_HPP
+#define LAYERS_VQLAYER_HPP
 
 
 #include "TrainableLayer.hpp"
 
 namespace layers{
-    /*
-      Modes of OperationLayer
-      
-      if LastShotMode is on
-         do lastShotMode 1 2 3 4
 
-      else if TimeResolutionMode is on
-         options is decided by the time resolution of the previous and follow layers
-	 option1: down samping 
-	 option2: up sampling 
-
-      else
-
-         option1: concatenate noise vector
-	 option2: scale the input vector
-	 option3: duplicate input vector to N vectors
-      
-     */
     template <typename TDevice>
-    class OperationLayer : public TrainableLayer<TDevice>
+    class vqLayer : public TrainableLayer<TDevice>
     {
 	typedef typename TDevice::real_vector     real_vector;
 	typedef typename Cpu::real_vector         cpu_real_vector;
@@ -62,37 +45,21 @@ namespace layers{
 	typedef typename Cpu::int_vector          cpu_int_vector;
 
     public:
-	real_vector     m_setZeroVec_D;
-	cpu_real_vector m_setZeroVec_H;
-	std::string     m_setZeroStr;
 
-	int             m_noiseSize;
-	real_t          m_noiseMag;
-	real_vector     m_noiseInput;
-	int             m_noiseRepeat;
-
-	int             m_outDupRate;
-
-	real_vector     m_oneVec;
-	int             m_lastShot;
+	const int    m_vqCodeBookSize;   // size of the code book
+	real_vector  m_disMatrix;        // distance matrix
+	int_vector   m_selectedIdx;
+	real_t       m_betaPara;
+	real_t       m_codeError;
 	
-	cpu_int_vector  m_seqLengthBuffH;  // the length of each sequence
-	int_vector      m_seqLengthBuffD;  // the length of each sequence
-	
-	cpu_int_vector  m_segBoundaryH;    // position of the end of segment (for each frame)
-	int_vector      m_segBoundaryD;
-	int             m_segLevel;        // which level to be used ?
-
-	int             m_changeTimeRes;   // whether to turn of time resolution change
-	
-	OperationLayer(
+	vqLayer(
 	    const helpers::JsonValue &layerChild,
 	    const helpers::JsonValue &weightsSection,
             Layer<TDevice>           &precedingLayer,
 	    int                       maxSeqLength
 	);
 
-	virtual ~OperationLayer();
+	virtual ~vqLayer();
 	
 	
 	virtual const std::string& type() const;
@@ -106,11 +73,14 @@ namespace layers{
 	// NN backward
 	virtual void computeBackwardPass(const int nnState);
 
+	// Load sequences
+        virtual void loadSequences(const data_sets::DataSetFraction &fraction, const int nnState);
+
 	// export
 	virtual void exportLayer(const helpers::JsonValue &layersArray, 
 				 const helpers::JsonAllocator &allocator) const;
-	//
-	virtual void loadSequences(const data_sets::DataSetFraction &fraction, const int nnState);
+
+	virtual real_t codeError() const;
     };
     
 }

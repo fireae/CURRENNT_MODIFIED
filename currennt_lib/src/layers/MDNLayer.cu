@@ -1132,7 +1132,7 @@ namespace layers {
 	if (m_probBiasDim > 0 && Configuration::instance().generatingMode() > 0){
 	    
 	    if (fraction.numSequences() > 1)
-		throw std::runtime_error("Please turn of parallel mode");
+		throw std::runtime_error("Please turn off parallel mode");
 
 	    int i = 0;
 	    std::string fileName = m_probBiasDir + "/" + fraction.seqInfo(i).seqTag + ".bin";

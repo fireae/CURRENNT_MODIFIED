@@ -4,29 +4,32 @@
 This is a modified version of CURRENNT, by Xin WANG, wangxin@nii.ac.jp.
 
 ------- WHAT'S NEW ---------
-1. Components for general adverserial network (GAN)
+1. Components for wavenet 
+   Please check CURRENNT_SCRIPTS on the usage of wavenet
+
+2. Components for general adverserial network (GAN)
    Please check CURRENNT_SCRIPTS on the usage of GAN 
 
-2. 1-D and 2-D convolution layer
+3. 1-D and 2-D convolution layer
 
-3. Plain RNN and Clock RNN, Clock LSTM
+4. Plain RNN and Clock RNN, Clock LSTM
    Koutnik, J., Greff, K., Gomez, F., & Schmidhuber, J. (2014). A Clockwork RNN. 
 
-4. Highway network abd Residual network
+5. Highway network abd Residual network
    Srivastava, Rupesh K., Klaus Greff, and Jurgen Schmidhuber. "Training very
    deep networks." Advances in Neural Information Processing Systems. 2015.
 
-5. Mixture density network
+6. Mixture density network
    Bishop, Christopher M. "Mixture density networks." (1994).
    
    Autoregressive mixture density network
    Ref. my work on ARRMDN, ICASSP 2017 (available at tonywangx.github.io)
 
-6. Output feedback loops (for Quantized F0 model)
+7. Output feedback loops (for Quantized F0 model)
 
-7. Multi-stream network (based on weight mask)
+8. Multi-stream network (based on weight mask)
 
-8. Batch normalization
+9. Batch normalization
    (simply add "batchnorm": 1 to feedforward layers in network.jsn)
 
 Other features:
@@ -43,11 +46,10 @@ Please take a look at the CURRENNT_SCRIPTS on my github. There are examples rela
 to the above modification.
 
 
-------- INSTALL  ---------
+------- COMPILE & INSTALL  ---------
 1. Please modify "/home/smg/wang/TOOL/bin/boost" & "/home/smg/wang/TOOL/bin/netcdf/lib"
    in CMakeLists.txt to your local boost and netcdf directory before compiling
 2. Please follow the original INSTALL of CURRENNT 
-
 
 +=============================================================================+
 | Original README of CURRENNT
@@ -106,11 +108,17 @@ To build CURRENNT execute the following commands:
 
 #> make
 
-This produces the executable file 'currennt'.
+This produces the executable file 'currennt'. You might get many warnings like 
+'Cannot tell what pointer points to, assuming global memory space'. These are 
+totally OK and there seems to be no way to suppress them.
 
-You might get many warnings like 'Cannot tell what pointer points to, assuming
-global memory space'. These are totally OK and there seems to be no way to
-suppress them.
+If you want to built a CURRENNT for debugging:
+#> cd CURRENNT_MODIFIED
+#> mkdir build && cd build
+#> cmake ..
+Then, open ./CMakeCache.txt, delete all the flags "-Os", "-O3", "-O2", and add
+"-g" to all the FLAGS. (This may be stupid, since I don't know much about CMake)
+#> make
 
 
 +=============================================================================+

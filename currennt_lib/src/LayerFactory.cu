@@ -56,6 +56,7 @@
 #include "layers/FeedBackLayer.hpp"
 #include "layers/wavNetCore.hpp"
 #include "layers/ExternalLoader.hpp"
+#include "layers/vqLayer.hpp"
 #include <stdexcept>
 
 
@@ -130,6 +131,9 @@ layers::Layer<TDevice>* LayerFactory<TDevice>::createLayer(
     else if (layerType == "externalloader")
     	return new ExternalLoader<TDevice>(layerChild, weightsSection,
 					   *precedingLayer, maxSeqLength);
+    else if (layerType == "vqlayer")
+    	return new vqLayer<TDevice>(layerChild, weightsSection,
+				    *precedingLayer, maxSeqLength);
     /*
     // not implemented yet
     else if (layerType == "lstmw")

@@ -282,15 +282,24 @@ namespace internal {
 	ifs.seekg(0, std::ios::beg);
 	
 	if (etPos == -1) etPos = numEle;
-	if (stPos >= etPos || stPos < 0 || etPos > numEle)
+	if (stPos >= etPos || stPos < 0)
 	    throw std::runtime_error(std::string("Fail to read ")+dataPath);
+	if ((etPos - stPos) > numEle){
+	    printf("\nWARNING: %s has %ld data, but less than %ld.\n",
+		   dataPath.c_str(), numEle, (etPos - stPos));
+	    printf("\tWARNING: Please check input/output idx. Or those data will be set to 0.0.\n");
+	}
 
 	// read in the data
 	data = Cpu::real_vector(etPos - stPos, 0);
 	ifs.seekg(stPos * sizeof(real_t), std::ios::beg);
 	for (long int i = 0; i<(etPos-stPos); i++){
-	    ifs.read ((char *)&tempVal, sizeof(real_t));
-	    data[i] = tempVal;
+	    if (i >= numEle){
+		data[i] = 0.0;
+	    }else{
+		ifs.read ((char *)&tempVal, sizeof(real_t));
+		data[i] = tempVal;
+	    }
 	}
 	//thrust::copy(tempVec.begin(), tempVec.end(), data.begin());
 	ifs.close();
@@ -320,19 +329,29 @@ namespace internal {
 	numEle  = (numEleE-numEleS)/sizeof(real_t);
 	ifs.seekg(0, std::ios::beg);
 	
-	if (etPos == -1) etPos = numEle;
-	if (stPos >= etPos || stPos < 0 || etPos > numEle)
+	if (etPos == -1)
+	    etPos = numEle;
+	if (stPos >= etPos || stPos < 0)
 	    throw std::runtime_error(std::string("Fail to read in readReadlDataAndFill ")+dataPath);
- 
+	if ((etPos - stPos) > numEle){
+	    printf("\nWARNING: %s has %ld data, but less than %ld.\n",
+		   dataPath.c_str(), numEle, (etPos - stPos));
+	    printf("\tWARNING: Please check input/output idx. Or those data will be set to 0.0.\n");
+	}
+
 	// read in the data
 	long int timeIdx, dimIdx;
 	ifs.seekg(stPos * sizeof(real_t), std::ios::beg);
 	
 	for (long int i = 0; i < (etPos-stPos); i++){
-	    ifs.read ((char *)&tempVal, sizeof(real_t));
-	    timeIdx = i / dataDim;
-	    dimIdx  = i % dataDim;
-	    buff[ timeIdx * bufDim + dataStartDim + dimIdx ] = tempVal;
+	    if (i >= numEle)
+		buff[ timeIdx * bufDim + dataStartDim + dimIdx ] = 0.0;
+	    else{
+		ifs.read ((char *)&tempVal, sizeof(real_t));
+		timeIdx = i / dataDim;
+		dimIdx  = i % dataDim;
+		buff[ timeIdx * bufDim + dataStartDim + dimIdx ] = tempVal;
+	    }
 	}
 	//thrust::copy(tempVec.begin(), tempVec.end(), data.begin());
 	ifs.close();
@@ -551,35 +570,26 @@ namespace data_sets {
         int context_right  = Configuration::instance().inputRightContext();
         int context_length = context_left + context_right + 1;
         int output_lag     = Configuration::instance().outputTimeLag();
-
-	Cpu::int_vector resolutionBuf;
-	if (Configuration::instance().resolutions().size())
-	    misFuncs::ParseIntOpt(Configuration::instance().resolutions(), resolutionBuf);
-	else
-	    resolutionBuf.clear();
 	
 	
         //printf("(%d) Making task firstSeqIdx=%d...\n", (int)m_sequences.size(), firstSeqIdx);
         boost::shared_ptr<DataSetFraction> frac(new DataSetFraction);
 
 	frac->m_inputPatternSize  = m_inputPatternSize * context_length;
-	
         frac->m_outputPatternSize = m_outputPatternSize;
         frac->m_maxSeqLength      = std::numeric_limits<int>::min();
         frac->m_minSeqLength      = std::numeric_limits<int>::max();
 
-	// Add 0815: info of the external input data
+	// Add 0815: info of the external input/output data
 	if (m_exInputFlag){
 	    if (m_exInputDims.size())
 		frac->m_exInputDim        = misFuncs::SumCpuIntVec(m_exInputDims);
 	    else
 		frac->m_exInputDim        = m_exInputDim;
 	}
-
 	if (m_exOutputFlag){
 	    frac->m_exOutputDim        = misFuncs::SumCpuIntVec(m_exOutputDims);
 	}
-
 	frac->m_maxExInputLength  = std::numeric_limits<int>::min();
 	frac->m_minExInputLength  = std::numeric_limits<int>::max();
 	frac->m_maxExOutputLength  = std::numeric_limits<int>::min();
@@ -636,17 +646,23 @@ namespace data_sets {
 	
 	
 	// prepare the resolution information buffer
-	int patTypesResoLength = 0;
-	for (int resoIdx = 0; resoIdx < resolutionBuf.size(); resoIdx++){
+	int patTypesResoLength = 0;	
+	frac->m_resolutionBuffer.clear();
+	for (int resoIdx = 0; resoIdx < m_resolutionBuf.size(); resoIdx++){
 	    DataSetFraction::reso_info tempResoBuf;
-	    tempResoBuf.resolution = resolutionBuf[resoIdx];
+	    tempResoBuf.resolution = m_resolutionBuf[resoIdx];
 	    tempResoBuf.bufferPos  = patTypesResoLength;
 	    tempResoBuf.length     = misFuncs::getResoLength(frac->m_patTypes.size(),
-							     resolutionBuf[resoIdx]);
+							     m_resolutionBuf[resoIdx],
+							     m_parallelSequences);
 	    patTypesResoLength += tempResoBuf.length;
 	    frac->m_resolutionBuffer.push_back(tempResoBuf);
 	}
-	frac->m_patTypesLowTimeRes.resize(patTypesResoLength, PATTYPE_NONE);
+	if (patTypesResoLength > 0){
+	    frac->m_patTypesLowTimeRes.resize(patTypesResoLength, PATTYPE_NONE);
+	}else{
+	    frac->m_patTypesLowTimeRes.clear();
+	}
 	
 	// Dust #2017101207
 	
@@ -833,10 +849,20 @@ namespace data_sets {
 		// also fill in the resolution buffer
 		for (int resoIdx = 0; resoIdx < frac->m_resolutionBuffer.size(); resoIdx++){
 		    int dataPos = timestep / frac->m_resolutionBuffer[resoIdx].resolution;
+		    
+		    // actual position in the buffer
 		    dataPos  = dataPos * m_parallelSequences + i;
 		    dataPos += frac->m_resolutionBuffer[resoIdx].bufferPos;
-		    frac->m_patTypesLowTimeRes[dataPos] =
-			(frac->m_patTypesLowTimeRes[dataPos]==PATTYPE_FIRST?PATTYPE_FIRST:patType);
+		    
+		    if (timestep < frac->m_resolutionBuffer[resoIdx].resolution){
+			// the start frame 
+			frac->m_patTypesLowTimeRes[dataPos] = PATTYPE_FIRST;
+		    }else if (dataPos < frac->m_patTypesLowTimeRes.size()){
+			frac->m_patTypesLowTimeRes[dataPos] = patType;
+		    }else{	    
+			printf("%dvs%ld ",dataPos, frac->m_patTypesLowTimeRes.size());
+			throw std::runtime_error("Error in preparing patTypes for resolutions");
+		    }
 		}
             }
         }
@@ -964,6 +990,12 @@ namespace data_sets {
 	    m_exOutputDims.clear();
 	}
 	
+	if (Configuration::instance().resolutions().size()){
+	    Cpu::int_vector temp;
+	    misFuncs::ParseIntOpt(Configuration::instance().resolutions(), temp);
+	    m_resolutionBuf = temp;
+	}else
+	    m_resolutionBuf.clear();
 	
         // Preparation: cache data
         std::string tmpFileName = "";
@@ -1240,6 +1272,7 @@ namespace data_sets {
 				dimCnt += m_exInputDims[i];
 				
 			    }
+			    // Make sure #externalData = Length * dim
 			    assert(seq->exInputLength * seq->exInputDim == cnt);
 			    seq->exInputBegin    = m_cacheFile.tellp();
 			    m_cacheFile.write((const char *)(exDataBuf.data()),
@@ -1302,18 +1335,26 @@ namespace data_sets {
                 }
 
                 if (first_file) {
-                    // retrieve output means + standard deviations, if they exist
-                    try {
-                        m_outputMeans  = internal::readNcArray<real_t>(
-						   ncid, "outputMeans",  0, m_outputPatternSize);
-                        m_outputStdevs = internal::readNcArray<real_t>(
-                                                   ncid, "outputStdevs", 0, m_outputPatternSize);
-                    }
-                    catch (std::runtime_error& err) {
-                        // Will result in "do nothing" when output unstandardization is used ...
-                        m_outputMeans  = Cpu::real_vector(m_outputPatternSize, 0.0f);
-                        m_outputStdevs = Cpu::real_vector(m_outputPatternSize, 1.0f);
-                    }
+		    if (m_exOutputFlag){
+			// mv will not encoded in data.nv when external output is used
+			m_outputMeans  = Cpu::real_vector(misFuncs::SumCpuIntVec(m_exOutputDims),
+							  0.0f);
+			m_outputStdevs = Cpu::real_vector(misFuncs::SumCpuIntVec(m_exOutputDims),
+							  1.0f);
+		    }else{
+			// retrieve output means + standard deviations, if they exist
+			try {
+			    m_outputMeans  = internal::readNcArray<real_t>(
+						ncid, "outputMeans",  0, m_outputPatternSize);
+			    m_outputStdevs = internal::readNcArray<real_t>(
+                                                ncid, "outputStdevs", 0, m_outputPatternSize);
+			}
+			catch (std::runtime_error& err) {
+			    // when output unstandardization is used ...
+			    m_outputMeans  = Cpu::real_vector(m_outputPatternSize, 0.0f);
+			    m_outputStdevs = Cpu::real_vector(m_outputPatternSize, 1.0f);
+			}
+		    }
                 }
 
                 // create next fraction data and start the thread
@@ -1410,7 +1451,7 @@ namespace data_sets {
         return m_totalSequences;
     }
 
-    int DataSet::totalTimesteps() const
+    unsigned long int DataSet::totalTimesteps() const
     {
         return m_totalTimesteps;
     }

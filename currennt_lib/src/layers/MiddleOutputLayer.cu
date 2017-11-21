@@ -196,6 +196,45 @@ namespace {
 	    return error;
 	}
     };
+
+
+    struct loadExternalData
+    {
+	int  featureDim;
+	int  paralNum;
+	int  maxFeatureLength;
+	int  resolution;
+	
+	const real_t *sourceData;
+	const real_t *frameIndex;
+	const real_t *contextMV;
+	const char   *patTypes;
+	
+	__host__ __device__ void operator() (const thrust::tuple<real_t&, int> &t) const
+	{
+	    int dimIdx  = t.get<1>() % featureDim;
+	    int timeIdx = t.get<1>() / featureDim;
+	    int paralIdx= timeIdx    % paralNum;
+
+	    if (patTypes[timeIdx] == PATTYPE_NONE)
+		t.get<0>() = 0.0;
+	    else{
+		int featIdx = frameIndex[timeIdx * resolution] * paralNum + paralIdx;
+		if (frameIndex[timeIdx * resolution] >= maxFeatureLength){
+		    t.get<0>() = 0.0;
+		}else if(contextMV){
+		    t.get<0>() = ((sourceData[featIdx * featureDim + dimIdx] - contextMV[dimIdx])/
+				  ((contextMV[dimIdx + featureDim]<1e-5f) ?
+				   (1.0): (contextMV[dimIdx + featureDim])));
+		}else{
+		    t.get<0>() = sourceData[featIdx * featureDim + dimIdx];
+		}
+		
+	    }
+	}
+    };
+
+
     
 }
 }
@@ -254,6 +293,7 @@ namespace layers{
 	
 	if (this->precedingLayer().getSaveMemoryFlag())
 	    throw std::runtime_error("layer before MiddleOutput is reduced in mem");
+
     }
 
     template <typename TDevice>
@@ -308,15 +348,47 @@ namespace layers{
 	    throw std::runtime_error("Error unknown nnState");
 	}
 	m_stateRandom = tmp;
-
 	
-	if (this->_outputs().empty())
+	if (this->_outputs().empty() || m_natPriTarget.empty())
 	    throw std::runtime_error("Error no output buffer in middleoutput");
-	else if (fraction.outputPatternSize() != this->size()){
-	    throw std::runtime_error("Error middle layersize is unequal to data.nc output size");
-	}else{
+
+	if (fraction.outputPatternSize() == this->size()){
 	    thrust::copy(fraction.outputs().begin(), fraction.outputs().end(),
 			 m_natPriTarget.begin());
+	}else if (fraction.externalOutputSize() == this->size()){
+	    this->_dataBuffer().resize(fraction.outputs().size() +
+				       fraction.exOutputData().size(), 0.0);
+	    thrust::copy(fraction.outputs().begin(),
+			 fraction.outputs().end(),
+			 this->_dataBuffer().begin());
+	    thrust::copy(fraction.exOutputData().begin(),
+			 fraction.exOutputData().end(),
+			 this->_dataBuffer().begin() + fraction.outputs().size());
+	
+	    internal::loadExternalData fn1;
+	    fn1.featureDim = fraction.externalOutputSize();
+	    fn1.paralNum   = this->parallelSequences();
+	    fn1.maxFeatureLength = fraction.maxExOutputLength();
+	    fn1.sourceData = (helpers::getRawPointer(this->_dataBuffer()) +
+			      fraction.outputs().size());
+	    fn1.frameIndex = helpers::getRawPointer(this->_dataBuffer());
+	    fn1.patTypes   = helpers::getRawPointer(this->patTypes());
+	    fn1.contextMV  = ((this->_mvVector().size() ==this->size() * 2)?
+			      helpers::getRawPointer(this->_mvVector()) : NULL);
+	    fn1.resolution = this->getResolution();
+		    
+	    int n = this->curMaxSeqLength() * this->parallelSequences() * this->size();
+	    thrust::for_each(
+			thrust::make_zip_iterator(
+				thrust::make_tuple(this->_outputs().begin(),
+						   thrust::counting_iterator<int>(0))),
+			thrust::make_zip_iterator(
+				thrust::make_tuple(this->_outputs().begin()           + n,
+						   thrust::counting_iterator<int>(0) + n)),
+			fn1);
+
+	}else{
+	    throw std::runtime_error("MidlleOutputLayer size is not equal to the data dim");
 	}
 	
 	/*

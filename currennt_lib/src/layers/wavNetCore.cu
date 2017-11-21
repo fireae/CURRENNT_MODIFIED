@@ -429,7 +429,7 @@ namespace layers{
     void WavNetCore<TDevice>::linkTargetLayer(Layer<TDevice> &targetLayer)
     {
 	if (targetLayer.type() == std::string("wavnetc")){
-	    //
+	    // When the conditional features are not processed by a trainable network
 	    if (targetLayer.name() == this->name()){
 		// This is the initial wavNetCore layer
 		m_iniWavCoreC = true;
@@ -460,7 +460,7 @@ namespace layers{
 	    m_contextGraBuf.clear();
 	    
 	}else{
-	    // link the external trainable input layer
+	    // When the conditional features are processed by a trainable network
 	    if (m_iniWavCoreC){
 		m_exInputLayer = dynamic_cast<layers::TrainableLayer<TDevice>*>(&(targetLayer));
 		if (m_exInputLayer == NULL)

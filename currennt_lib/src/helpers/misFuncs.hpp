@@ -56,8 +56,8 @@ int    flagUpdateDiscriminator(const int epoch, const int frac);
 real_t GetRandomNumber();
 bool   closeToZero(const real_t t1, const real_t lowBound = -0.0001,
 		   const real_t upBound = 0.0001);
-
-int getResoLength(const int maxSeqLength, const int timeResolution);
+    
+int getResoLength(const int maxSeqLength, const int timeResolution, const int parallel);
 
 /* ***** Function for I/O ****** */
 int ReadRealData(const std::string dataPath, Cpu::real_vector &data);

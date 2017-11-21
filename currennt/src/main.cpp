@@ -576,32 +576,39 @@ int trainerMain(const Configuration &config)
 	/********************* Data Generation    *************************/
         }else {
 
-	    // Load data mean and std
+	    // Load data mean and std from data set
             Cpu::real_vector outputMeans  = feedForwardSet->outputMeans();
             Cpu::real_vector outputStdevs = feedForwardSet->outputStdevs();
-            assert (outputMeans.size()  == feedForwardSet->outputPatternSize());
-            assert (outputStdevs.size() == feedForwardSet->outputPatternSize());
+	    // Or load the mean and variation from 
 	    if (config.datamvPath().size()>0){
 		if (dataMV == NULL)
 		    throw std::runtime_error("Can't read datamv");
 		if (dataMV->outputM().size() != outputMeans.size())
 		    throw std::runtime_error("output dimension mismatch datamv");
-		for (int y = 0; y < outputMeans.size(); y++){
+		outputMeans  = dataMV->outputM();
+		outputStdevs = dataMV->outputV();
+		/*for (int y = 0; y < outputMeans.size(); y++){
 		    outputMeans[y]  = dataMV->outputM()[y];
 		    outputStdevs[y] = dataMV->outputV()[y];
-		}
+		    } */
 		printf("Mean and var are over-written by %s.\n",
 		       config.datamvPath().c_str());
 	    }
 	    
 	    bool unstandardize = config.revertStd();
-	    bool htkoutput     = false;
+	    bool htkoutput     = config.outputHtk();
 	    int  outputlayerID = config.outputFromWhichLayer();
 
 	    printf("Outputs from layer %d", config.outputFromWhichLayer());
 	    if (config.outputFromGateLayer()) {printf(", gate output");}
 	    if (config.mdnPara()>0 && neuralNetwork.isMDNLayer(outputlayerID))
 		printf(", MDN with para=%f",config.mdnPara());
+	    
+	    if (htkoutput){
+		printf(", HTK format (float32, swaped)");
+	    }else{
+		printf(", bin format");
+	    }
 	    
 	    if (unstandardize){
 		if (neuralNetwork.isMDNLayer(outputlayerID)){
@@ -627,12 +634,12 @@ int trainerMain(const Configuration &config)
 			    }
 			}
 			unstandardize = true;
-			htkoutput     = true;
-			printf(", HTK format, de-normalized\n");
+			//htkoutput     = true;
+			printf(", de-normalized\n");
 		    }else{
 			unstandardize = false;
-			htkoutput     = true; // specical case, MDN parameter outptu is htk
-			printf(", HTK format, not de-normalized\n");
+			//htkoutput     = true; // specical case, MDN parameter outptu is htk
+			printf(", not de-normalized\n");
 		    }
 		}else{
 		    // for normal layers (including highway)
@@ -640,18 +647,17 @@ int trainerMain(const Configuration &config)
 			(!config.outputFromGateLayer())){
 			// do normal de-normalization
 			unstandardize = true;
-			htkoutput     = true;
-			printf(", HTK format, de-normalized\n");
+
+			printf(", de-normalized\n");
 		    }else{
 			unstandardize = false;
-			htkoutput     = false;
-			printf(", bin format, not de-normalized\n");
+
+			printf(", not de-normalized\n");
 		    }
 		}
 	    }else{
 		unstandardize = false;
-		htkoutput     = false;
-		printf(", bin format, not de-normalized\n");
+		printf(", not de-normalized\n");
 	    }
 
 	    /*
@@ -866,8 +872,14 @@ void readJsonFile(rapidjson::Document *doc, const std::string &filename)
     delete buffer;
 
     // extract the JSON tree
-    if (doc->Parse<0>(docStr.c_str()).HasParseError())
+    if (doc->Parse<0>(docStr.c_str()).HasParseError()){
+	printf("\n\t\tPlease check lines around:\n\t\t");
+	size_t start = (doc->GetErrorOffset()>20)?(doc->GetErrorOffset()-20):doc->GetErrorOffset();
+	for (int t=0;t<50;t++)
+	    printf("%c", docStr.c_str()[start + t]);
+	printf("\n\n");
         throw std::runtime_error(std::string("Parse error: ") + doc->GetParseError());
+    }
 }
 
 
@@ -945,11 +957,11 @@ boost::shared_ptr<data_sets::DataSet> loadDataSet(data_set_type dsType)
 		noiseDev,   cachePath);
     
     printf("done.\n");
-    printf("Loaded fraction:  %d%%\n",   (int)(fraction*100));
-    printf("Sequences:        %d\n",     ds->totalSequences());
-    printf("Sequence lengths: %d..%d\n", ds->minSeqLength(),
-	                                 ds->maxSeqLength());
-    printf("Total timesteps:  %d\n",     ds->totalTimesteps());
+    printf("Loaded fraction:  %d%%\n",    (int)(fraction*100));
+    printf("Sequences:        %d\n",      ds->totalSequences());
+    printf("Sequence lengths: %d..%d\n",  ds->minSeqLength(),
+	                                  ds->maxSeqLength());
+    printf("Total timesteps:  %lu\n",     ds->totalTimesteps());
 
     // Note: Auxillary configuration will be used in DataSet.cpp.
     //       They are just shown here

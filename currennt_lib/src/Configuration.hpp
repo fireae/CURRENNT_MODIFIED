@@ -70,6 +70,7 @@ private:
     feedforwardformat_type_t m_feedForwardFormat;
 
     bool m_revertStd;
+    bool m_outputHtk;
     
     /* Add 16-02-22 Wang: for WE updating */
     bool        m_weUpdate;       // whether update the input we vector?
@@ -195,6 +196,10 @@ private:
 
     /* Add 20171007 */
     std::string m_resolutions;
+
+    /**/
+    int         m_vaeEncoderOutputLayer;
+    std::string m_vaeCodeInputDir;
     
     unsigned m_truncSeqLength;
     unsigned m_parallelSequences;
@@ -544,6 +549,7 @@ public:
      * @return whether output activations should be unstandardized in case of regression
      */
     bool revertStd() const;
+    bool outputHtk() const;
 
     /**
      * Returns the (HTK) feature kind of the output (only for HTK output)
@@ -716,6 +722,11 @@ public:
     const int& vaePlotManifold() const;
 
     const std::string& resolutions() const;
+
+    const int& vaeEncoderOutputLayer() const;
+
+    const std::string& vaeCodeInputDir() const;
+    
 };
 
 

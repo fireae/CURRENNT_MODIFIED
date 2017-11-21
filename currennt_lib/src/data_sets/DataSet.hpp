@@ -110,7 +110,7 @@ namespace data_sets {
         real_t m_noiseDeviation;
         int    m_parallelSequences;
         int    m_totalSequences;
-        int    m_totalTimesteps;
+        unsigned long int    m_totalTimesteps;
         int    m_minSeqLength;
         int    m_maxSeqLength;
         int    m_inputPatternSize;
@@ -158,7 +158,7 @@ namespace data_sets {
 	std::vector<std::string> m_exOutputExts;
 	Cpu::int_vector          m_exOutputDims;
 
-	
+	Cpu::int_vector m_resolutionBuf;
     public:
         /**
          * Creates an empty data set
@@ -240,7 +240,7 @@ namespace data_sets {
          *
          * @return The total number of timesteps
          */
-        int totalTimesteps() const;
+        unsigned long int totalTimesteps() const;
 
         /**
          * Returns the length of the shortest sequence

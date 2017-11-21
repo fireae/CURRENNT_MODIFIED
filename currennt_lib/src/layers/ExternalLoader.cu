@@ -76,6 +76,9 @@ namespace {
 	    if (patTypes[timeIdx] == PATTYPE_NONE)
 		t.get<0>() = 0.0;
 	    else{
+		// frameIndex is at the resolution of 1
+		// frameIndex[timeIdx * resolution] is the value of index
+		// featIdx is the value of index with parallel mode into consideration
 		int featIdx = frameIndex[timeIdx * resolution] * paralNum + paralIdx;
 		if (frameIndex[timeIdx * resolution] >= maxFeatureLength){
 		    t.get<0>() = 0.0;

@@ -57,7 +57,6 @@
 #define NN_OPE_LAST_SHOT_MODE4 4  // use the last shot of segments, repeat across frames
 
 namespace internal{
-namespace {
     
     struct genNoise
     {
@@ -118,49 +117,97 @@ namespace {
 	}
     };
 
-    /*
-      struct downSampMatrix
+
+    struct timeResolutionChange
     {
-	int size;
-	int resolution;
-	int parall;
+	int         inputRes;   // time resolution of previous layer
+	int         outputRes;  // time resolution of this layer
+	int         layerSize;  // layer size
+	int         parallel;   // parallel number
+	
+	real_t     *sourceData;
+	const char *patTypes;
+
+	// From 1 : T
 	__host__ __device__ void operator() (const thrust::tuple<real_t&, int> &t) const
 	{
-	    int rowidx   = t.get<1>() % size;
-	    int colidx   = t.get<1>() / size;
+	    int outputIdx = t.get<1>();
+	    int dimIdx    = outputIdx % layerSize;  // dimension index
+	    int timeIdx   = outputIdx / layerSize;  // time index (regardless of parallel)
+	    int BlockIdx  = timeIdx / parallel;     // time index (considering parallel mode)
+	    int BlockInIdx= timeIdx % parallel;     // index within a parallel block
 
-	    int rowidx2  = rowidx  / parall;
-	    int colidx2  = colidx  / parall;
-	    
-	    //int paralPos = rowidx  % parall;
-	    int blockidx = rowidx2 / resolution;
-	    
-	    // the matrix is column major
-	    // [ 0 0 0 0 0 0 0 0
-	    //   ...
-	    //   1 1 ... 1 0 0 0  -> resolution-th row
-	    //   |--------|
-	    //   resolution columns
-	    // move right and repeat this pattern
+	    int fraction  = 1;  // change ratio
 
-	    // each block
-	    if (((rowidx2 % resolution) == (resolution - 1)) &&
-		(colidx2 >= (blockidx * resolution)) &&
-		(colidx2 <  ((blockidx + 1) * resolution)) &&
-		(rowidx % parall) == (colidx % parall))
-		t.get<0>() = 1.0/((real_t)resolution);
-
-	    // last row
-	    else if (rowidx2 == (size / parall - 1) &&
-		     (colidx2 >= (blockidx * resolution)) &&
-		     (rowidx % parall) == (colidx % parall))
-		t.get<0>() = 1.0/((real_t)resolution);
+	    if (patTypes[timeIdx] == PATTYPE_NONE){
+		t.get<0>() = 0;
+		return;
+	    }		
+	    if (outputRes >= inputRes){
+		// down sampling
+		fraction = outputRes / inputRes;
+		t.get<0>() = sourceData[((BlockIdx * fraction) * parallel + BlockInIdx) *
+					layerSize + dimIdx];
+	    }else{
+		// up sampling
+		fraction = inputRes / outputRes;
+		t.get<0>() = sourceData[((BlockIdx / fraction) * parallel + BlockInIdx) *
+					layerSize + dimIdx];
+	    }
 	    
 	}
     };
-    */
+
+    struct timeResolutionChangeGrad
+    {
+	int         inputRes;   // time resolution of previous layer
+	int         outputRes;  // time resolution of this layer
+	int         layerSize;  // layer size
+	int         parallel;   // parallel number
+	
+	real_t     *sourceData; // source Data is the gradients of this layer
+	const char *patTypes;   // previous layer's patTypes
+
+	// From 1 : T (of the previous layer)
+	__host__ __device__ void operator() (const thrust::tuple<real_t&, int> &t) const
+	{
+	    int outputIdx = t.get<1>();
+	    int dimIdx    = outputIdx % layerSize;  // dimension index
+	    int timeIdx   = outputIdx / layerSize;  // time index (regardless of parallel)
+	    int BlockIdx  = timeIdx / parallel;     // time index (considering parallel mode)
+	    int BlockInIdx= timeIdx % parallel;     // index within a parallel block
+
+	    int fraction  = 1;  // change ratio
+
+	    if (patTypes[timeIdx] == PATTYPE_NONE){
+		t.get<0>() = 0;
+		return;
+	    }		
+	    
+	    if (outputRes >= inputRes){
+		// down sampling
+		fraction = outputRes / inputRes;
+		if (BlockIdx % fraction == 0){
+		    t.get<0>() = sourceData[((BlockIdx/fraction) * parallel + BlockInIdx) *
+					    layerSize + dimIdx];
+		}else{
+		    t.get<0>() = 0;
+		}
+	    }else{
+		// up sampling
+		fraction = inputRes / outputRes;
+		t.get<0>() = 0;
+		for (int i = 0; i<fraction; i++)
+		    t.get<0>() += sourceData[((BlockIdx * fraction+i) * parallel + BlockInIdx) *
+					     layerSize + dimIdx];
+	    }
+	    
+	}
+    };
     
-    struct downSampOperation
+    // #1
+    
+    struct outDuplicationOperation
     {
 	int featureDim;
 	int resolution;
@@ -184,7 +231,7 @@ namespace {
 		// either this is the last point of one block, or the end point of sentence
 		return;
 	    else{
-		// if copyIdx is larger than sentence length, move back to the end point of sentence
+		// if copyIdx is larger than sentence length, move back to end point of sentence
 		while(patTypes[copyIdx]==PATTYPE_NONE){
 		    copyIdx -= parall;
 		}
@@ -200,7 +247,7 @@ namespace {
     };
 
 
-    struct downSampGradOperation
+    struct outDuplicationGradOperation
     {
 	int featureDim;
 	int resolution;
@@ -347,7 +394,7 @@ namespace {
 	    }
 	}
     };
-}
+
 }
 
 
@@ -362,6 +409,10 @@ namespace layers{
 	, m_noiseMag    (1.0)
 	, m_noiseSize   (0)
 	, m_noiseRepeat (0)
+	, m_outDupRate  (0)
+	, m_lastShot    (0)
+	, m_segLevel    (-1)
+	, m_changeTimeRes (0)
     {
 
 	/* ------ Configuration for noise generation ------ */
@@ -395,9 +446,13 @@ namespace layers{
 	if (this->precedingLayer().size() != m_setZeroVec_D.size())
 	    throw std::runtime_error("Error operator setZero, unequal to previous layer size");
 
-	/* ------ Configuration of the output downsampling ------ */
-	m_downSampRes   = (layerChild->HasMember("outputDownSampling") ? 
-			   static_cast<int>((*layerChild)["outputDownSampling"].GetInt()) : 0);
+	/* ------ Configuration of the output duplication ------ */
+	if (layerChild->HasMember("outputDownSampling")){
+	    printf("\toutputDownSampling flag has been changed to outputDuplicating\n");
+	    throw std::runtime_error("Error: old configuration name in OperationLayer");
+	}
+	m_outDupRate   = (layerChild->HasMember("outputDuplicating") ? 
+			   static_cast<int>((*layerChild)["outputDuplicating"].GetInt()) : 0);
 
 	/* ------ Configuration of last shot mode ------ */
 	//
@@ -438,7 +493,21 @@ namespace layers{
 	    }
 	}
 
-
+	/* ------- Configuration of the time resolution change */
+	m_changeTimeRes   = (layerChild->HasMember("changeResolution") ? 
+			     static_cast<int>((*layerChild)["changeResolution"].GetInt()) : 0);
+	if (m_changeTimeRes && this->size() != this->precedingLayer().size())
+	    throw std::runtime_error("Layer size unequal for time resolution change");
+	if (this->getResolution() > this->precedingLayer().getResolution()){
+	    // down sampling
+	    if ((this->getResolution() % this->precedingLayer().getResolution()) != 0)
+		throw std::runtime_error("Fractional resolution change is not supported");
+	}else{
+	    // up sampling
+	    if ((this->precedingLayer().getResolution() % this->getResolution())!= 0)
+		throw std::runtime_error("Fractional resolution change is not supported");
+	}
+	
 	/* ------ print the information ------ */
 	printf("\tOperator layer: \n");
 	if (m_noiseSize > 0)
@@ -456,19 +525,24 @@ namespace layers{
 		printf("\tunknown noise repeat option\n");
 	}
 	
-	if (m_downSampRes > 1)
-	    printf("\tdown sampling the output by %d\n", m_downSampRes);
+	if (m_outDupRate > 1)
+	    printf("\toutput duplication at the rate of %d\n", m_outDupRate);
 
+	if (m_changeTimeRes){
+	    printf("\tTurn of time resolution change across layers: from %d to %d",
+		   this->precedingLayer().getResolution(), this->getResolution());
+	}
+	
 	if (m_lastShot > 0){
 	    printf("\tlast shot is used [%d]\n", m_lastShot);
-	    if (m_noiseSize > 0 || m_downSampRes > 1 || m_setZeroStr.size())
+	    if (m_noiseSize > 0 || m_outDupRate > 1 || m_setZeroStr.size() || m_changeTimeRes > 0)
 		throw std::runtime_error("lastShot mode can't be used with nother operation");
 	    if (this->size() != this->precedingLayer().size())
 		throw std::runtime_error("Layer size is unequal to previous one");
 	}
 
 	if (this->precedingLayer().getSaveMemoryFlag())
-	    throw std::runtime_error("layer before operator(downsamp) is reduced in mem");  
+	    throw std::runtime_error("layer before operator is reduced in mem");  
 	
     }
 
@@ -494,8 +568,8 @@ namespace layers{
 							      allocator);
 	}
 	
-	if (m_downSampRes > 1)
-	    (*layersArray)[layersArray->Size() - 1].AddMember("outputDownSampling", m_downSampRes,
+	if (m_outDupRate > 1)
+	    (*layersArray)[layersArray->Size() - 1].AddMember("outputDuplicating", m_outDupRate,
 							      allocator);
 	if (m_lastShot > 0){
 	    (*layersArray)[layersArray->Size() - 1].AddMember("lastShot", m_lastShot,
@@ -503,7 +577,10 @@ namespace layers{
 	    (*layersArray)[layersArray->Size() - 1].AddMember("segLevel", m_segLevel,
 							      allocator);
 	}
-	
+
+	if (m_changeTimeRes > 0)
+	    (*layersArray)[layersArray->Size() - 1].AddMember("changeResolution", m_changeTimeRes,
+							      allocator);
     }
 
     template <typename TDevice>
@@ -512,11 +589,6 @@ namespace layers{
     {
 	TrainableLayer<TDevice>::loadSequences(fraction, nnState);
 
-	// Load information for lst shot mode
-	if (this->getResolution() != 1){
-	    throw std::runtime_error("Operation layer is not ready for resolution option");
-	}
-	
 	if (m_lastShot  == NN_OPE_LAST_SHOT_MODE1 || m_lastShot == NN_OPE_LAST_SHOT_MODE2){
 	    
 	    // load the sequence length 
@@ -616,8 +688,27 @@ namespace layers{
 				     thrust::counting_iterator<int>(0) + n)),
 	       fn1);
 	    	    
-	}else{
+	}else if (m_changeTimeRes){
 	    
+	    internal::timeResolutionChange fn1;
+	    fn1.inputRes  = this->precedingLayer().getResolution();
+	    fn1.outputRes = this->getResolution();
+	    fn1.layerSize = this->size();
+	    fn1.parallel  = this->parallelSequences();
+	    fn1.sourceData  = helpers::getRawPointer(this->precedingLayer().outputs());
+	    fn1.patTypes    = helpers::getRawPointer(this->patTypes());
+	    
+	    int n = timeLength * this->size();
+	    thrust::for_each(
+               thrust::make_zip_iterator(
+		  thrust::make_tuple(this->outputs().begin(),
+				     thrust::counting_iterator<int>(0))),
+	       thrust::make_zip_iterator(
+		  thrust::make_tuple(this->outputs().begin()           + n,
+				     thrust::counting_iterator<int>(0) + n)),
+	       fn1);
+	    
+	}else{
 	    // normal mode
 	    if (m_noiseSize > 0){
 		// generate the noise for all frames
@@ -655,10 +746,10 @@ namespace layers{
 	    
 	    }
 	    
-	    if (m_downSampRes > 1){
-		internal::downSampOperation fn1;
+	    if (m_outDupRate > 1){
+		internal::outDuplicationOperation fn1;
 		fn1.featureDim = this->size();
-		fn1.resolution = m_downSampRes;
+		fn1.resolution = m_outDupRate;
 		fn1.maxTimeLength = timeLength;
 		fn1.dataMatrix = helpers::getRawPointer(this->outputs());
 		fn1.parall     = this->parallelSequences();
@@ -685,6 +776,15 @@ namespace layers{
 
 	if (m_lastShot == NN_OPE_LAST_SHOT_MODE1 || m_lastShot == NN_OPE_LAST_SHOT_MODE2){
 	    // Tricky code
+	    
+	    /*
+	      This part should be handled. LastShot mode is now only used before the VAE
+	      layer. In the generation time, VAE with m_vaeUseageOpt==2 will not transform
+	      the output from the lastShot layers. 
+
+	      The code just set up the boundary of the segments
+	     */
+	    
 	    // Although operator with last shot should not be used after a feedback layer
 	    // (because it generates the output at the end of segment and uses it at the begining
 	    //  of a segment), the boundary information can be generated 
@@ -711,7 +811,16 @@ namespace layers{
 		 fn1);
 	    }
 	}else if (m_lastShot == NN_OPE_LAST_SHOT_MODE3 || m_lastShot == NN_OPE_LAST_SHOT_MODE4){
+	    /*
+	      This part should be handled. LastShot mode is now only used before the VAE
+	      layer. In the generation time, VAE with m_vaeUseageOpt==2 will not transform
+	      the output from the lastShot layers. 
+
+	      The code just set up the boundary of the segments
+	     */
+	    
 	    // Last shot mode can not be used here
+	    // 
 	    if (timeStep == 0){
 		thrust::fill(this->precedingLayer().outputs().begin(),
 			     this->precedingLayer().outputs().begin()+timeLength * this->size(),
@@ -734,7 +843,35 @@ namespace layers{
 				     thrust::counting_iterator<int>(0) + n)),
 		 fn1);
 	    }
+	}else if (m_changeTimeRes){
+
+	    /* Input timeStep is the default time resolution of the network	      
+	       Assume that timeResolution >= 1
+	     */
 	    
+	    // time resolution has been considered in NeuralNetwork.cpp
+	    //int st = (timeStep / this->getResolution()) * this->size();
+	    //int et = (timeStep / this->getResolution()) * this->size() + this->size();
+	    int st = timeStep * this->size();
+	    int et = timeStep * this->size() + this->size();
+	    
+	    internal::timeResolutionChange fn1;
+	    fn1.inputRes    = this->precedingLayer().getResolution();
+	    fn1.outputRes   = this->getResolution();
+	    fn1.layerSize   = this->size();
+	    fn1.parallel    = this->parallelSequences();
+	    fn1.sourceData  = helpers::getRawPointer(this->precedingLayer().outputs());
+	    fn1.patTypes    = helpers::getRawPointer(this->patTypes());
+	    
+	    thrust::for_each(
+               thrust::make_zip_iterator(
+		  thrust::make_tuple(this->outputs().begin()           + st,
+				     thrust::counting_iterator<int>(0) + st)),
+	       thrust::make_zip_iterator(
+		  thrust::make_tuple(this->outputs().begin()           + et,
+				     thrust::counting_iterator<int>(0) + et)),
+	       fn1);
+	
 	}else{
 	
 	    if (m_noiseSize > 0 && timeStep == 0){
@@ -778,10 +915,10 @@ namespace layers{
 	       fn);
 	    }
 
-	    if (m_downSampRes > 1){
-		internal::downSampOperation fn1;
+	    if (m_outDupRate > 1){
+		internal::outDuplicationOperation fn1;
 		fn1.featureDim = this->size();
-		fn1.resolution = m_downSampRes;
+		fn1.resolution = m_outDupRate;
 		fn1.maxTimeLength = timeLength;
 		fn1.dataMatrix = helpers::getRawPointer(this->outputs());
 		fn1.parall     = this->parallelSequences();
@@ -855,12 +992,35 @@ namespace layers{
 	    }else{
 		// not implemented
 	    }
-	}else{
-	    if (m_downSampRes > 1){
+	}else if (m_changeTimeRes){
+
+	    internal::timeResolutionChangeGrad fn1;
+	    fn1.inputRes  = this->precedingLayer().getResolution();
+	    fn1.outputRes = this->getResolution();
+	    fn1.layerSize = this->size();
+	    fn1.parallel  = this->parallelSequences();
+	    fn1.sourceData  = helpers::getRawPointer(this->outputErrors());
+	    fn1.patTypes    = helpers::getRawPointer(this->precedingLayer().patTypes());
 	    
-		internal::downSampGradOperation fn1;
+	    int n = (this->precedingLayer().curMaxSeqLength()    *
+		     this->precedingLayer().parallelSequences()  * this->precedingLayer().size());
+	    
+	    thrust::for_each(
+              thrust::make_zip_iterator(
+		thrust::make_tuple(this->precedingLayer().outputErrors().begin(),
+				   thrust::counting_iterator<int>(0))),
+	      thrust::make_zip_iterator(
+		thrust::make_tuple(this->precedingLayer().outputErrors().begin() + n,
+				     thrust::counting_iterator<int>(0) + n)),
+	       fn1);
+	    
+	    
+	}else{
+	    
+	    if (m_outDupRate > 1){
+		internal::outDuplicationGradOperation fn1;
 		fn1.featureDim = this->size();
-		fn1.resolution = m_downSampRes;
+		fn1.resolution = m_outDupRate;
 		fn1.maxTimeLength = timeLength;
 		fn1.dataMatrix = helpers::getRawPointer(this->outputErrors());	
 		fn1.parall     = this->parallelSequences();
@@ -908,3 +1068,49 @@ namespace layers{
     template class OperationLayer<Gpu>;
     
 }
+
+
+
+/*
+    #1
+    struct outDuplicationMatrix
+    {
+	int size;
+	int resolution;
+	int parall;
+	__host__ __device__ void operator() (const thrust::tuple<real_t&, int> &t) const
+	{
+	    int rowidx   = t.get<1>() % size;
+	    int colidx   = t.get<1>() / size;
+
+	    int rowidx2  = rowidx  / parall;
+	    int colidx2  = colidx  / parall;
+	    
+	    //int paralPos = rowidx  % parall;
+	    int blockidx = rowidx2 / resolution;
+	    
+	    // the matrix is column major
+	    // [ 0 0 0 0 0 0 0 0
+	    //   ...
+	    //   1 1 ... 1 0 0 0  -> resolution-th row
+	    //   |--------|
+	    //   resolution columns
+	    // move right and repeat this pattern
+
+	    // each block
+	    if (((rowidx2 % resolution) == (resolution - 1)) &&
+		(colidx2 >= (blockidx * resolution)) &&
+		(colidx2 <  ((blockidx + 1) * resolution)) &&
+		(rowidx % parall) == (colidx % parall))
+		t.get<0>() = 1.0/((real_t)resolution);
+
+	    // last row
+	    else if (rowidx2 == (size / parall - 1) &&
+		     (colidx2 >= (blockidx * resolution)) &&
+		     (rowidx % parall) == (colidx % parall))
+		t.get<0>() = 1.0/((real_t)resolution);
+	    
+	}
+    };
+    
+*/

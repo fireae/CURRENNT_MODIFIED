@@ -94,6 +94,7 @@ namespace {
 	}
     };
 
+    /*
     struct CopyManiFoldData
     {
 	const char   *patTypes;
@@ -109,7 +110,7 @@ namespace {
 	    else
 		t.get<0>() = dataBuffer[outDim * timeStep + dimIndex];
 	}
-    };
+	};*/
 
 
     struct noiseRepeat
@@ -348,6 +349,8 @@ namespace layers{
 	
 	if (nnState == NN_STATE_GENERATION_STAGE && this->size() == 2 && m_vaeUsageOpt==1){
 	    printf("Plot manifold");
+	    throw std::runtime_error("Not supported now");
+	    /*
 	    real_vector tmp(fraction.outputs().size());
 	    thrust::copy(fraction.outputs().begin(), fraction.outputs().end(), tmp.begin());
 
@@ -371,7 +374,7 @@ namespace layers{
 		  thrust::make_tuple(this->outputs().begin()           + n,
 				     thrust::counting_iterator<int>(0) + n)),
 	       fn1);
-
+	    */
 	}
     }
     

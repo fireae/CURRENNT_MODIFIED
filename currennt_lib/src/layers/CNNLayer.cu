@@ -408,8 +408,8 @@ namespace{
 	    int timeIdxBuf1 = (timeStep % (recFieldSize+1)) * parallel + uttIdx;
 	    int timeIdxBuf2 = ((timeStep+1) % (recFieldSize+1)) * parallel + uttIdx;
 	    // (time+1) % (recFieldSize+1) = (time - recFieldSize) % (recFieldSize+1)
-	    int dimIdxBuf1  = dimIdx * 3 + 1;
-	    int dimIdxBuf2  = dimIdx * 3;	    
+	    int dimIdxBuf1  = dimIdx * 3 + 1; // transformed by the curennt link of CNN
+	    int dimIdxBuf2  = dimIdx * 3;     // transformed by the previous link of CNN
 	    real_t summedOutput = (dataBuffer[timeIdxBuf1 * winTotalLength + dimIdxBuf1] +
 				   dataBuffer[timeIdxBuf2 * winTotalLength + dimIdxBuf2]);
 	    // add bias and pass through the activation function
@@ -1227,7 +1227,7 @@ namespace layers {
 	    int recField = m_winInterval_H[0];
 	    // absolute address in the conv buffer
 	    int bufAddr  = (timeStep % (recField+1)) * this->parallelSequences() * m_winTotalL;
-	    
+	    // This transofmration will transform the input data 
 	    helpers::Matrix<TDevice> weightMatrix   (&this->m_weightBuffer,
 						     this->precedingLayer().size(),
 						     this->m_winTotalL);

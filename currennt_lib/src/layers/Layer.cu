@@ -70,7 +70,7 @@ namespace layers {
         , m_maxSeqLength     (misFuncs::getResoLength(
 				maxSeqLength,
 				(layerChild->HasMember("resolution") ? 
-				 (*layerChild)["resolution"].GetInt() : 1)))
+				 (*layerChild)["resolution"].GetInt() : 1), 1))
         , m_curMaxSeqLength  (0)
         , m_curMinSeqLength  (0)
         , m_curNumSeqs       (0)
@@ -210,17 +210,23 @@ namespace layers {
     void Layer<TDevice>::loadSequences(const data_sets::DataSetFraction &fraction,
 				       const int nnState)
     {
-	m_curMaxSeqLength = misFuncs::getResoLength(fraction.maxSeqLength(), m_timeResolution);
-	m_curMinSeqLength = misFuncs::getResoLength(fraction.minSeqLength(), m_timeResolution);
+	m_curMaxSeqLength = misFuncs::getResoLength(fraction.maxSeqLength(), m_timeResolution, 1);
+	m_curMinSeqLength = misFuncs::getResoLength(fraction.minSeqLength(), m_timeResolution, 1);
 	m_curNumSeqs      = fraction.numSequences();
 	    
 	if (m_timeResolution == 1){
 	    m_patTypes    = fraction.patTypes();
 	}else{
 
+	    thrust::fill(m_patTypes.begin(), m_patTypes.end(), PATTYPE_NONE);
 	    int buffPos   = fraction.patTypesLowTimesResPos(m_timeResolution);
 	    int buffLen   = fraction.patTypesLowTimesResLen(m_timeResolution);
 	    if (buffPos < 0 || buffLen < 0){
+		printf(" %s resolution not found in --resolutions", this->name().c_str());
+		throw std::runtime_error("Resolution error");
+	    }
+	    if (buffPos > fraction.patTypesLowTimeRes().size() ||
+		(buffLen + buffPos) > fraction.patTypesLowTimeRes().size()){
 		printf(" %s resolution not found in --resolutions", this->name().c_str());
 		throw std::runtime_error("Resolution error");
 	    }

@@ -133,6 +133,12 @@ namespace layers {
     {
 	return m_targetDataMV;
     }
+
+    template <typename TDevice>
+    typename PostOutputLayer<TDevice>::real_vector& PostOutputLayer<TDevice>::_dataBuffer()
+    {
+	return m_dataBuffer;
+    }
     
     template <typename TDevice>
     PostOutputLayer<TDevice>::PostOutputLayer(
