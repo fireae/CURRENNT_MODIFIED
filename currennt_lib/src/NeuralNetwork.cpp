@@ -292,7 +292,7 @@ namespace beamsearch{
 	int    idx;
     };
     
-    bool compareFunc(sortUnit& a, sortUnit& b){
+    bool compareFunc(const sortUnit& a, const sortUnit& b){
 	return a.prob >= b.prob;
     }
 
